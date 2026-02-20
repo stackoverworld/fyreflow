@@ -4,14 +4,18 @@ import { nanoid } from "nanoid";
 import { resolveDefaultContextWindow, resolveDefaultModel, resolveReasoning } from "./modelCatalog.js";
 import { createLinearLinks, normalizePipelineLinks, orderPipelineSteps } from "./pipelineGraph.js";
 import { normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import { MASK_VALUE } from "./secureInputs.js";
+import { decryptSecret, encryptSecret } from "./secretsCrypto.js";
 import type {
   DashboardState,
   Pipeline,
   PipelineInput,
   PipelineQualityGate,
   PipelineRuntimeConfig,
+  PipelineScheduleConfig,
   PipelineRun,
   PipelineStep,
+  ScheduleRunMode,
   ProviderId,
   ProviderUpdateInput,
   McpServerInput,
@@ -20,6 +24,8 @@ import type {
   McpServerConfig,
   StorageConfig,
   ProviderConfig,
+  RunStatus,
+  RunApproval,
   StepRun,
   StepQualityGateResult
 } from "./types.js";
@@ -30,7 +36,8 @@ const DEFAULT_STEP_Y = 130;
 const DEFAULT_STEP_GAP_X = 280;
 const DEFAULT_MAX_LOOPS = 2;
 const DEFAULT_MAX_STEP_EXECUTIONS = 18;
-const DEFAULT_STAGE_TIMEOUT_MS = 240000;
+const DEFAULT_STAGE_TIMEOUT_MS = 420000;
+const DEFAULT_SCHEDULE_TIMEZONE = "UTC";
 const DEFAULT_STORAGE_ROOT_PATH = path.resolve(process.cwd(), "data", "agent-storage");
 const DEFAULT_SHARED_FOLDER = "shared";
 const DEFAULT_ISOLATED_FOLDER = "isolated";
@@ -53,6 +60,15 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function defaultStepPosition(index: number): PipelineStep["position"] {
   return {
     x: DEFAULT_STEP_X + index * DEFAULT_STEP_GAP_X,
@@ -65,6 +81,17 @@ function defaultRuntimeConfig(): PipelineRuntimeConfig {
     maxLoops: DEFAULT_MAX_LOOPS,
     maxStepExecutions: DEFAULT_MAX_STEP_EXECUTIONS,
     stageTimeoutMs: DEFAULT_STAGE_TIMEOUT_MS
+  };
+}
+
+function defaultScheduleConfig(): PipelineScheduleConfig {
+  return {
+    enabled: false,
+    cron: "",
+    timezone: DEFAULT_SCHEDULE_TIMEZONE,
+    task: "",
+    runMode: "smart",
+    inputs: {}
   };
 }
 
@@ -85,6 +112,25 @@ function normalizeRuntimeConfig(raw: Partial<PipelineRuntimeConfig> | undefined)
   };
 }
 
+function normalizeScheduleConfig(raw: Partial<PipelineScheduleConfig> | undefined): PipelineScheduleConfig {
+  const cron = typeof raw?.cron === "string" ? raw.cron.trim() : "";
+  const requestedTimezone =
+    typeof raw?.timezone === "string" && raw.timezone.trim().length > 0 ? raw.timezone.trim() : DEFAULT_SCHEDULE_TIMEZONE;
+  const timezone = isValidTimeZone(requestedTimezone) ? requestedTimezone : DEFAULT_SCHEDULE_TIMEZONE;
+  const task = typeof raw?.task === "string" ? raw.task.trim() : "";
+  const runMode: ScheduleRunMode = raw?.runMode === "quick" ? "quick" : "smart";
+  const inputs = normalizeRunInputs(raw?.inputs);
+
+  return {
+    enabled: raw?.enabled === true && cron.length > 0,
+    cron,
+    timezone,
+    task,
+    runMode,
+    inputs
+  };
+}
+
 function normalizeStringList(raw: unknown, maxItems = MAX_CONTRACT_ITEMS): string[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -101,7 +147,8 @@ function normalizeQualityGateKind(raw: unknown): PipelineQualityGate["kind"] {
     raw === "regex_must_match" ||
     raw === "regex_must_not_match" ||
     raw === "json_field_exists" ||
-    raw === "artifact_exists"
+    raw === "artifact_exists" ||
+    raw === "manual_approval"
   ) {
     return raw;
   }
@@ -182,7 +229,8 @@ function normalizeStepQualityGateResults(raw: unknown): StepQualityGateResult[] 
         item.kind === "regex_must_match" ||
         item.kind === "regex_must_not_match" ||
         item.kind === "json_field_exists" ||
-        item.kind === "artifact_exists"
+        item.kind === "artifact_exists" ||
+        item.kind === "manual_approval"
           ? item.kind
           : "step_contract";
 
@@ -200,6 +248,67 @@ function normalizeStepQualityGateResults(raw: unknown): StepQualityGateResult[] 
     })
     .filter((entry): entry is StepQualityGateResult => entry !== null)
     .slice(0, 200);
+}
+
+function normalizeRunStatus(status: unknown): RunStatus {
+  return status === "queued" ||
+    status === "running" ||
+    status === "paused" ||
+    status === "awaiting_approval" ||
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled"
+    ? status
+    : "failed";
+}
+
+function normalizeRunApprovals(raw: unknown): RunApproval[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((entry) => {
+      if (typeof entry !== "object" || entry === null) {
+        return null;
+      }
+
+      const item = entry as Partial<RunApproval>;
+      const status =
+        item.status === "pending" || item.status === "approved" || item.status === "rejected"
+          ? item.status
+          : "pending";
+      const gateId = typeof item.gateId === "string" ? item.gateId.trim() : "";
+      const stepId = typeof item.stepId === "string" ? item.stepId.trim() : "";
+
+      if (gateId.length === 0 || stepId.length === 0) {
+        return null;
+      }
+
+      const normalized: RunApproval = {
+        id: typeof item.id === "string" && item.id.trim().length > 0 ? item.id.trim() : `${gateId}:${stepId}`,
+        gateId,
+        gateName: typeof item.gateName === "string" && item.gateName.trim().length > 0 ? item.gateName.trim() : "Manual approval",
+        stepId,
+        stepName: typeof item.stepName === "string" ? item.stepName : stepId,
+        status,
+        blocking: item.blocking !== false,
+        message: typeof item.message === "string" ? item.message : "",
+        requestedAt: typeof item.requestedAt === "string" && item.requestedAt.length > 0 ? item.requestedAt : nowIso()
+      };
+
+      if (typeof item.resolvedAt === "string" && item.resolvedAt.length > 0) {
+        normalized.resolvedAt = item.resolvedAt;
+      }
+
+      if (typeof item.note === "string" && item.note.trim().length > 0) {
+        normalized.note = item.note.trim();
+      }
+
+      return normalized;
+    })
+    .filter((entry): entry is RunApproval => entry !== null)
+    .slice(0, 300);
 }
 
 function createDefaultStep(role: AgentRole, name: string, providerId: ProviderId, index: number): PipelineStep {
@@ -243,7 +352,7 @@ function createDefaultProviders(now: string): Record<ProviderId, ProviderConfig>
     },
     claude: {
       id: "claude",
-      label: "Claude",
+      label: "Anthropic",
       authMode: "api_key",
       apiKey: "",
       oauthToken: "",
@@ -283,6 +392,7 @@ function createDefaultState(): DashboardState {
     steps: starterSteps,
     links: createLinearLinks(starterSteps),
     runtime: defaultRuntimeConfig(),
+    schedule: defaultScheduleConfig(),
     qualityGates: []
   };
 
@@ -369,6 +479,42 @@ function deepClone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function isMaskedSecretValue(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim() === MASK_VALUE;
+}
+
+function decryptProviderSecrets(provider: ProviderConfig): ProviderConfig {
+  return {
+    ...provider,
+    apiKey: decryptSecret(provider.apiKey),
+    oauthToken: decryptSecret(provider.oauthToken)
+  };
+}
+
+function encryptProviderSecrets(provider: ProviderConfig): ProviderConfig {
+  return {
+    ...provider,
+    apiKey: encryptSecret(provider.apiKey),
+    oauthToken: encryptSecret(provider.oauthToken)
+  };
+}
+
+function decryptMcpSecrets(server: McpServerConfig): McpServerConfig {
+  return {
+    ...server,
+    env: decryptSecret(server.env),
+    headers: decryptSecret(server.headers)
+  };
+}
+
+function encryptMcpSecrets(server: McpServerConfig): McpServerConfig {
+  return {
+    ...server,
+    env: encryptSecret(server.env),
+    headers: encryptSecret(server.headers)
+  };
+}
+
 function normalizeRuns(runs: DashboardState["runs"]): DashboardState["runs"] {
   if (!Array.isArray(runs)) {
     return [];
@@ -377,8 +523,10 @@ function normalizeRuns(runs: DashboardState["runs"]): DashboardState["runs"] {
   return runs
     .map((run) => ({
       ...run,
+      status: normalizeRunStatus(run.status),
       inputs: typeof run.inputs === "object" && run.inputs !== null ? normalizeRunInputs(run.inputs) : {},
       logs: Array.isArray(run.logs) ? run.logs : [],
+      approvals: normalizeRunApprovals((run as { approvals?: unknown }).approvals),
       steps: Array.isArray(run.steps)
         ? run.steps.map((step) => ({
             ...step,
@@ -470,6 +618,11 @@ function sanitizeState(raw: DashboardState): DashboardState {
     }
   };
 
+  const decryptedProviders = {
+    openai: decryptProviderSecrets(safeProviders.openai),
+    claude: decryptProviderSecrets(safeProviders.claude)
+  };
+
   const safePipelines =
     Array.isArray(raw.pipelines) && raw.pipelines.length > 0
       ? raw.pipelines.map((pipeline) => {
@@ -487,17 +640,29 @@ function sanitizeState(raw: DashboardState): DashboardState {
             steps: normalizedSteps,
             links: normalizePipelineLinks(pipeline.links, normalizedSteps),
             runtime: normalizeRuntimeConfig(pipeline.runtime),
+            schedule: normalizeScheduleConfig(pipeline.schedule),
             qualityGates: normalizeQualityGates(pipeline.qualityGates, normalizedSteps)
           };
         })
       : defaults.pipelines;
 
   return {
-    providers: safeProviders,
+    providers: decryptedProviders,
     pipelines: safePipelines,
     runs: normalizeRuns(raw.runs),
-    mcpServers: normalizeMcpServers(raw.mcpServers),
+    mcpServers: normalizeMcpServers(raw.mcpServers).map((server) => decryptMcpSecrets(server)),
     storage: normalizeStorageConfig(raw.storage)
+  };
+}
+
+function serializeStateForDisk(state: DashboardState): DashboardState {
+  return {
+    ...state,
+    providers: {
+      openai: encryptProviderSecrets(state.providers.openai),
+      claude: encryptProviderSecrets(state.providers.claude)
+    },
+    mcpServers: state.mcpServers.map((server) => encryptMcpSecrets(server))
   };
 }
 
@@ -516,7 +681,7 @@ export class LocalStore {
   }
 
   private persist(): void {
-    fs.writeFileSync(this.dbPath, JSON.stringify(this.state, null, 2), "utf8");
+    fs.writeFileSync(this.dbPath, JSON.stringify(serializeStateForDisk(this.state), null, 2), "utf8");
   }
 
   getState(): DashboardState {
@@ -548,6 +713,7 @@ export class LocalStore {
       steps,
       links: normalizePipelineLinks(input.links, steps),
       runtime: normalizeRuntimeConfig(input.runtime),
+      schedule: normalizeScheduleConfig(input.schedule),
       qualityGates: normalizeQualityGates(input.qualityGates, steps)
     };
 
@@ -572,6 +738,7 @@ export class LocalStore {
       steps,
       links: normalizePipelineLinks(input.links, steps),
       runtime: normalizeRuntimeConfig(input.runtime),
+      schedule: normalizeScheduleConfig(input.schedule),
       qualityGates: normalizeQualityGates(input.qualityGates, steps)
     };
 
@@ -597,8 +764,9 @@ export class LocalStore {
     const updated: ProviderConfig = {
       ...current,
       authMode: input.authMode ?? current.authMode,
-      apiKey: input.apiKey ?? current.apiKey,
-      oauthToken: input.oauthToken ?? current.oauthToken,
+      apiKey: input.apiKey === undefined || isMaskedSecretValue(input.apiKey) ? current.apiKey : input.apiKey,
+      oauthToken:
+        input.oauthToken === undefined || isMaskedSecretValue(input.oauthToken) ? current.oauthToken : input.oauthToken,
       baseUrl: input.baseUrl ?? current.baseUrl,
       defaultModel: input.defaultModel ?? current.defaultModel,
       updatedAt: nowIso()
@@ -651,8 +819,13 @@ export class LocalStore {
       command: typeof input.command === "string" ? input.command : current.command,
       args: typeof input.args === "string" ? input.args : current.args,
       url: typeof input.url === "string" ? input.url : current.url,
-      env: typeof input.env === "string" ? input.env : current.env,
-      headers: typeof input.headers === "string" ? input.headers : current.headers,
+      env: typeof input.env === "string" ? (isMaskedSecretValue(input.env) ? current.env : input.env) : current.env,
+      headers:
+        typeof input.headers === "string"
+          ? isMaskedSecretValue(input.headers)
+            ? current.headers
+            : input.headers
+          : current.headers,
       toolAllowlist: typeof input.toolAllowlist === "string" ? input.toolAllowlist : current.toolAllowlist,
       health: input.health ?? current.health,
       updatedAt: nowIso()
@@ -710,6 +883,7 @@ export class LocalStore {
       status: "queued",
       startedAt: nowIso(),
       logs: ["Run queued"],
+      approvals: [],
       steps: orderedSteps.map<StepRun>((step) => ({
         stepId: step.id,
         stepName: step.name,

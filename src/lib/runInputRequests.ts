@@ -1,4 +1,5 @@
 import type { RunInputRequest, RunInputRequestOption, RunInputRequestType, RunStartupBlocker } from "@/lib/types";
+import { areRunInputKeysEquivalent, normalizeRunInputKey, pickPreferredRunInputKey } from "@/lib/runInputAliases";
 
 export interface ParsedRunInputRequests {
   status?: "pass" | "needs_input" | "blocked";
@@ -9,7 +10,7 @@ export interface ParsedRunInputRequests {
 }
 
 function normalizeKey(raw: string): string {
-  return raw.trim().toLowerCase();
+  return normalizeRunInputKey(raw);
 }
 
 function toLabelFromKey(key: string): string {
@@ -366,12 +367,19 @@ function normalizeBlocker(raw: unknown, index: number): RunStartupBlocker | null
 function dedupeRequests(requests: RunInputRequest[]): RunInputRequest[] {
   const byKey = new Map<string, RunInputRequest>();
   for (const request of requests) {
-    const key = normalizeKey(request.key);
-    if (key.length === 0) {
+    const normalizedKey = normalizeKey(request.key);
+    if (normalizedKey.length === 0) {
       continue;
     }
 
-    const existing = byKey.get(key);
+    const equivalentKey = [...byKey.keys()].find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, normalizedKey)
+    );
+    const key =
+      equivalentKey === undefined
+        ? normalizedKey
+        : pickPreferredRunInputKey(equivalentKey, normalizedKey);
+    const existing = equivalentKey ? byKey.get(equivalentKey) : byKey.get(key);
     if (!existing) {
       byKey.set(key, { ...request, key });
       continue;
@@ -386,6 +394,10 @@ function dedupeRequests(requests: RunInputRequest[]): RunInputRequest[] {
       mergedOptionsMap.set(optionKey, option);
     }
     const mergedOptions = [...mergedOptionsMap.values()];
+
+    if (equivalentKey && equivalentKey !== key) {
+      byKey.delete(equivalentKey);
+    }
 
     byKey.set(key, {
       ...existing,

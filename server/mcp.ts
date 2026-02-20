@@ -130,7 +130,10 @@ function runCommand(
     const abortListener = signal
       ? () => {
           child.kill("SIGTERM");
-          finish(() => reject(createAbortError(`${command} aborted`)));
+          const reason = signal.reason;
+          const reasonMessage =
+            reason instanceof Error ? reason.message : typeof reason === "string" ? reason : `${command} aborted`;
+          finish(() => reject(createAbortError(reasonMessage)));
         }
       : null;
 
@@ -138,7 +141,10 @@ function runCommand(
       if (abortListener) {
         abortListener();
       } else {
-        finish(() => reject(createAbortError(`${command} aborted`)));
+        const reason = signal.reason;
+        const reasonMessage =
+          reason instanceof Error ? reason.message : typeof reason === "string" ? reason : `${command} aborted`;
+        finish(() => reject(createAbortError(reasonMessage)));
       }
       return;
     }

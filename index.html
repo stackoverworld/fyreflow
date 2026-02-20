@@ -1,15 +1,35 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agents Pipeline Dashboard</title>
+    <title>FyreFlow</title>
     <meta
       name="description"
-      content="Local-first dashboard for configuring AI workflows, agents, prompts, and model routing."
+      content="Local-first platform for orchestrating AI agent pipelines, prompts, and model routing."
     />
+    <script>
+      (function() {
+        try {
+          var raw = localStorage.getItem("fyreflow:app-settings");
+          if (raw) {
+            var settings = JSON.parse(raw);
+            var pref = settings.theme;
+            if (pref === "light") {
+              document.documentElement.setAttribute("data-theme", "light");
+            } else if (pref === "dark") {
+              document.documentElement.setAttribute("data-theme", "dark");
+            } else {
+              var isLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+              document.documentElement.setAttribute("data-theme", isLight ? "light" : "dark");
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="dark bg-ink-950 text-ink-50">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

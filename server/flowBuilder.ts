@@ -29,6 +29,13 @@ export interface FlowBuilderRequest {
   use1MContext?: boolean;
   history?: FlowChatMessage[];
   currentDraft?: PipelineInput;
+  availableMcpServers?: Array<{
+    id: string;
+    name: string;
+    enabled?: boolean;
+    transport?: "stdio" | "http" | "sse";
+    summary?: string;
+  }>;
 }
 
 export interface FlowBuilderResponse {
@@ -51,12 +58,28 @@ const generatedFlowSchema = z.object({
     })
     .partial()
     .optional(),
+  schedule: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: z.string().max(120).optional(),
+      timezone: z.string().max(120).optional(),
+      task: z.string().max(16000).optional(),
+      runMode: z.enum(["smart", "quick"]).optional(),
+      inputs: z
+        .record(z.string().max(4000))
+        .refine((value) => Object.keys(value).length <= 120, {
+          message: "Too many schedule inputs (max 120)."
+        })
+        .optional()
+    })
+    .optional(),
   steps: z
     .array(
       z.object({
         name: z.string().min(1).max(120),
         role: z.enum(["analysis", "planner", "orchestrator", "executor", "tester", "review"]).optional(),
         prompt: z.string().min(1).max(8000).optional(),
+        contextTemplate: z.string().min(1).max(6000).optional(),
         enableDelegation: z.boolean().optional(),
         delegationCount: z.number().int().min(1).max(8).optional(),
         enableIsolatedStorage: z.boolean().optional(),
@@ -83,7 +106,7 @@ const generatedFlowSchema = z.object({
       z.object({
         name: z.string().min(1).max(160),
         target: z.string().min(1).optional(),
-        kind: z.enum(["regex_must_match", "regex_must_not_match", "json_field_exists", "artifact_exists"]),
+        kind: z.enum(["regex_must_match", "regex_must_not_match", "json_field_exists", "artifact_exists", "manual_approval"]),
         blocking: z.boolean().optional(),
         pattern: z.string().max(2000).optional(),
         flags: z.string().max(12).optional(),
@@ -119,11 +142,32 @@ const defaultRolePrompts: Record<AgentRole, string> = {
 const defaultRuntime = {
   maxLoops: 2,
   maxStepExecutions: 18,
-  stageTimeoutMs: 240000
+  stageTimeoutMs: 420000
 };
+
+interface FlowSchedule {
+  enabled: boolean;
+  cron: string;
+  timezone: string;
+  task: string;
+  runMode: "smart" | "quick";
+  inputs: Record<string, string>;
+}
+
+const defaultSchedule: FlowSchedule = {
+  enabled: false,
+  cron: "",
+  timezone: "UTC",
+  task: "",
+  runMode: "smart",
+  inputs: {} as Record<string, string>
+};
+const orchestratorClaudeModel = "claude-sonnet-4-6";
+const orchestratorContextWindowCap = 220_000;
 
 const defaultContextTemplate =
   "Task:\n{{task}}\n\nAttempt:\n{{attempt}}\n\nIncoming outputs:\n{{incoming_outputs}}\n\nAll outputs:\n{{all_outputs}}";
+const workflowStatusPattern = "WORKFLOW_STATUS\\s*:\\s*(PASS|FAIL|NEUTRAL)";
 
 const maxHistoryMessages = 16;
 const maxHistoryCharsPerMessage = 1400;
@@ -140,6 +184,41 @@ function normalizeRuntime(runtime: Partial<typeof defaultRuntime> | undefined): 
       typeof runtime?.stageTimeoutMs === "number"
         ? Math.max(10000, Math.min(1200000, Math.floor(runtime.stageTimeoutMs)))
         : defaultRuntime.stageTimeoutMs
+  };
+}
+
+function normalizeSchedule(schedule: Partial<FlowSchedule> | undefined): FlowSchedule {
+  const cron = typeof schedule?.cron === "string" ? schedule.cron.trim() : "";
+  const timezone =
+    typeof schedule?.timezone === "string" && schedule.timezone.trim().length > 0
+      ? schedule.timezone.trim()
+      : defaultSchedule.timezone;
+  const task = typeof schedule?.task === "string" ? schedule.task.trim() : "";
+  const runMode = schedule?.runMode === "quick" ? "quick" : "smart";
+  const inputsRaw = typeof schedule?.inputs === "object" && schedule.inputs !== null ? schedule.inputs : {};
+  const inputs: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(inputsRaw)) {
+    const key = rawKey.trim().toLowerCase();
+    if (key.length === 0) {
+      continue;
+    }
+    if (typeof rawValue === "string") {
+      inputs[key] = rawValue;
+      continue;
+    }
+    if (rawValue === null || rawValue === undefined) {
+      continue;
+    }
+    inputs[key] = String(rawValue);
+  }
+
+  return {
+    enabled: schedule?.enabled === true && cron.length > 0,
+    cron,
+    timezone,
+    task,
+    runMode,
+    inputs
   };
 }
 
@@ -200,6 +279,26 @@ function normalizeCondition(value: unknown): LinkCondition | undefined {
   return undefined;
 }
 
+function inferStrictQualityMode(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const markers = [
+    "strict",
+    "quality gate",
+    "quality gates",
+    "non-negotiable",
+    "verification",
+    "verify-only",
+    "remediation",
+    "pass/fail",
+    "blocking",
+    "qa report",
+    "no overlap",
+    "no clipped"
+  ];
+
+  return markers.some((marker) => normalized.includes(marker));
+}
+
 function normalizeQualityGateKind(value: unknown): QualityGateKind | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -221,6 +320,10 @@ function normalizeQualityGateKind(value: unknown): QualityGateKind | undefined {
 
   if (normalized === "artifact_exists" || normalized === "file_exists" || normalized === "path_exists") {
     return "artifact_exists";
+  }
+
+  if (normalized === "manual_approval" || normalized === "human_approval" || normalized === "approve") {
+    return "manual_approval";
   }
 
   return undefined;
@@ -471,6 +574,26 @@ function normalizeGeneratedFlow(raw: unknown): unknown {
     normalized.runtime = raw.runtime;
   }
 
+  if (isRecord(raw.schedule)) {
+    normalized.schedule = {
+      enabled: typeof raw.schedule.enabled === "boolean" ? raw.schedule.enabled : undefined,
+      cron: typeof raw.schedule.cron === "string" ? raw.schedule.cron.trim() : undefined,
+      timezone: typeof raw.schedule.timezone === "string" ? raw.schedule.timezone.trim() : undefined,
+      task: typeof raw.schedule.task === "string" ? raw.schedule.task.trim() : undefined,
+      runMode: raw.schedule.runMode === "quick" ? "quick" : raw.schedule.runMode === "smart" ? "smart" : undefined,
+      inputs:
+        typeof raw.schedule.inputs === "object" && raw.schedule.inputs !== null
+          ? Object.fromEntries(
+              Object.entries(raw.schedule.inputs)
+                .filter(([key, value]) => key.trim().length > 0 && typeof value === "string")
+                .map(([key, value]) => [key.trim().toLowerCase(), value as string])
+            )
+          : undefined
+    };
+  } else if (raw.schedule !== undefined) {
+    normalized.schedule = raw.schedule;
+  }
+
   if (Array.isArray(raw.steps)) {
     const seenNames = new Set<string>();
     normalized.steps = raw.steps
@@ -490,12 +613,14 @@ function normalizeGeneratedFlow(raw: unknown): unknown {
         seenNames.add(normalizeRef(name));
 
         const prompt = typeof step.prompt === "string" ? step.prompt.trim() : undefined;
+        const contextTemplate = typeof step.contextTemplate === "string" ? step.contextTemplate.trim() : undefined;
         const delegationCount = typeof step.delegationCount === "number" ? Math.floor(step.delegationCount) : undefined;
 
         return {
           name,
           role: normalizeRole(step.role),
           prompt: prompt && prompt.length > 0 ? prompt : undefined,
+          contextTemplate: contextTemplate && contextTemplate.length > 0 ? contextTemplate : undefined,
           enableDelegation: typeof step.enableDelegation === "boolean" ? step.enableDelegation : undefined,
           delegationCount,
           enableIsolatedStorage: typeof step.enableIsolatedStorage === "boolean" ? step.enableIsolatedStorage : undefined,
@@ -725,8 +850,9 @@ function fallbackSpec(prompt: string): GeneratedFlowSpec {
       runtime: {
         maxLoops: 3,
         maxStepExecutions: 30,
-        stageTimeoutMs: 300000
+        stageTimeoutMs: 420000
       },
+      schedule: { ...defaultSchedule },
       steps,
       links: [
         ...(includeOrchestrator ? [{ source: "Main Orchestrator", target: "Figma Extraction / UI Kit", condition: "always" as const }] : []),
@@ -778,6 +904,7 @@ function fallbackSpec(prompt: string): GeneratedFlowSpec {
   return {
     name: "Generated Agent Flow",
     description: "Auto-generated workflow from prompt.",
+    schedule: { ...defaultSchedule },
     steps,
     links: linearLinks,
     qualityGates: [
@@ -904,6 +1031,89 @@ function buildQualityGates(
   return gates.slice(0, 80);
 }
 
+function gateDedupeKey(gate: NonNullable<PipelineInput["qualityGates"]>[number]): string {
+  return `${gate.name.toLowerCase()}|${gate.kind}|${gate.targetStepId}|${gate.pattern}|${gate.flags}|${gate.jsonPath}|${gate.artifactPath}`;
+}
+
+function pushUniqueGate(
+  gates: NonNullable<PipelineInput["qualityGates"]>,
+  seen: Set<string>,
+  gate: Omit<NonNullable<PipelineInput["qualityGates"]>[number], "id">
+): void {
+  const normalized = {
+    id: nanoid(),
+    ...gate
+  } satisfies NonNullable<PipelineInput["qualityGates"]>[number];
+
+  const key = gateDedupeKey(normalized);
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  gates.push(normalized);
+}
+
+function withAutoQualityGates(
+  gates: PipelineInput["qualityGates"],
+  stepRecords: PipelineInput["steps"],
+  prompt: string
+): PipelineInput["qualityGates"] {
+  const normalized = Array.isArray(gates) ? [...gates] : [];
+  const seen = new Set(
+    normalized.map((gate) => gateDedupeKey(gate as NonNullable<PipelineInput["qualityGates"]>[number]))
+  );
+  const strictMode = inferStrictQualityMode(prompt);
+
+  const reviewLikeSteps = stepRecords.filter((step) => step.role === "review" || step.role === "tester");
+  let targetSteps =
+    reviewLikeSteps.length > 0
+      ? reviewLikeSteps
+      : strictMode
+        ? stepRecords.length > 0
+          ? [stepRecords[stepRecords.length - 1]]
+          : []
+        : [];
+
+  if (targetSteps.length === 0 && normalized.length === 0 && stepRecords.length > 0) {
+    targetSteps = [stepRecords[stepRecords.length - 1]];
+  }
+
+  for (const step of targetSteps) {
+    const targetStepId =
+      typeof step.id === "string" && step.id.trim().length > 0 ? step.id : "any_step";
+    const outputFormat = step.outputFormat === "json" ? "json" : "markdown";
+
+    if (outputFormat === "json") {
+      pushUniqueGate(normalized, seen, {
+        name: `${step.name} exposes status field`,
+        targetStepId,
+        kind: "json_field_exists",
+        blocking: true,
+        pattern: "",
+        flags: "",
+        jsonPath: "status",
+        artifactPath: "",
+        message: ""
+      });
+    } else {
+      pushUniqueGate(normalized, seen, {
+        name: `${step.name} emits workflow status`,
+        targetStepId,
+        kind: "regex_must_match",
+        blocking: true,
+        pattern: workflowStatusPattern,
+        flags: "i",
+        jsonPath: "",
+        artifactPath: "",
+        message: ""
+      });
+    }
+  }
+
+  return normalized.slice(0, 80);
+}
+
 function buildFlowDraft(spec: GeneratedFlowSpec, request: FlowBuilderRequest): PipelineInput {
   const reasoningEffort = resolveReasoning(request.providerId, request.reasoningEffort, request.model, "medium");
   const baseContext = resolveDefaultContextWindow(request.providerId, request.model);
@@ -911,9 +1121,19 @@ function buildFlowDraft(spec: GeneratedFlowSpec, request: FlowBuilderRequest): P
   const contextWindowTokens = use1MContext ? Math.max(baseContext, 1_000_000) : baseContext;
   const fastMode = request.providerId === "claude" ? request.fastMode === true : false;
   const runtime = normalizeRuntime(spec.runtime);
+  const schedule = normalizeSchedule(spec.schedule);
 
   const stepRecords: PipelineInput["steps"] = spec.steps.map((step, index) => {
     const role = step.role ?? (index === 0 ? "analysis" : "executor");
+    const isClaudeOrchestrator = request.providerId === "claude" && role === "orchestrator";
+    const stepModel =
+      isClaudeOrchestrator && request.model.toLowerCase().includes("opus") ? orchestratorClaudeModel : request.model;
+    const stepReasoningEffort = isClaudeOrchestrator ? "low" : reasoningEffort;
+    const stepFastMode = isClaudeOrchestrator ? true : fastMode;
+    const stepUse1MContext = isClaudeOrchestrator ? false : use1MContext;
+    const stepContextWindowTokens = isClaudeOrchestrator
+      ? Math.min(contextWindowTokens, orchestratorContextWindowCap)
+      : contextWindowTokens;
     const row = Math.floor(index / 4);
     const col = index % 4;
 
@@ -923,16 +1143,16 @@ function buildFlowDraft(spec: GeneratedFlowSpec, request: FlowBuilderRequest): P
       role,
       prompt: step.prompt?.trim() || defaultRolePrompts[role],
       providerId: request.providerId,
-      model: request.model,
-      reasoningEffort,
-      fastMode,
-      use1MContext,
-      contextWindowTokens,
+      model: stepModel,
+      reasoningEffort: stepReasoningEffort,
+      fastMode: stepFastMode,
+      use1MContext: stepUse1MContext,
+      contextWindowTokens: stepContextWindowTokens,
       position: {
         x: 80 + col * 280,
         y: 120 + row * 180
       },
-      contextTemplate: defaultContextTemplate,
+      contextTemplate: step.contextTemplate?.trim() || defaultContextTemplate,
       enableDelegation:
         typeof step.enableDelegation === "boolean" ? step.enableDelegation : role === "executor" || role === "orchestrator",
       delegationCount:
@@ -962,8 +1182,9 @@ function buildFlowDraft(spec: GeneratedFlowSpec, request: FlowBuilderRequest): P
     description: spec.description?.trim() || "AI-generated workflow graph.",
     steps: stepRecords,
     links: buildLinks(spec, stepRecords),
-    qualityGates: buildQualityGates(spec, stepRecords),
-    runtime
+    qualityGates: withAutoQualityGates(buildQualityGates(spec, stepRecords), stepRecords, request.prompt),
+    runtime,
+    schedule
   };
 }
 
@@ -983,37 +1204,49 @@ function buildFlowDraftFromExisting(spec: GeneratedFlowSpec, request: FlowBuilde
     const providerId =
       existing?.providerId === "openai" || existing?.providerId === "claude" ? existing.providerId : request.providerId;
 
+    const hasExplicitExistingModel = typeof existing?.model === "string" && existing.model.trim().length > 0;
+    const requestedModel = hasExplicitExistingModel ? existing?.model ?? request.model : request.model;
+    const isClaudeOrchestrator = providerId === "claude" && role === "orchestrator";
     const model =
-      typeof existing?.model === "string" && existing.model.trim().length > 0 ? existing.model : request.model;
+      isClaudeOrchestrator && !hasExplicitExistingModel && requestedModel.toLowerCase().includes("opus")
+        ? orchestratorClaudeModel
+        : requestedModel;
 
-    const reasoningEffort = resolveReasoning(providerId, existing?.reasoningEffort ?? request.reasoningEffort, model, "medium");
+    const resolvedReasoningEffort = resolveReasoning(providerId, existing?.reasoningEffort ?? request.reasoningEffort, model, "medium");
+    const reasoningEffort = isClaudeOrchestrator ? "low" : resolvedReasoningEffort;
     const baseContext = resolveDefaultContextWindow(providerId, model);
 
-    const use1MContext =
+    const resolvedUse1MContext =
       providerId === "claude"
         ? typeof existing?.use1MContext === "boolean"
           ? existing.use1MContext
           : request.use1MContext === true
         : false;
 
-    const fastMode =
+    const resolvedFastMode =
       providerId === "claude"
         ? typeof existing?.fastMode === "boolean"
           ? existing.fastMode
           : request.fastMode === true
         : false;
 
+    const use1MContext = isClaudeOrchestrator ? false : resolvedUse1MContext;
+    const fastMode = isClaudeOrchestrator ? true : resolvedFastMode;
+
     const existingContextWindow =
       typeof existing?.contextWindowTokens === "number" && Number.isFinite(existing.contextWindowTokens)
         ? Math.floor(existing.contextWindowTokens)
         : undefined;
 
-    const contextWindowTokens =
+    const resolvedContextWindowTokens =
       existingContextWindow && existingContextWindow > 0
         ? existingContextWindow
         : use1MContext
           ? Math.max(baseContext, 1_000_000)
           : baseContext;
+    const contextWindowTokens = isClaudeOrchestrator
+      ? Math.min(resolvedContextWindowTokens, orchestratorContextWindowCap)
+      : resolvedContextWindowTokens;
 
     const row = Math.floor(index / 4);
     const col = index % 4;
@@ -1050,7 +1283,9 @@ function buildFlowDraftFromExisting(spec: GeneratedFlowSpec, request: FlowBuilde
       contextWindowTokens,
       position,
       contextTemplate:
-        typeof existing?.contextTemplate === "string" && existing.contextTemplate.trim().length > 0
+        typeof step.contextTemplate === "string" && step.contextTemplate.trim().length > 0
+          ? step.contextTemplate.trim()
+          : typeof existing?.contextTemplate === "string" && existing.contextTemplate.trim().length > 0
           ? existing.contextTemplate
           : defaultContextTemplate,
       enableDelegation:
@@ -1105,13 +1340,17 @@ function buildFlowDraftFromExisting(spec: GeneratedFlowSpec, request: FlowBuilde
     description: spec.description?.trim() || currentDraft.description || "AI-generated workflow graph.",
     steps: stepRecords,
     links: buildLinks(spec, stepRecords),
-    qualityGates:
+    qualityGates: withAutoQualityGates(
       Array.isArray(spec.qualityGates) && spec.qualityGates.length > 0
         ? buildQualityGates(spec, stepRecords)
         : Array.isArray(currentDraft.qualityGates)
           ? currentDraft.qualityGates
           : [],
-    runtime: normalizeRuntime(spec.runtime ?? currentDraft.runtime)
+      stepRecords,
+      request.prompt
+    ),
+    runtime: normalizeRuntime(spec.runtime ?? currentDraft.runtime),
+    schedule: normalizeSchedule(spec.schedule ?? currentDraft.schedule)
   };
 }
 
@@ -1125,6 +1364,7 @@ function summarizeCurrentDraft(currentDraft: PipelineInput | undefined): string 
     name: currentDraft.name,
     description: currentDraft.description,
     runtime: normalizeRuntime(currentDraft.runtime),
+    schedule: normalizeSchedule(currentDraft.schedule),
     steps: currentDraft.steps.map((step) => ({
       name: step.name,
       role: step.role,
@@ -1144,11 +1384,39 @@ function summarizeCurrentDraft(currentDraft: PipelineInput | undefined): string 
       name: gate.name,
       target: gate.targetStepId === "any_step" ? "any_step" : nameById.get(gate.targetStepId) ?? gate.targetStepId,
       kind: gate.kind,
-      blocking: gate.blocking
+      blocking: gate.blocking,
+      pattern: clip(gate.pattern ?? "", 220),
+      flags: gate.flags ?? "",
+      jsonPath: clip(gate.jsonPath ?? "", 220),
+      artifactPath: clip(gate.artifactPath ?? "", 220),
+      message: clip(gate.message ?? "", 220)
     }))
   };
 
   return clip(JSON.stringify(summary, null, 2), 22000);
+}
+
+function summarizeAvailableMcpServers(servers: FlowBuilderRequest["availableMcpServers"]): string {
+  if (!Array.isArray(servers) || servers.length === 0) {
+    return "No MCP servers configured.";
+  }
+
+  const normalized = servers
+    .filter((server) => typeof server.id === "string" && server.id.trim().length > 0)
+    .slice(0, 24)
+    .map((server) => ({
+      id: server.id.trim(),
+      name: typeof server.name === "string" ? server.name.trim() : server.id.trim(),
+      enabled: server.enabled !== false,
+      transport: server.transport ?? "http",
+      summary: typeof server.summary === "string" ? clip(server.summary, 220) : undefined
+    }));
+
+  if (normalized.length === 0) {
+    return "No MCP servers configured.";
+  }
+
+  return clip(JSON.stringify(normalized, null, 2), 6000);
 }
 
 function normalizeHistory(history: FlowChatMessage[] | undefined, prompt: string): FlowChatMessage[] {
@@ -1178,7 +1446,7 @@ function formatHistoryForContext(history: FlowChatMessage[]): string {
   return history.map((message, index) => `${index + 1}. ${message.role.toUpperCase()}: ${message.content}`).join("\n\n");
 }
 
-function buildPlannerContext(prompt: string): string {
+function buildPlannerContext(request: FlowBuilderRequest): string {
   return [
     "Generate a workflow graph for the request below.",
     "",
@@ -1189,10 +1457,11 @@ function buildPlannerContext(prompt: string): string {
     "{",
     '  "name": "Flow name",',
     '  "description": "One sentence",',
-    '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 240000 },',
+    '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
+    '  "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "America/New_York", "task": "Run morning sync checks", "runMode": "smart", "inputs": { "source_pdf_path": "/tmp/source.pdf" } },',
     '  "steps": [',
-    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "outputFormat": "markdown" },',
-    '    { "name": "Builder", "role": "executor", "prompt": "...", "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"] }',
+    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown" },',
+    '    { "name": "Builder", "role": "executor", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nIncoming:\\n{{incoming_outputs}}", "enableIsolatedStorage": true, "enabledMcpServerIds": ["figma-mcp-id"], "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"] }',
     "  ],",
     '  "links": [',
     '    { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
@@ -1205,13 +1474,28 @@ function buildPlannerContext(prompt: string): string {
     "Rules:",
     "- Roles allowed: analysis, planner, orchestrator, executor, tester, review.",
     "- Use on_fail/on_pass links for remediation loops when reviewers exist.",
+    "- Always configure pipeline qualityGates. At minimum, add one blocking status gate per review/tester step.",
+    "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- Use manual_approval for explicit human checkpoints; these gates pause run execution until approved or rejected.",
+    "- Use step requiredOutputFields/requiredOutputFiles for step contracts; use qualityGates for pipeline-level blocking checks.",
+    "- Use contextTemplate when step needs custom context windows or explicit run-input/storage/tool visibility.",
     "- Keep step names unique.",
     "- Each step must have a concise actionable prompt.",
     "- Prefer orchestrator for multi-stage complex pipelines unless explicitly not requested.",
+    "- Platform supports startup-check and runtime needs_input prompts with secure secret persistence per pipeline.",
+    "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
+    "- Only set schedule.enabled=true when user explicitly asks for automatic scheduled runs.",
+    "- Platform supports per-step MCP access via enabledMcpServerIds and per-step isolated/shared storage.",
     "- Parameterize runtime-specific values via placeholders like {{input.source_pdf_path}} instead of hardcoding secrets/paths.",
+    "- Keep run-input keys canonical and reusable (for example: figma_links, figma_token, source_pdf_path, output_dir).",
+    "- If a step writes artifacts to {{input.output_dir}}, mirror that in requiredOutputFiles/quality-gate artifactPath placeholders (for example {{input.output_dir}}/file.json).",
+    "- For network-heavy or multi-artifact pipelines, prefer stageTimeoutMs >= 420000.",
+    "",
+    "Configured MCP servers (use exact ids in enabledMcpServerIds when needed):",
+    summarizeAvailableMcpServers(request.availableMcpServers),
     "",
     "User request:",
-    prompt.trim()
+    request.prompt.trim()
   ].join("\n");
 }
 
@@ -1227,13 +1511,17 @@ function buildJsonRepairContext(rawOutput: string): string {
     "- Ensure fields are valid for this schema.",
     "- Roles allowed: analysis, planner, orchestrator, executor, tester, review.",
     "- Link conditions allowed: always, on_pass, on_fail.",
+    "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- If schedule exists, keep cron/timezone values valid, preserve runMode, and preserve schedule.inputs when relevant.",
+    "- Preserve qualityGates. If review/tester steps exist, ensure blocking status gates are present.",
     "- If a field is unknown, omit it instead of inventing unsupported fields.",
     "",
     "Expected shape:",
     "{",
     '  "name": "Flow name",',
     '  "description": "One sentence",',
-    '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 240000 },',
+    '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
+    '  "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "UTC", "task": "Scheduled run", "runMode": "smart", "inputs": {} },',
     '  "steps": [',
     '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "outputFormat": "markdown" }',
     "  ],",
@@ -1250,12 +1538,16 @@ function buildJsonRepairContext(rawOutput: string): string {
   ].join("\n");
 }
 
-function buildPlannerRegenerationContext(prompt: string, rawOutput: string, repairedOutput?: string): string {
+function buildPlannerRegenerationContext(
+  request: FlowBuilderRequest,
+  rawOutput: string,
+  repairedOutput?: string
+): string {
   const rawClip = clip(rawOutput, 12000);
   const repairedClip = repairedOutput ? clip(repairedOutput, 12000) : "";
 
   return [
-    buildPlannerContext(prompt),
+    buildPlannerContext(request),
     "",
     "Previous output was invalid JSON. Regenerate the FULL response now.",
     "Return one JSON object only. No markdown. No comments.",
@@ -1287,9 +1579,10 @@ function buildChatPlannerContext(request: FlowBuilderRequest): string {
     '  "flow": {',
     '    "name": "Flow name",',
     '    "description": "One sentence",',
-    '    "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 240000 },',
+    '    "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
+    '    "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "America/New_York", "task": "Run morning sync checks", "runMode": "smart", "inputs": {} },',
     '    "steps": [',
-    '      { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "outputFormat": "markdown" }',
+    '      { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown" }',
     "    ],",
     '    "links": [',
     '      { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
@@ -1303,11 +1596,26 @@ function buildChatPlannerContext(request: FlowBuilderRequest): string {
     "Rules:",
     "- Roles allowed: analysis, planner, orchestrator, executor, tester, review.",
     "- Link conditions allowed: always, on_pass, on_fail.",
+    "- Always configure pipeline qualityGates. Add blocking status gates for review/tester steps.",
+    "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- Use manual_approval when user asks for explicit human decision points in the loop.",
+    "- Use step requiredOutputFields/requiredOutputFiles for per-step contracts and qualityGates for pipeline-level checks.",
+    "- Use contextTemplate for steps that depend on run-input mappings or specific runtime context blocks.",
     "- For update_current_flow, return the full updated flow result in flow (not a patch).",
     "- Preserve existing structure unless user asks for broader changes.",
     "- Use replace_flow only when the user explicitly asks for a new/rebuilt flow.",
     "- flow must be omitted when action=answer.",
+    "- Platform supports startup-check and runtime needs_input prompts, including secure per-pipeline secret persistence.",
+    "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
+    "- Only set schedule.enabled=true when user explicitly asks for scheduled execution.",
+    "- Platform supports per-step MCP access via enabledMcpServerIds and isolated/shared storage toggles.",
     "- Parameterize runtime-specific values via placeholders like {{input.output_dir}} and {{input.figma_links}}.",
+    "- Keep run-input keys canonical and reusable (for example: figma_links, figma_token, source_pdf_path, output_dir).",
+    "- Align requiredOutputFiles/quality-gate artifactPath with the same directory used in prompts (for example {{input.output_dir}}/artifact.json).",
+    "- For network-heavy or multi-artifact pipelines, prefer stageTimeoutMs >= 420000.",
+    "",
+    "Configured MCP servers (use exact ids in enabledMcpServerIds when needed):",
+    summarizeAvailableMcpServers(request.availableMcpServers),
     "",
     "Current flow snapshot:",
     summarizeCurrentDraft(request.currentDraft),
@@ -1328,13 +1636,16 @@ function buildChatRepairContext(rawOutput: string): string {
     "{",
     '  "action": "answer | update_current_flow | replace_flow",',
     '  "message": "assistant response",',
-    '  "flow": { "name": "...", "description": "...", "steps": [...], "links": [...], "qualityGates": [...] }',
+    '  "flow": { "name": "...", "description": "...", "runtime": {...}, "schedule": {...}, "steps": [...], "links": [...], "qualityGates": [...] }',
     "}",
     "",
     "Rules:",
     "- action must be one of answer, update_current_flow, replace_flow.",
     "- Include flow only for update_current_flow or replace_flow.",
     "- Ensure flow fields match allowed roles and link conditions.",
+    "- Ensure qualityGate kinds use supported values, including manual_approval when needed.",
+    "- Preserve schedule fields when present and keep them valid.",
+    "- Preserve qualityGates; keep blocking status gates for review/tester steps.",
     "- Preserve any {{input.<key>}} placeholders and do not convert them into literals.",
     "",
     "Input to repair:",
@@ -1495,7 +1806,7 @@ async function generateDraftOnly(
     provider,
     step: generatorStep,
     task: "Generate an agent workflow graph",
-    context: buildPlannerContext(request.prompt),
+    context: buildPlannerContext(request),
     outputMode: "json"
   });
 
@@ -1555,7 +1866,7 @@ async function generateDraftOnly(
         prompt: "Generate strict workflow JSON from scratch. Return exactly one valid JSON object and nothing else."
       },
       task: "Regenerate workflow JSON",
-      context: buildPlannerRegenerationContext(request.prompt, rawOutput, repairedOutput),
+      context: buildPlannerRegenerationContext(request, rawOutput, repairedOutput),
       outputMode: "json"
     });
 

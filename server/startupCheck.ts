@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { executeProviderStep } from "./providers.js";
 import { buildSmartRunPlan } from "./smartRun.js";
-import { normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import {
+  areRunInputKeysEquivalent,
+  getRunInputValue,
+  normalizeRunInputKey,
+  normalizeRunInputs,
+  pickPreferredRunInputKey,
+  type RunInputs
+} from "./runInputs.js";
 import type {
   DashboardState,
   Pipeline,
@@ -90,7 +97,7 @@ function normalizeRequestType(rawType: unknown): RunInputRequestType {
 }
 
 function normalizeKey(raw: string): string {
-  return raw.trim().toLowerCase();
+  return normalizeRunInputKey(raw);
 }
 
 function toLabelFromKey(key: string): string {
@@ -474,7 +481,7 @@ function mergeRequestOptionLists(
 }
 
 function hasInputValue(runInputs: RunInputs, key: string): boolean {
-  const value = runInputs[normalizeKey(key)];
+  const value = getRunInputValue(runInputs, key);
   return typeof value === "string" && value.trim().length > 0;
 }
 
@@ -485,16 +492,38 @@ function mergeRequests(deterministic: RunInputRequest[], model: RunInputRequest[
     if (hasInputValue(runInputs, request.key)) {
       continue;
     }
-    byKey.set(normalizeKey(request.key), request);
+
+    const normalizedKey = normalizeKey(request.key);
+    const equivalentKey = [...byKey.keys()].find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, normalizedKey)
+    );
+    const key =
+      equivalentKey === undefined
+        ? normalizedKey
+        : pickPreferredRunInputKey(equivalentKey, normalizedKey);
+    const existing = equivalentKey ? byKey.get(equivalentKey) : undefined;
+    const nextRequest = existing ? { ...existing, ...request, key } : { ...request, key };
+
+    if (equivalentKey && equivalentKey !== key) {
+      byKey.delete(equivalentKey);
+    }
+    byKey.set(key, nextRequest);
   }
 
   for (const request of model) {
-    const key = normalizeKey(request.key);
+    const normalizedKey = normalizeKey(request.key);
+    const equivalentKey = [...byKey.keys()].find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, normalizedKey)
+    );
+    const key =
+      equivalentKey === undefined
+        ? normalizedKey
+        : pickPreferredRunInputKey(equivalentKey, normalizedKey);
     if (key.length === 0 || hasInputValue(runInputs, key)) {
       continue;
     }
 
-    const existing = byKey.get(key);
+    const existing = equivalentKey ? byKey.get(equivalentKey) : byKey.get(key);
     if (!existing) {
       byKey.set(key, {
         ...request,
@@ -510,6 +539,9 @@ function mergeRequests(deterministic: RunInputRequest[], model: RunInputRequest[
         : mergedOptions && mergedOptions.length > 0
           ? "select"
           : existing.type;
+    if (equivalentKey && equivalentKey !== key) {
+      byKey.delete(equivalentKey);
+    }
     byKey.set(key, {
       ...existing,
       label: existing.label || request.label,

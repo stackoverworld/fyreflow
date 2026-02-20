@@ -1,4 +1,4 @@
-import { Plus, Trash2, Workflow } from "lucide-react";
+import { Clock3, Plus, Trash2, Workflow } from "lucide-react";
 import type { Pipeline } from "@/lib/types";
 import { Button } from "@/components/optics/button";
 import { cn } from "@/lib/cn";
@@ -39,6 +39,7 @@ export function PipelineList({ pipelines, selectedId, activePipelineIds = [], on
         {pipelines.map((pipeline) => {
           const isActive = selectedId === pipeline.id;
           const isRunning = activeSet.has(pipeline.id);
+          const isScheduled = pipeline.schedule?.enabled === true && pipeline.schedule.cron.trim().length > 0;
 
           return (
             <button
@@ -88,6 +89,13 @@ export function PipelineList({ pipelines, selectedId, activePipelineIds = [], on
               <div className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-500">
                 <Workflow className="h-3 w-3 text-ink-600" />
                 <span>{pipeline.steps.length} steps</span>
+                {isScheduled ? (
+                  <>
+                    <span className="text-ink-700">·</span>
+                    <Clock3 className="h-3 w-3 text-ink-600" />
+                    <span>scheduled</span>
+                  </>
+                ) : null}
                 <span className="text-ink-700">·</span>
                 <span>{timeAgo(new Date(pipeline.updatedAt))}</span>
                 {isRunning ? (

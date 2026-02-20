@@ -8,7 +8,15 @@ import type {
   SmartRunFieldType,
   SmartRunPlan
 } from "./types.js";
-import { extractInputKeysFromText, normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import {
+  areRunInputKeysEquivalent,
+  extractInputKeysFromText,
+  getRunInputValue,
+  normalizeRunInputKey,
+  normalizeRunInputs,
+  pickPreferredRunInputKey,
+  type RunInputs
+} from "./runInputs.js";
 import { getProviderOAuthStatus } from "./oauth.js";
 
 interface MutableField {
@@ -100,9 +108,25 @@ function addField(
   source: string,
   options?: Partial<Pick<SmartRunField, "required" | "type" | "description" | "placeholder">>
 ): void {
-  const key = keyRaw.trim().toLowerCase();
+  const candidateKey = normalizeRunInputKey(keyRaw);
+  const equivalentExistingKey = [...registry.keys()].find((existingKey) =>
+    areRunInputKeysEquivalent(existingKey, candidateKey)
+  );
+  const key =
+    equivalentExistingKey === undefined
+      ? candidateKey
+      : pickPreferredRunInputKey(equivalentExistingKey, candidateKey);
   if (key.length === 0) {
     return;
+  }
+
+  if (equivalentExistingKey && equivalentExistingKey !== key) {
+    const existingField = registry.get(equivalentExistingKey);
+    if (existingField) {
+      registry.delete(equivalentExistingKey);
+      existingField.key = key;
+      registry.set(key, existingField);
+    }
   }
 
   const existing = registry.get(key);
@@ -384,7 +408,7 @@ function validateRequiredInputs(fields: SmartRunField[], runInputs: RunInputs): 
   const checks: SmartRunCheck[] = [];
 
   for (const field of fields.filter((entry) => entry.required)) {
-    const value = runInputs[field.key];
+    const value = getRunInputValue(runInputs, field.key);
     const ok = typeof value === "string" && value.trim().length > 0;
     checks.push(
       makeCheck(

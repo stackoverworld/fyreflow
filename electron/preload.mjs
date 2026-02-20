@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld("desktop", {
   platform: process.platform,
   minimize: () => ipcRenderer.invoke("window:minimize"),
   maximize: () => ipcRenderer.invoke("window:maximize"),
-  close: () => ipcRenderer.invoke("window:close")
+  close: () => ipcRenderer.invoke("window:close"),
+  notify: (payload) => ipcRenderer.invoke("desktop:notify", payload)
 });

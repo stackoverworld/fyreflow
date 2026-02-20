@@ -3,9 +3,11 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   Bug,
   Cable,
+  Clock3,
   Layers,
   ListChecks,
   Loader2,
+  Pause,
   Play,
   Plus,
   Redo2,
@@ -22,10 +24,14 @@ import {
   createPipeline,
   deleteMcpServer,
   deletePipeline,
+  deletePipelineSecureInputs,
   getRunStartupCheck,
   getSmartRunPlan,
   getState,
   listRuns,
+  pauseRun,
+  resolveRunApproval,
+  resumeRun,
   savePipelineSecureInputs,
   startRun,
   stopRun,
@@ -35,8 +41,16 @@ import {
   updateStorageConfig
 } from "@/lib/api";
 import { moveAiChatHistory } from "@/lib/aiChatStorage";
+import { loadAppSettings, saveAppSettings, type DesktopNotificationSettings } from "@/lib/appSettingsStorage";
+import { useTheme } from "@/lib/useTheme";
 import { loadRunDraft, moveRunDraft, saveRunDraft } from "@/lib/runDraftStorage";
 import { getDefaultContextWindowForModel, getDefaultModelForProvider, MODEL_CATALOG } from "@/lib/modelCatalog";
+import {
+  areRunInputKeysEquivalent,
+  getRunInputValue,
+  normalizeRunInputKey,
+  pickPreferredRunInputKey
+} from "@/lib/runInputAliases";
 import { parseRunInputRequestsFromText } from "@/lib/runInputRequests";
 import type {
   DashboardState,
@@ -46,6 +60,7 @@ import type {
   ProviderId,
   ProviderOAuthStatus,
   RunInputRequest,
+  RunStatus,
   RunStartupBlocker,
   SmartRunPlan
 } from "@/lib/types";
@@ -55,6 +70,8 @@ import { ProviderSettings } from "@/components/dashboard/ProviderSettings";
 import { RunPanel } from "@/components/dashboard/RunPanel";
 import { AiBuilderPanel } from "@/components/dashboard/AiBuilderPanel";
 import { DebugPanel } from "@/components/dashboard/DebugPanel";
+import { CronSchedulesPanel } from "@/components/dashboard/CronSchedulesPanel";
+import { SettingsModal } from "@/components/dashboard/SettingsModal";
 import { McpSettings } from "@/components/dashboard/McpSettings";
 import { QualityGatesPanel } from "@/components/dashboard/QualityGatesPanel";
 import { RunInputRequestModal } from "@/components/dashboard/RunInputRequestModal";
@@ -65,16 +82,19 @@ import { Tooltip } from "@/components/optics/tooltip";
 import { SlidePanel } from "@/components/optics/slide-panel";
 import { cn } from "@/lib/cn";
 
-type WorkspacePanel = "pipelines" | "flow" | "contracts" | "providers" | "mcp" | "run" | "ai" | "debug" | null;
+type WorkspacePanel = "pipelines" | "flow" | "schedules" | "contracts" | "mcp" | "run" | "ai" | "debug" | null;
 type ProviderOAuthStatusMap = Record<ProviderId, ProviderOAuthStatus | null>;
 type ProviderOAuthMessageMap = Record<ProviderId, string>;
 const DEFAULT_MAX_LOOPS = 2;
 const DEFAULT_MAX_STEP_EXECUTIONS = 18;
 const DEFAULT_STAGE_TIMEOUT_MS = 240000;
+const DEFAULT_SCHEDULE_TIMEZONE = "UTC";
 const DRAFT_HISTORY_LIMIT = 120;
 const AUTOSAVE_DELAY_MS = 1000;
 const SMART_RUN_PLAN_CACHE_LIMIT = 24;
+const SCHEDULE_RUN_PLAN_DEBOUNCE_MS = 750;
 const RUNTIME_INPUT_PROMPT_CACHE_LIMIT = 240;
+const MAX_DESKTOP_NOTIFICATION_BODY_LENGTH = 220;
 
 function createStepId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -153,6 +173,48 @@ function normalizeRuntime(runtime: Pipeline["runtime"] | PipelinePayload["runtim
     maxStepExecutions: Math.max(4, Math.min(120, Math.floor(runtime?.maxStepExecutions ?? DEFAULT_MAX_STEP_EXECUTIONS))),
     stageTimeoutMs: Math.max(10_000, Math.min(1_200_000, Math.floor(runtime?.stageTimeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS)))
   };
+}
+
+function defaultSchedule(): Pipeline["schedule"] {
+  return {
+    enabled: false,
+    cron: "",
+    timezone: DEFAULT_SCHEDULE_TIMEZONE,
+    task: "",
+    runMode: "smart",
+    inputs: {} as Record<string, string>
+  };
+}
+
+function normalizeSchedule(
+  schedule: Pipeline["schedule"] | PipelinePayload["schedule"] | undefined
+): Pipeline["schedule"] {
+  const cron = typeof schedule?.cron === "string" ? schedule.cron.trim() : "";
+  const timezone =
+    typeof schedule?.timezone === "string" && schedule.timezone.trim().length > 0
+      ? schedule.timezone.trim()
+      : DEFAULT_SCHEDULE_TIMEZONE;
+  const task = typeof schedule?.task === "string" ? schedule.task : "";
+  const runMode: Pipeline["schedule"]["runMode"] = schedule?.runMode === "quick" ? "quick" : "smart";
+  const inputs = normalizeSmartRunInputs(schedule?.inputs);
+
+  return {
+    enabled: schedule?.enabled === true && cron.length > 0,
+    cron,
+    timezone,
+    task,
+    runMode,
+    inputs
+  };
+}
+
+function isValidTimeZoneValue(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createOrchestratorStep(index: number): PipelinePayload["steps"][number] {
@@ -256,7 +318,8 @@ function toDraft(pipeline: Pipeline): PipelinePayload {
       artifactPath: gate.artifactPath,
       message: gate.message
     })),
-    runtime: normalizeRuntime(pipeline.runtime)
+    runtime: normalizeRuntime(pipeline.runtime),
+    schedule: normalizeSchedule(pipeline.schedule)
   };
 }
 
@@ -267,7 +330,8 @@ function emptyDraft(): PipelinePayload {
     steps: [createDraftStep(0)],
     links: [],
     qualityGates: [],
-    runtime: defaultRuntime()
+    runtime: defaultRuntime(),
+    schedule: defaultSchedule()
   };
 }
 
@@ -280,17 +344,52 @@ function normalizeSmartRunInputs(inputs?: Record<string, string>): Record<string
     return {};
   }
 
-  const normalizedEntries = Object.entries(inputs)
-    .map(([key, value]) => [key.trim(), value] as const)
-    .filter(([key]) => key.length > 0)
-    .sort(([left], [right]) => left.localeCompare(right));
-
   const normalized: Record<string, string> = {};
-  for (const [key, value] of normalizedEntries) {
-    if (value.trim() === "[secure]") {
+  const entries = Object.entries(inputs)
+    .map(([rawKey, value]) => {
+      const originalKey = rawKey.trim();
+      const key = normalizeRunInputKey(originalKey);
+      return {
+        originalKey,
+        key,
+        value
+      };
+    })
+    .filter((entry) => entry.key.length > 0)
+    .sort((left, right) => left.originalKey.localeCompare(right.originalKey));
+
+  for (const entry of entries) {
+    if (entry.value.trim() === "[secure]") {
       continue;
     }
-    normalized[key] = value;
+
+    const equivalentKey = Object.keys(normalized).find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, entry.key)
+    );
+    const key =
+      equivalentKey === undefined ? entry.key : pickPreferredRunInputKey(equivalentKey, entry.key);
+
+    if (equivalentKey && equivalentKey !== key) {
+      const existingValue = normalized[equivalentKey];
+      delete normalized[equivalentKey];
+      normalized[key] = existingValue;
+    }
+
+    const existing = normalized[key];
+    if (existing === undefined) {
+      normalized[key] = entry.value;
+      continue;
+    }
+
+    const existingHasValue = existing.trim().length > 0;
+    const incomingHasValue = entry.value.trim().length > 0;
+    if (!incomingHasValue) {
+      continue;
+    }
+
+    if (!existingHasValue) {
+      normalized[key] = entry.value;
+    }
   }
   return normalized;
 }
@@ -299,6 +398,16 @@ function buildSmartRunPlanSignature(pipelineId: string, inputs?: Record<string, 
   const normalized = normalizeSmartRunInputs(inputs);
   const entries = Object.entries(normalized);
   return `${pipelineId}:${JSON.stringify(entries)}`;
+}
+
+function buildScheduleRunPlanSignature(
+  pipelineId: string,
+  runMode: "smart" | "quick",
+  inputs?: Record<string, string>
+): string {
+  const effectiveInputs = runMode === "smart" ? normalizeSmartRunInputs(inputs) : {};
+  const entries = Object.entries(effectiveInputs);
+  return `${pipelineId}:${runMode}:${JSON.stringify(entries)}`;
 }
 
 function setSmartRunPlanCacheEntry(cache: Map<string, SmartRunPlan>, signature: string, plan: SmartRunPlan): void {
@@ -317,8 +426,20 @@ function setSmartRunPlanCacheEntry(cache: Map<string, SmartRunPlan>, signature: 
 }
 
 function hasRunInputValue(inputs: Record<string, string> | undefined, key: string): boolean {
-  const value = inputs?.[key.trim().toLowerCase()];
+  const value = getRunInputValue(inputs, key);
   return typeof value === "string" && value.trim().length > 0 && value.trim() !== "[secure]";
+}
+
+function truncateNotificationBody(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= MAX_DESKTOP_NOTIFICATION_BODY_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_DESKTOP_NOTIFICATION_BODY_LENGTH - 1)}…`;
+}
+
+function isActiveRunStatus(status: RunStatus): boolean {
+  return status === "queued" || status === "running" || status === "paused" || status === "awaiting_approval";
 }
 
 function getPipelineSaveValidationError(draft: PipelinePayload): string | null {
@@ -332,6 +453,22 @@ function getPipelineSaveValidationError(draft: PipelinePayload): string | null {
 
   if (draft.steps.some((step) => step.prompt.trim().length === 0 || step.name.trim().length === 0)) {
     return "Every step needs a name and prompt.";
+  }
+
+  const schedule = normalizeSchedule(draft.schedule);
+  if (schedule.enabled && schedule.cron.length === 0) {
+    return "Cron expression is required when scheduling is enabled.";
+  }
+
+  if (schedule.enabled) {
+    const cronSegments = schedule.cron.trim().split(/\s+/).filter((segment) => segment.length > 0);
+    if (cronSegments.length !== 5) {
+      return "Cron expression must have 5 fields: minute hour day month weekday.";
+    }
+  }
+
+  if (schedule.enabled && !isValidTimeZoneValue(schedule.timezone)) {
+    return `Timezone "${schedule.timezone}" is not valid.`;
   }
 
   return null;
@@ -414,11 +551,12 @@ interface ToolButtonProps {
   active?: boolean;
   disabled?: boolean;
   label: string;
+  variant?: "default" | "accent";
   onClick: () => void;
   children: ReactNode;
 }
 
-function ToolButton({ active, disabled, label, onClick, children }: ToolButtonProps) {
+function ToolButton({ active, disabled, label, variant = "default", onClick, children }: ToolButtonProps) {
   return (
     <Tooltip content={label} side="right">
       <button
@@ -426,12 +564,16 @@ function ToolButton({ active, disabled, label, onClick, children }: ToolButtonPr
         onClick={onClick}
         disabled={disabled}
         className={cn(
-          "flex h-10 w-10 items-center justify-center rounded-xl transition-colors",
+          "flex h-10 w-10 items-center justify-center rounded-xl transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember-500/40",
           disabled
             ? "text-ink-700 cursor-not-allowed"
-            : active
-              ? "bg-ember-500/15 text-ember-300 cursor-pointer"
-              : "text-ink-500 hover:bg-ink-700/40 hover:text-ink-200 cursor-pointer"
+            : variant === "accent"
+              ? active
+                ? "bg-gradient-to-b from-ember-500/25 to-ember-600/20 text-ember-200 shadow-[inset_0_1px_0_0_rgba(217,119,87,0.15)] cursor-pointer"
+                : "text-ember-400 hover:bg-ember-500/10 hover:text-ember-300 cursor-pointer"
+              : active
+                ? "bg-ember-500/15 text-ember-300 cursor-pointer"
+                : "text-ink-500 hover:bg-ink-700/40 hover:text-ink-200 cursor-pointer"
         )}
         aria-label={label}
       >
@@ -442,6 +584,7 @@ function ToolButton({ active, disabled, label, onClick, children }: ToolButtonPr
 }
 
 type RunInputModalSource = "startup" | "runtime";
+type DesktopNotificationEvent = "inputRequired" | "runFailed" | "runCompleted";
 
 interface RunInputModalContext {
   source: RunInputModalSource;
@@ -456,6 +599,7 @@ interface RunInputModalContext {
 }
 
 export default function App() {
+  const { preference: themePreference, setTheme } = useTheme();
   const [pipelines, setPipelines] = useState<DashboardState["pipelines"]>([]);
   const [providers, setProviders] = useState<DashboardState["providers"] | null>(null);
   const [mcpServers, setMcpServers] = useState<DashboardState["mcpServers"]>([]);
@@ -463,6 +607,8 @@ export default function App() {
   const [runs, setRuns] = useState<DashboardState["runs"]>([]);
   const [smartRunPlan, setSmartRunPlan] = useState<SmartRunPlan | null>(null);
   const [loadingSmartRunPlan, setLoadingSmartRunPlan] = useState(false);
+  const [scheduleRunPlan, setScheduleRunPlan] = useState<SmartRunPlan | null>(null);
+  const [loadingScheduleRunPlan, setLoadingScheduleRunPlan] = useState(false);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [draftWorkflowKey, setDraftWorkflowKey] = useState<string>(() => createDraftWorkflowKey());
   const [draftHistory, dispatchDraftHistory] = useReducer(draftHistoryReducer, {
@@ -475,6 +621,9 @@ export default function App() {
   const [savingPipeline, setSavingPipeline] = useState(false);
   const [startingRunPipelineId, setStartingRunPipelineId] = useState<string | null>(null);
   const [stoppingRunPipelineId, setStoppingRunPipelineId] = useState<string | null>(null);
+  const [pausingRunPipelineId, setPausingRunPipelineId] = useState<string | null>(null);
+  const [resumingRunPipelineId, setResumingRunPipelineId] = useState<string | null>(null);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string>("");
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -482,11 +631,21 @@ export default function App() {
   const smartRunPlanLastSignatureRef = useRef("");
   const smartRunPlanInFlightSignatureRef = useRef("");
   const smartRunPlanCacheRef = useRef<Map<string, SmartRunPlan>>(new Map());
+  const scheduleRunPlanRef = useRef<SmartRunPlan | null>(null);
+  const scheduleRunPlanRequestIdRef = useRef(0);
+  const scheduleRunPlanInFlightSignatureRef = useRef("");
+  const scheduleRunPlanLastSignatureRef = useRef("");
+  const scheduleRunPlanCacheRef = useRef<Map<string, SmartRunPlan>>(new Map());
   const smartRunPlanRef = useRef<SmartRunPlan | null>(null);
   const savingPipelineRef = useRef(false);
   const selectedPipelineIdRef = useRef<string | null>(null);
   const draftWorkflowKeyRef = useRef<string>(draftWorkflowKey);
   const [activePanel, setActivePanel] = useState<WorkspacePanel>(null);
+  const [debugEnabled, setDebugEnabled] = useState(() => loadAppSettings().debugEnabled);
+  const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationSettings>(
+    () => loadAppSettings().desktopNotifications
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [stepPanelOpen, setStepPanelOpen] = useState(false);
   const [canvasDragActive, setCanvasDragActive] = useState(false);
   const [providerOauthStatuses, setProviderOauthStatuses] = useState<ProviderOAuthStatusMap>({
@@ -500,9 +659,28 @@ export default function App() {
   const [runInputModal, setRunInputModal] = useState<RunInputModalContext | null>(null);
   const [processingRunInputModal, setProcessingRunInputModal] = useState(false);
   const runtimeInputPromptSeenRef = useRef<Set<string>>(new Set());
+  const runStatusSnapshotRef = useRef<Map<string, RunStatus>>(new Map());
+  const inputModalNotificationSignatureRef = useRef("");
   const draft = draftHistory.draft;
   const canUndo = draftHistory.undoStack.length > 0;
   const canRedo = draftHistory.redoStack.length > 0;
+
+  const notifyDesktop = useCallback((event: DesktopNotificationEvent, title: string, body?: string) => {
+    if (!desktopNotifications.enabled || !desktopNotifications[event]) {
+      return;
+    }
+
+    if (!window.desktop?.isElectron || typeof window.desktop.notify !== "function") {
+      return;
+    }
+
+    void window.desktop
+      .notify({
+        title,
+        body: body ? truncateNotificationBody(body) : undefined
+      })
+      .catch(() => undefined);
+  }, [desktopNotifications]);
 
   const applyDraftChange = useCallback((next: SetStateAction<PipelinePayload>) => {
     dispatchDraftHistory({ type: "apply", next });
@@ -529,12 +707,49 @@ export default function App() {
   }, [selectedPipelineId]);
 
   useEffect(() => {
+    const previousStatusByRunId = runStatusSnapshotRef.current;
+    const nextStatusByRunId = new Map<string, RunStatus>();
+
+    for (const run of runs) {
+      nextStatusByRunId.set(run.id, run.status);
+
+      const previousStatus = previousStatusByRunId.get(run.id);
+      if (!previousStatus || previousStatus === run.status) {
+        continue;
+      }
+
+      const transitionedFromActive = isActiveRunStatus(previousStatus);
+      if (!transitionedFromActive) {
+        continue;
+      }
+
+      if (run.status === "failed") {
+        const failedStep = [...run.steps].reverse().find((step) => step.status === "failed");
+        const latestLogLine = [...run.logs].reverse().find((entry) => entry.trim().length > 0);
+        notifyDesktop("runFailed", `Flow failed: ${run.pipelineName}`, failedStep?.error ?? latestLogLine ?? "Run failed.");
+        continue;
+      }
+
+      if (run.status === "completed") {
+        const summary = run.task.trim().length > 0 ? `Task: ${run.task}` : "Run completed successfully.";
+        notifyDesktop("runCompleted", `Flow completed: ${run.pipelineName}`, summary);
+      }
+    }
+
+    runStatusSnapshotRef.current = nextStatusByRunId;
+  }, [notifyDesktop, runs]);
+
+  useEffect(() => {
     draftWorkflowKeyRef.current = draftWorkflowKey;
   }, [draftWorkflowKey]);
 
   useEffect(() => {
     smartRunPlanRef.current = smartRunPlan;
   }, [smartRunPlan]);
+
+  useEffect(() => {
+    scheduleRunPlanRef.current = scheduleRunPlan;
+  }, [scheduleRunPlan]);
 
   useEffect(() => {
     return () => {
@@ -552,14 +767,43 @@ export default function App() {
   }, [notice]);
 
   useEffect(() => {
+    saveAppSettings({ debugEnabled, theme: themePreference, desktopNotifications });
+  }, [debugEnabled, desktopNotifications, themePreference]);
+
+  useEffect(() => {
+    if (!runInputModal) {
+      inputModalNotificationSignatureRef.current = "";
+      return;
+    }
+
+    const signature = `${runInputModal.source}:${runInputModal.pipelineId}:${runInputModal.runId ?? "none"}:${runInputModal.requests
+      .map((request) => request.key)
+      .join(",")}:${runInputModal.summary}`;
+    if (inputModalNotificationSignatureRef.current === signature) {
+      return;
+    }
+
+    inputModalNotificationSignatureRef.current = signature;
+    const fallbackSummary =
+      runInputModal.requests.length === 1
+        ? `${runInputModal.requests[0]?.label ?? runInputModal.requests[0]?.key ?? "One input"} is required.`
+        : `${runInputModal.requests.length} inputs are required.`;
+    notifyDesktop(
+      "inputRequired",
+      runInputModal.source === "runtime" ? "Run paused: input required" : "Run startup input required",
+      runInputModal.summary || fallbackSummary
+    );
+  }, [notifyDesktop, runInputModal]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const selectedPipelineLocked = Boolean(
         selectedPipelineId &&
-          (runs.some(
-            (run) => run.pipelineId === selectedPipelineId && (run.status === "queued" || run.status === "running")
-          ) ||
+          (runs.some((run) => run.pipelineId === selectedPipelineId && isActiveRunStatus(run.status)) ||
             startingRunPipelineId === selectedPipelineId ||
-            stoppingRunPipelineId === selectedPipelineId)
+            stoppingRunPipelineId === selectedPipelineId ||
+            pausingRunPipelineId === selectedPipelineId ||
+            resumingRunPipelineId === selectedPipelineId)
       );
       if (selectedPipelineLocked) {
         return;
@@ -611,6 +855,8 @@ export default function App() {
     selectedPipelineId,
     startingRunPipelineId,
     stoppingRunPipelineId,
+    pausingRunPipelineId,
+    resumingRunPipelineId,
     undoDraftChange
   ]);
 
@@ -694,22 +940,47 @@ export default function App() {
       return running;
     }
 
+    const awaitingApproval = runs.find(
+      (run) => run.pipelineId === selectedPipelineId && run.status === "awaiting_approval"
+    );
+    if (awaitingApproval) {
+      return awaitingApproval;
+    }
+
+    const paused = runs.find((run) => run.pipelineId === selectedPipelineId && run.status === "paused");
+    if (paused) {
+      return paused;
+    }
+
     return runs.find((run) => run.pipelineId === selectedPipelineId && run.status === "queued") ?? null;
   }, [runs, selectedPipelineId]);
   const activeRunPipelineIds = useMemo(() => {
-    const ids = new Set(runs.filter((run) => run.status === "queued" || run.status === "running").map((run) => run.pipelineId));
+    const ids = new Set(runs.filter((run) => isActiveRunStatus(run.status)).map((run) => run.pipelineId));
     if (startingRunPipelineId) {
       ids.add(startingRunPipelineId);
     }
     if (stoppingRunPipelineId) {
       ids.add(stoppingRunPipelineId);
     }
+    if (pausingRunPipelineId) {
+      ids.add(pausingRunPipelineId);
+    }
+    if (resumingRunPipelineId) {
+      ids.add(resumingRunPipelineId);
+    }
     return [...ids];
-  }, [runs, startingRunPipelineId, stoppingRunPipelineId]);
+  }, [runs, startingRunPipelineId, stoppingRunPipelineId, pausingRunPipelineId, resumingRunPipelineId]);
   const startingRun = Boolean(selectedPipelineId && startingRunPipelineId === selectedPipelineId);
   const stoppingRun = Boolean(selectedPipelineId && stoppingRunPipelineId === selectedPipelineId);
+  const pausingRun = Boolean(selectedPipelineId && pausingRunPipelineId === selectedPipelineId);
+  const resumingRun = Boolean(selectedPipelineId && resumingRunPipelineId === selectedPipelineId);
   const selectedPipelineRunActive = Boolean(activePipelineRun);
-  const selectedPipelineEditLocked = selectedPipelineRunActive || startingRun || stoppingRun;
+  const canPauseActiveRun = Boolean(
+    activePipelineRun &&
+      (activePipelineRun.status === "queued" || activePipelineRun.status === "running" || activePipelineRun.status === "awaiting_approval")
+  );
+  const canResumeActiveRun = Boolean(activePipelineRun && activePipelineRun.status === "paused");
+  const selectedPipelineEditLocked = selectedPipelineRunActive || startingRun || stoppingRun || pausingRun || resumingRun;
   const applyEditableDraftChange = useCallback(
     (next: SetStateAction<PipelinePayload>) => {
       if (selectedPipelineEditLocked) {
@@ -721,9 +992,10 @@ export default function App() {
     [applyDraftChange, selectedPipelineEditLocked]
   );
   const runtimeDraft = useMemo(() => normalizeRuntime(draft.runtime), [draft.runtime]);
+  const scheduleDraft = useMemo(() => normalizeSchedule(draft.schedule), [draft.schedule]);
   const aiWorkflowKey = selectedPipelineId ?? draftWorkflowKey;
   const runPanelToggleDisabled =
-    !selectedPipelineId || startingRun || stoppingRun || savingPipeline || isDirty || canvasDragActive;
+    !selectedPipelineId || startingRun || stoppingRun || pausingRun || resumingRun || savingPipeline || isDirty || canvasDragActive;
   const runTooltip = selectedPipelineRunActive
     ? "Run in progress."
     : !selectedPipelineId
@@ -771,6 +1043,7 @@ export default function App() {
     setBaselineDraft(nextDraft);
     setIsNewDraft(false);
     setSmartRunPlan(null);
+    setScheduleRunPlan(null);
     setNotice("");
     setActivePanel(null);
   };
@@ -784,15 +1057,18 @@ export default function App() {
     setBaselineDraft(nextDraft);
     setIsNewDraft(true);
     setSmartRunPlan(null);
+    setScheduleRunPlan(null);
     setNotice("Drafting a new flow.");
     setActivePanel("flow");
   };
 
   const handleDeletePipeline = async (pipelineId: string) => {
     const hasActiveRun =
-      runs.some((run) => run.pipelineId === pipelineId && (run.status === "queued" || run.status === "running")) ||
+      runs.some((run) => run.pipelineId === pipelineId && isActiveRunStatus(run.status)) ||
       startingRunPipelineId === pipelineId ||
-      stoppingRunPipelineId === pipelineId;
+      stoppingRunPipelineId === pipelineId ||
+      pausingRunPipelineId === pipelineId ||
+      resumingRunPipelineId === pipelineId;
     if (hasActiveRun) {
       setNotice("Stop the running flow before deleting it.");
       return;
@@ -843,7 +1119,8 @@ export default function App() {
 
       const payload: PipelinePayload = {
         ...draftSnapshot,
-        runtime: normalizeRuntime(draftSnapshot.runtime)
+        runtime: normalizeRuntime(draftSnapshot.runtime),
+        schedule: normalizeSchedule(draftSnapshot.schedule)
       };
       const saveTargetPipelineId = selectedPipelineId;
       const saveTargetDraftKey = draftWorkflowKey;
@@ -1024,16 +1301,83 @@ export default function App() {
   const persistRunDraftInputs = useCallback(
     (task: string, inputs: Record<string, string>) => {
       const currentDraft = loadRunDraft(aiWorkflowKey);
+      const normalizedInputs = normalizeSmartRunInputs(inputs);
+      const mergedInputs = normalizeSmartRunInputs({
+        ...currentDraft.inputs,
+        ...normalizedInputs
+      });
       saveRunDraft(aiWorkflowKey, {
         ...currentDraft,
         task: task.trim().length > 0 ? task.trim() : currentDraft.task,
-        inputs: {
-          ...currentDraft.inputs,
-          ...inputs
+        inputs: mergedInputs
+      });
+
+      if (selectedPipelineEditLocked) {
+        return;
+      }
+
+      applyEditableDraftChange((current) => {
+        const schedule = normalizeSchedule(current.schedule);
+        const nextScheduleInputs = normalizeSmartRunInputs({
+          ...schedule.inputs,
+          ...mergedInputs
+        });
+
+        if (jsonEquals(schedule.inputs, nextScheduleInputs)) {
+          return current;
         }
+
+        return {
+          ...current,
+          schedule: {
+            ...schedule,
+            inputs: nextScheduleInputs
+          }
+        };
       });
     },
-    [aiWorkflowKey]
+    [aiWorkflowKey, applyEditableDraftChange, selectedPipelineEditLocked]
+  );
+
+  const handleRunPanelDraftStateChange = useCallback(
+    (runDraftState: { task: string; mode: "smart" | "quick"; inputs: Record<string, string> }) => {
+      const normalizedInputs = normalizeSmartRunInputs(runDraftState.inputs);
+      const safeInputs = Object.fromEntries(
+        Object.entries(normalizedInputs).filter(([key, value]) => {
+          if (value.trim() === "[secure]") {
+            return false;
+          }
+          return !/(token|secret|password|api[_-]?key|oauth)/i.test(key);
+        })
+      );
+
+      if (selectedPipelineEditLocked) {
+        return;
+      }
+
+      applyEditableDraftChange((current) => {
+        const schedule = normalizeSchedule(current.schedule);
+        const nextInputs = normalizeSmartRunInputs({
+          ...schedule.inputs,
+          ...safeInputs
+        });
+        const nextRunMode = runDraftState.mode;
+
+        if (schedule.runMode === nextRunMode && jsonEquals(schedule.inputs, nextInputs)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          schedule: {
+            ...schedule,
+            runMode: nextRunMode,
+            inputs: nextInputs
+          }
+        };
+      });
+    },
+    [applyEditableDraftChange, selectedPipelineEditLocked]
   );
 
   const runStartupCheckBeforeStart = useCallback(
@@ -1053,6 +1397,12 @@ export default function App() {
       const response = await getRunStartupCheck(pipelineId, task, inputs);
       const check = response.check;
 
+      if (check.status === "blocked") {
+        const firstBlocker = check.blockers[0];
+        setNotice(check.summary || firstBlocker?.message || "Startup check failed.");
+        return "blocked";
+      }
+
       if (check.requests.length > 0) {
         setRunInputModal({
           source,
@@ -1066,12 +1416,6 @@ export default function App() {
           confirmLabel: source === "runtime" ? "Apply & Restart Run" : "Apply & Start Run"
         });
         return "needs_input";
-      }
-
-      if (check.status === "blocked") {
-        const firstBlocker = check.blockers[0];
-        setNotice(check.summary || firstBlocker?.message || "Startup check failed.");
-        return "blocked";
       }
 
       if (check.status === "needs_input") {
@@ -1115,9 +1459,7 @@ export default function App() {
     }
 
     if (!options?.skipActiveRunCheck) {
-      const hasActiveRun = runs.some(
-        (run) => run.pipelineId === targetPipelineId && (run.status === "queued" || run.status === "running")
-      );
+      const hasActiveRun = runs.some((run) => run.pipelineId === targetPipelineId && isActiveRunStatus(run.status));
       if (hasActiveRun) {
         setNotice("This flow is already running.");
         return;
@@ -1189,6 +1531,101 @@ export default function App() {
     }
   };
 
+  const handlePauseRun = async (runId?: string) => {
+    const targetRunId = runId ?? activePipelineRun?.id;
+    if (!targetRunId) {
+      setNotice("No active run to pause.");
+      return;
+    }
+
+    const targetRun = runs.find((entry) => entry.id === targetRunId);
+    const targetPipelineId = targetRun?.pipelineId ?? activePipelineRun?.pipelineId ?? selectedPipelineId ?? null;
+    if (targetPipelineId) {
+      setPausingRunPipelineId(targetPipelineId);
+    }
+
+    try {
+      const response = await pauseRun(targetRunId);
+      setRuns((current) => current.map((run) => (run.id === response.run.id ? response.run : run)));
+      setNotice("Flow run paused.");
+
+      const refreshed = await listRuns(40);
+      setRuns(refreshed.runs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to pause run";
+      setNotice(message);
+    } finally {
+      if (targetPipelineId) {
+        setPausingRunPipelineId((current) => (current === targetPipelineId ? null : current));
+      }
+    }
+  };
+
+  const handleResumeRun = async (runId?: string) => {
+    const targetRunId = runId ?? activePipelineRun?.id;
+    if (!targetRunId) {
+      setNotice("No paused run to resume.");
+      return;
+    }
+
+    const targetRun = runs.find((entry) => entry.id === targetRunId);
+    const targetPipelineId = targetRun?.pipelineId ?? activePipelineRun?.pipelineId ?? selectedPipelineId ?? null;
+    if (targetPipelineId) {
+      setResumingRunPipelineId(targetPipelineId);
+    }
+
+    try {
+      const response = await resumeRun(targetRunId);
+      setRuns((current) => current.map((run) => (run.id === response.run.id ? response.run : run)));
+      setNotice("Flow run resumed.");
+
+      const refreshed = await listRuns(40);
+      setRuns(refreshed.runs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to resume run";
+      setNotice(message);
+    } finally {
+      if (targetPipelineId) {
+        setResumingRunPipelineId((current) => (current === targetPipelineId ? null : current));
+      }
+    }
+  };
+
+  const handleResolveRunApproval = async (
+    runId: string,
+    approvalId: string,
+    decision: "approved" | "rejected",
+    note?: string
+  ) => {
+    setResolvingApprovalId(approvalId);
+    try {
+      const response = await resolveRunApproval(runId, approvalId, decision, note);
+      setRuns((current) => current.map((run) => (run.id === response.run.id ? response.run : run)));
+      setNotice(decision === "approved" ? "Manual approval granted." : "Manual approval rejected.");
+
+      const refreshed = await listRuns(40);
+      setRuns(refreshed.runs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to resolve manual approval";
+      setNotice(message);
+    } finally {
+      setResolvingApprovalId((current) => (current === approvalId ? null : current));
+    }
+  };
+
+  const handleForgetSecureInput = useCallback(
+    async (key: string) => {
+      if (!selectedPipelineId) {
+        setNotice("Open a saved flow first.");
+        return;
+      }
+
+      await deletePipelineSecureInputs(selectedPipelineId, [key]);
+      setNotice(`Forgot saved secret: ${key}`);
+    },
+    [selectedPipelineId]
+  );
+
   const handleConfirmRunInputModal = useCallback(
     async (submittedValues: Record<string, string>) => {
       if (!runInputModal) {
@@ -1226,7 +1663,7 @@ export default function App() {
 
         if (modalContext.source === "runtime" && modalContext.runId) {
           const run = runs.find((entry) => entry.id === modalContext.runId);
-          if (run && (run.status === "queued" || run.status === "running")) {
+          if (run && isActiveRunStatus(run.status)) {
             await handleStopRun(modalContext.runId);
           }
         }
@@ -1245,66 +1682,65 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!selectedPipelineId || runInputModal || processingRunInputModal) {
+    if (runInputModal || processingRunInputModal) {
       return;
     }
 
-    const activeRun = runs.find(
-      (run) => run.pipelineId === selectedPipelineId && (run.status === "running" || run.status === "queued")
-    );
-    if (!activeRun) {
-      return;
-    }
+    const candidateRuns = runs
+      .filter((run) => run.status === "running" || run.status === "queued" || run.status === "paused" || run.status === "awaiting_approval")
+      .slice(0, 20);
 
-    const stepsByLatest = [...activeRun.steps].reverse();
-    for (const step of stepsByLatest) {
-      if (!step.output || step.output.trim().length === 0) {
-        continue;
-      }
-
-      const parsed = parseRunInputRequestsFromText(step.output);
-      if (!parsed || parsed.requests.length === 0) {
-        continue;
-      }
-
-      const signature = `${activeRun.id}:${step.stepId}:${Math.max(1, step.attempts)}:${parsed.requests
-        .map((entry) => entry.key)
-        .join(",")}`;
-      if (runtimeInputPromptSeenRef.current.has(signature)) {
-        continue;
-      }
-
-      runtimeInputPromptSeenRef.current.add(signature);
-      while (runtimeInputPromptSeenRef.current.size > RUNTIME_INPUT_PROMPT_CACHE_LIMIT) {
-        const oldest = runtimeInputPromptSeenRef.current.values().next().value;
-        if (!oldest) {
-          break;
+    for (const activeRun of candidateRuns) {
+      const stepsByLatest = [...activeRun.steps].reverse();
+      for (const step of stepsByLatest) {
+        if (!step.output || step.output.trim().length === 0) {
+          continue;
         }
-        runtimeInputPromptSeenRef.current.delete(oldest);
-      }
 
-      const seededInputs: Record<string, string> = { ...activeRun.inputs };
-      for (const request of parsed.requests) {
-        if (!hasRunInputValue(seededInputs, request.key) && request.defaultValue) {
-          seededInputs[request.key] = request.defaultValue;
+        const parsed = parseRunInputRequestsFromText(step.output);
+        if (!parsed || parsed.requests.length === 0) {
+          continue;
         }
-      }
 
-      setRunInputModal({
-        source: "runtime",
-        pipelineId: activeRun.pipelineId,
-        runId: activeRun.id,
-        task: activeRun.task,
-        requests: parsed.requests,
-        blockers: parsed.blockers,
-        summary: parsed.summary || `${step.stepName} requested additional inputs.`,
-        inputs: normalizeSmartRunInputs(seededInputs),
-        confirmLabel: "Apply & Restart Run"
-      });
-      setNotice(`${step.stepName}: additional input required.`);
-      break;
+        const signature = `${activeRun.id}:${step.stepId}:${Math.max(1, step.attempts)}:${parsed.requests
+          .map((entry) => entry.key)
+          .join(",")}`;
+        if (runtimeInputPromptSeenRef.current.has(signature)) {
+          continue;
+        }
+
+        runtimeInputPromptSeenRef.current.add(signature);
+        while (runtimeInputPromptSeenRef.current.size > RUNTIME_INPUT_PROMPT_CACHE_LIMIT) {
+          const oldest = runtimeInputPromptSeenRef.current.values().next().value;
+          if (!oldest) {
+            break;
+          }
+          runtimeInputPromptSeenRef.current.delete(oldest);
+        }
+
+        const seededInputs: Record<string, string> = { ...activeRun.inputs };
+        for (const request of parsed.requests) {
+          if (!hasRunInputValue(seededInputs, request.key) && request.defaultValue) {
+            seededInputs[request.key] = request.defaultValue;
+          }
+        }
+
+        setRunInputModal({
+          source: "runtime",
+          pipelineId: activeRun.pipelineId,
+          runId: activeRun.id,
+          task: activeRun.task,
+          requests: parsed.requests,
+          blockers: parsed.blockers,
+          summary: parsed.summary || `${step.stepName} requested additional inputs.`,
+          inputs: normalizeSmartRunInputs(seededInputs),
+          confirmLabel: "Apply & Restart Run"
+        });
+        setNotice(`${step.stepName}: additional input required.`);
+        return;
+      }
     }
-  }, [processingRunInputModal, runInputModal, runs, selectedPipelineId]);
+  }, [processingRunInputModal, runInputModal, runs]);
 
   const handleLoadSmartRunPlan = useCallback(
     async (inputs?: Record<string, string>, options?: { force?: boolean }) => {
@@ -1366,14 +1802,102 @@ export default function App() {
     [selectedPipelineId]
   );
 
+  const handleLoadScheduleRunPlan = useCallback(
+    async (
+      runMode: "smart" | "quick",
+      inputs?: Record<string, string>,
+      options?: { force?: boolean }
+    ) => {
+      if (!selectedPipelineId) {
+        setScheduleRunPlan(null);
+        scheduleRunPlanLastSignatureRef.current = "";
+        scheduleRunPlanInFlightSignatureRef.current = "";
+        return;
+      }
+
+      const normalizedInputs = runMode === "smart" ? normalizeSmartRunInputs(inputs) : {};
+      const signature = buildScheduleRunPlanSignature(selectedPipelineId, runMode, normalizedInputs);
+      const force = options?.force === true;
+
+      if (!force) {
+        if (scheduleRunPlanInFlightSignatureRef.current === signature) {
+          return;
+        }
+
+        if (scheduleRunPlanLastSignatureRef.current === signature && scheduleRunPlanRef.current) {
+          return;
+        }
+
+        const cachedPlan = scheduleRunPlanCacheRef.current.get(signature);
+        if (cachedPlan) {
+          setScheduleRunPlan(cachedPlan);
+          scheduleRunPlanLastSignatureRef.current = signature;
+          return;
+        }
+      }
+
+      const requestId = scheduleRunPlanRequestIdRef.current + 1;
+      scheduleRunPlanRequestIdRef.current = requestId;
+      scheduleRunPlanInFlightSignatureRef.current = signature;
+      setLoadingScheduleRunPlan(true);
+
+      try {
+        const response = await getSmartRunPlan(selectedPipelineId, normalizedInputs);
+        if (requestId !== scheduleRunPlanRequestIdRef.current) {
+          return;
+        }
+        setScheduleRunPlan(response.plan);
+        scheduleRunPlanLastSignatureRef.current = signature;
+        setSmartRunPlanCacheEntry(scheduleRunPlanCacheRef.current, signature, response.plan);
+      } catch (error) {
+        if (requestId !== scheduleRunPlanRequestIdRef.current) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Failed to validate cron schedule";
+        setNotice(message);
+      } finally {
+        if (scheduleRunPlanInFlightSignatureRef.current === signature) {
+          scheduleRunPlanInFlightSignatureRef.current = "";
+        }
+        if (requestId === scheduleRunPlanRequestIdRef.current) {
+          setLoadingScheduleRunPlan(false);
+        }
+      }
+    },
+    [selectedPipelineId]
+  );
+
   useEffect(() => {
     if (!selectedPipelineId) {
       setSmartRunPlan(null);
+      setScheduleRunPlan(null);
+      scheduleRunPlanLastSignatureRef.current = "";
+      scheduleRunPlanInFlightSignatureRef.current = "";
       return;
     }
 
     void handleLoadSmartRunPlan();
   }, [selectedPipelineId, handleLoadSmartRunPlan]);
+
+  const scheduleRunPlanSignature = useMemo(() => {
+    if (!selectedPipelineId) {
+      return "";
+    }
+
+    return buildScheduleRunPlanSignature(selectedPipelineId, scheduleDraft.runMode, scheduleDraft.inputs);
+  }, [scheduleDraft.inputs, scheduleDraft.runMode, selectedPipelineId]);
+
+  useEffect(() => {
+    if (!selectedPipelineId || activePanel !== "schedules" || scheduleRunPlanSignature.length === 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void handleLoadScheduleRunPlan(scheduleDraft.runMode, scheduleDraft.inputs);
+    }, SCHEDULE_RUN_PLAN_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [activePanel, handleLoadScheduleRunPlan, scheduleDraft.inputs, scheduleDraft.runMode, scheduleRunPlanSignature, selectedPipelineId]);
 
   useEffect(() => {
     if (activePanel !== "debug" || !selectedPipelineId) {
@@ -1456,6 +1980,20 @@ export default function App() {
     <div className="relative h-screen w-screen overflow-hidden bg-canvas text-ink-50">
       {/* ── Full-height sidebar (spans title bar + content seamlessly) ── */}
       <aside className="glass-panel-dense absolute left-0 top-0 z-30 flex h-full w-[56px] flex-col items-center gap-1 px-1.5 pt-[46px] pb-3">
+          {/* ── AI Builder (primary) ── */}
+          <ToolButton
+            label="AI builder"
+            variant="accent"
+            active={activePanel === "ai"}
+            onClick={() => {
+              togglePanel("ai");
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+          </ToolButton>
+
+          <div className="my-1 h-px w-6 bg-ink-700/50" />
+
           {/* ── Navigation ── */}
           <ToolButton
             label="Flows"
@@ -1478,13 +2016,13 @@ export default function App() {
           </ToolButton>
 
           <ToolButton
-            label="Provider auth"
-            active={activePanel === "providers"}
+            label="Cron schedules"
+            active={activePanel === "schedules"}
             onClick={() => {
-              togglePanel("providers");
+              togglePanel("schedules");
             }}
           >
-            <ShieldCheck className="h-4 w-4" />
+            <Clock3 className="h-4 w-4" />
           </ToolButton>
 
           <ToolButton
@@ -1505,16 +2043,6 @@ export default function App() {
             }}
           >
             <Cable className="h-4 w-4" />
-          </ToolButton>
-
-          <ToolButton
-            label="AI builder"
-            active={activePanel === "ai"}
-            onClick={() => {
-              togglePanel("ai");
-            }}
-          >
-            <Sparkles className="h-4 w-4" />
           </ToolButton>
 
           <div className="my-1 h-px w-6 bg-ink-700/50" />
@@ -1543,14 +2071,24 @@ export default function App() {
           <div className="mt-auto h-px w-6 bg-ink-700/50" />
 
           <ToolButton
-            label="Debug mode"
-            active={activePanel === "debug"}
-            onClick={() => {
-              togglePanel("debug");
-            }}
+            label="Settings"
+            active={settingsOpen}
+            onClick={() => setSettingsOpen(true)}
           >
-            <Bug className="h-4 w-4" />
+            <Settings2 className="h-4 w-4" />
           </ToolButton>
+
+          {debugEnabled && (
+            <ToolButton
+              label="Debug mode"
+              active={activePanel === "debug"}
+              onClick={() => {
+                togglePanel("debug");
+              }}
+            >
+              <Bug className="h-4 w-4" />
+            </ToolButton>
+          )}
       </aside>
 
       {/* ── Draggable title bar (right of sidebar) ── */}
@@ -1589,24 +2127,75 @@ export default function App() {
         )}
       >
         {selectedPipelineRunActive ? (
-          <div className="flex items-center gap-2">
-            <Tooltip content={runTooltip} side="bottom">
-              <Button variant="secondary" size="sm" onClick={() => togglePanel("run")}>
-                <Play className="h-3.5 w-3.5" />
-                Run
+          <div className="flex items-center gap-1.5">
+            {/* Status indicator — opens / closes the run panel */}
+            <Tooltip content="View run details" side="bottom">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => togglePanel("run")}
+              >
+                {activePipelineRun?.status === "paused" ? (
+                  <Pause className="h-3 w-3 text-amber-400" />
+                ) : (
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+                {activePipelineRun?.status === "paused" ? "Paused" : "Running"}
               </Button>
             </Tooltip>
-            <Tooltip content={stoppingRun ? "Stopping..." : "Stop current run"} side="bottom">
+
+            {/* Pause / Resume */}
+            {canPauseActiveRun ? (
+              <Tooltip content={pausingRun ? "Pausing..." : "Pause run"} side="bottom">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={stoppingRun || pausingRun || resumingRun}
+                  className="shrink-0 disabled:opacity-100 disabled:pointer-events-auto disabled:cursor-not-allowed"
+                  onClick={() => { void handlePauseRun(activePipelineRun?.id); }}
+                >
+                  {pausingRun ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Pause className="h-3.5 w-3.5" />
+                  )}
+                  {pausingRun ? "Pausing" : "Pause"}
+                </Button>
+              </Tooltip>
+            ) : canResumeActiveRun ? (
+              <Tooltip content={resumingRun ? "Resuming..." : "Resume run"} side="bottom">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={stoppingRun || pausingRun || resumingRun}
+                  className="shrink-0 disabled:opacity-100 disabled:pointer-events-auto disabled:cursor-not-allowed"
+                  onClick={() => { void handleResumeRun(activePipelineRun?.id); }}
+                >
+                  {resumingRun ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
+                  {resumingRun ? "Resuming" : "Resume"}
+                </Button>
+              </Tooltip>
+            ) : null}
+
+            {/* Stop */}
+            <Tooltip content={stoppingRun ? "Stopping..." : "Stop run"} side="bottom">
               <Button
                 variant="danger"
                 size="sm"
-                disabled={stoppingRun}
-                className="shrink-0 whitespace-nowrap"
-                onClick={() => {
-                  void handleStopRun(activePipelineRun?.id);
-                }}
+                disabled={stoppingRun || pausingRun || resumingRun}
+                className="shrink-0 whitespace-nowrap disabled:opacity-100 disabled:pointer-events-auto disabled:cursor-not-allowed"
+                onClick={() => { void handleStopRun(activePipelineRun?.id); }}
               >
-                {stoppingRun ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                {stoppingRun ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Square className="h-3.5 w-3.5" />
+                )}
                 {stoppingRun ? "Stopping" : "Stop"}
               </Button>
             </Tooltip>
@@ -1631,40 +2220,37 @@ export default function App() {
       </div>
 
       <SlidePanel open={activePanel !== null && activePanel !== "run"} side="left" className="top-[38px] h-[calc(100%-38px)] w-full max-w-[390px]">
-          <div className="flex h-12 items-center justify-between border-b border-ink-800 px-3">
+          <button
+            type="button"
+            onClick={() => setActivePanel(null)}
+            className="flex h-12 w-full items-center justify-between border-b border-ink-800 px-3 text-left cursor-pointer"
+          >
             <p className="text-xs font-semibold uppercase tracking-wide text-ink-300">
               {activePanel === "pipelines"
                 ? "Flows"
                 : activePanel === "flow"
                   ? "Flow Settings"
+                  : activePanel === "schedules"
+                    ? "Cron Schedules"
                   : activePanel === "contracts"
                     ? "Contracts & Gates"
-                  : activePanel === "providers"
-                    ? "Provider Auth"
                   : activePanel === "mcp"
-                      ? "MCP & Storage"
-                      : activePanel === "ai"
-                        ? "AI Builder"
-                        : activePanel === "debug"
-                          ? "Debug"
+                    ? "MCP & Storage"
+                    : activePanel === "ai"
+                      ? "AI Builder"
+                      : activePanel === "debug"
+                        ? "Debug"
                         : "Panel"}
             </p>
-
-            <button
-              type="button"
-              onClick={() => setActivePanel(null)}
-              className="rounded-md p-1.5 text-ink-500 hover:bg-ink-800 hover:text-ink-100"
-              aria-label="Close panel"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+            <X className="h-4 w-4 text-ink-500" />
+          </button>
 
           {activePanel === "ai" ? (
             <div className="h-[calc(100%-48px)]">
               <AiBuilderPanel
                 workflowKey={aiWorkflowKey}
                 currentDraft={draft}
+                mcpServers={mcpServers}
                 readOnly={selectedPipelineEditLocked}
                 onApplyDraft={(generatedDraft) => {
                   applyEditableDraftChange(generatedDraft);
@@ -1807,24 +2393,25 @@ export default function App() {
                 </div>
               ) : null}
 
+              {activePanel === "schedules" ? (
+                <CronSchedulesPanel
+                  draft={draft}
+                  pipelineId={selectedPipelineId ?? undefined}
+                  smartRunPlan={scheduleRunPlan}
+                  loadingSmartRunPlan={loadingScheduleRunPlan}
+                  readOnly={selectedPipelineEditLocked}
+                  onRefreshSmartRunPlan={async (runMode, inputs, options) => {
+                    await handleLoadScheduleRunPlan(runMode, inputs, options);
+                  }}
+                  onChange={applyEditableDraftChange}
+                />
+              ) : null}
+
               {activePanel === "contracts" ? (
                 <QualityGatesPanel
                   draft={draft}
                   readOnly={selectedPipelineEditLocked}
                   onChange={applyEditableDraftChange}
-                />
-              ) : null}
-
-              {activePanel === "providers" ? (
-                <ProviderSettings
-                  providers={providers}
-                  oauthStatuses={providerOauthStatuses}
-                  oauthMessages={providerOauthMessages}
-                  onOAuthStatusChange={handleProviderOauthStatusChange}
-                  onOAuthMessageChange={handleProviderOauthMessageChange}
-                  onSaveProvider={async (providerId, patch) => {
-                    await handleSaveProvider(providerId, patch);
-                  }}
                 />
               ) : null}
 
@@ -1873,6 +2460,9 @@ export default function App() {
             runs={runs}
             smartRunPlan={smartRunPlan}
             loadingSmartRunPlan={loadingSmartRunPlan}
+            syncedMode={scheduleDraft.runMode}
+            syncedInputs={scheduleDraft.inputs}
+            onDraftStateChange={handleRunPanelDraftStateChange}
             onRefreshSmartRunPlan={async (inputs, options) => {
               await handleLoadSmartRunPlan(inputs, options);
             }}
@@ -1882,9 +2472,24 @@ export default function App() {
             onStop={async (runId) => {
               await handleStopRun(runId);
             }}
+            onPause={async (runId) => {
+              await handlePauseRun(runId);
+            }}
+            onResume={async (runId) => {
+              await handleResumeRun(runId);
+            }}
+            onResolveApproval={async (runId, approvalId, decision, note) => {
+              await handleResolveRunApproval(runId, approvalId, decision, note);
+            }}
+            onForgetSecretInput={async (key) => {
+              await handleForgetSecureInput(key);
+            }}
             activeRun={activePipelineRun}
             startingRun={startingRun}
             stoppingRun={stoppingRun}
+            pausingRun={pausingRun}
+            resumingRun={resumingRun}
+            resolvingApprovalId={resolvingApprovalId}
           />
           </div>
       </SlidePanel>
@@ -1906,6 +2511,39 @@ export default function App() {
         onConfirm={handleConfirmRunInputModal}
       />
 
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        debugEnabled={debugEnabled}
+        onDebugEnabledChange={(enabled) => {
+          setDebugEnabled(enabled);
+          if (!enabled && activePanel === "debug") {
+            setActivePanel(null);
+          }
+        }}
+        desktopNotifications={desktopNotifications}
+        onDesktopNotificationsChange={setDesktopNotifications}
+        desktopNotificationsAvailable={window.desktop?.isElectron === true}
+        themePreference={themePreference}
+        onThemeChange={setTheme}
+        providerSettingsSlot={
+          providers ? (
+            <ProviderSettings
+              providers={providers}
+              oauthStatuses={providerOauthStatuses}
+              oauthMessages={providerOauthMessages}
+              onOAuthStatusChange={handleProviderOauthStatusChange}
+              onOAuthMessageChange={handleProviderOauthMessageChange}
+              onSaveProvider={async (providerId, patch) => {
+                await handleSaveProvider(providerId, patch);
+              }}
+            />
+          ) : (
+            <p className="text-xs text-ink-500">Loading provider configuration...</p>
+          )
+        }
+      />
+
       <AnimatePresence>
         {notice ? (
           <motion.div
@@ -1914,7 +2552,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 4, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="glass-panel-dense pointer-events-none absolute bottom-5 right-4 z-50 rounded-xl border border-ink-700/40 px-4 py-2 text-xs text-ink-200 shadow-lg"
+            className="glass-panel-dense pointer-events-none fixed bottom-5 right-4 z-[100] rounded-xl border border-ink-700/40 px-4 py-2 text-xs text-ink-200 shadow-lg"
           >
             {notice}
           </motion.div>

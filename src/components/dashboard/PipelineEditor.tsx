@@ -570,7 +570,7 @@ export function PipelineEditor({
 
   return (
     <div className={cn("relative", className)}>
-      <div className="absolute inset-0 overflow-hidden bg-[rgb(19,19,20)]">
+      <div className="absolute inset-0 overflow-hidden bg-ink-950">
         <PipelineCanvas
           nodes={canvasNodes}
           links={canvasLinks}

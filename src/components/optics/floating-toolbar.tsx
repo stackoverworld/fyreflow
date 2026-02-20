@@ -54,7 +54,7 @@ export function FloatingToolbarButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "relative flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors duration-150 cursor-pointer",
+        "relative flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors duration-150 cursor-pointer focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ink-500/60",
         danger
           ? "text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
           : active

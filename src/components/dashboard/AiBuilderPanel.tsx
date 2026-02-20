@@ -5,7 +5,7 @@ import { MODEL_CATALOG, getDefaultModelForProvider } from "@/lib/modelCatalog";
 import { generateFlowDraft } from "@/lib/api";
 import { loadAiChatHistory, saveAiChatHistory } from "@/lib/aiChatStorage";
 import { autoLayoutPipelineDraftSmart } from "@/lib/flowLayout";
-import type { AiChatMessage, PipelinePayload, ProviderId, ReasoningEffort } from "@/lib/types";
+import type { AiChatMessage, McpServerConfig, PipelinePayload, ProviderId, ReasoningEffort } from "@/lib/types";
 import { Button } from "@/components/optics/button";
 import { Textarea } from "@/components/optics/textarea";
 import { Select } from "@/components/optics/select";
@@ -15,7 +15,7 @@ import { OpenAIIcon, AnthropicIcon } from "@/components/optics/icons";
 import { Badge } from "@/components/optics/badge";
 import { cn } from "@/lib/cn";
 
-const AI_SETTINGS_KEY = "agents-dashboard:ai-builder-settings";
+const AI_SETTINGS_KEY = "fyreflow:ai-builder-settings";
 
 interface AiBuilderSettings {
   providerId: ProviderId;
@@ -62,6 +62,7 @@ function saveAiBuilderSettings(settings: AiBuilderSettings): void {
 interface AiBuilderPanelProps {
   workflowKey: string;
   currentDraft: PipelinePayload;
+  mcpServers: McpServerConfig[];
   onApplyDraft: (draft: PipelinePayload) => void;
   onNotice: (message: string) => void;
   readOnly?: boolean;
@@ -351,7 +352,14 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNotice, readOnly = false }: AiBuilderPanelProps) {
+export function AiBuilderPanel({
+  workflowKey,
+  currentDraft,
+  mcpServers,
+  onApplyDraft,
+  onNotice,
+  readOnly = false
+}: AiBuilderPanelProps) {
   const [savedSettings] = useState(loadAiBuilderSettings);
   const [providerId, setProviderId] = useState<ProviderId>(savedSettings.providerId);
   const [model, setModel] = useState(savedSettings.model);
@@ -483,6 +491,13 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
         use1MContext,
         history,
         currentDraft,
+        availableMcpServers: mcpServers.map((server) => ({
+          id: server.id,
+          name: server.name,
+          enabled: server.enabled,
+          transport: server.transport,
+          summary: `${server.transport}${server.enabled ? "" : " (disabled)"}`
+        }))
       });
       const shouldApplyDraft = result.action === "update_current_flow" || result.action === "replace_flow";
       const nextDraft =

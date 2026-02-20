@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Copy,
   Loader2,
@@ -14,6 +15,9 @@ import type { Pipeline, PipelineRun, RunStatus, SmartRunCheckStatus, SmartRunPla
 import { Badge } from "@/components/optics/badge";
 import { Button } from "@/components/optics/button";
 import { Tooltip } from "@/components/optics/tooltip";
+import { cn } from "@/lib/cn";
+
+type DebugSection = "trace" | "step" | "logs" | "preflight" | "timeline";
 
 interface DebugPanelProps {
   selectedPipeline: Pipeline | undefined;
@@ -106,6 +110,19 @@ export function DebugPanel({
 }: DebugPanelProps) {
   const [logsCopyState, setLogsCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [stepCopyState, setStepCopyState] = useState<{ key: string; status: "copied" | "error" } | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<DebugSection>>(new Set());
+
+  const toggle = (section: DebugSection) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) {
+        next.delete(section);
+      } else {
+        next.add(section);
+      }
+      return next;
+    });
+  };
 
   const scopedRuns = useMemo(() => {
     if (!selectedPipeline) {
@@ -118,6 +135,16 @@ export function DebugPanel({
     const running = scopedRuns.find((run) => run.status === "running");
     if (running) {
       return running;
+    }
+
+    const awaiting = scopedRuns.find((run) => run.status === "awaiting_approval");
+    if (awaiting) {
+      return awaiting;
+    }
+
+    const paused = scopedRuns.find((run) => run.status === "paused");
+    if (paused) {
+      return paused;
     }
 
     const queued = scopedRuns.find((run) => run.status === "queued");
@@ -193,153 +220,176 @@ export function DebugPanel({
 
   return (
     <div>
-      <section className="space-y-4">
-        <div className="flex items-center gap-2 text-ink-400">
-          <Radar className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Runtime trace</span>
-        </div>
+      <section>
+        <button type="button" onClick={() => toggle("trace")} className="flex w-full items-center justify-between text-left cursor-pointer mb-4">
+          <div className="flex items-center gap-2 text-ink-400">
+            <Radar className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Runtime trace</span>
+          </div>
+          <ChevronDown className={cn("h-3.5 w-3.5 text-ink-600 transition-transform", !collapsed.has("trace") && "rotate-180")} />
+        </button>
 
-        {!selectedPipeline ? (
-          <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
-            Select a flow to inspect runtime activity.
-          </div>
-        ) : !activeRun ? (
-          <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
-            {startingRun
-              ? "Run request sent. Waiting for first runtime heartbeat..."
-              : "No runs yet for this flow. Start a run to see live debug trace."}
-          </div>
-        ) : (
-          <div className="space-y-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-ink-200">Active run</p>
-              <Badge variant={runBadgeVariant(activeRun.status)}>{activeRun.status}</Badge>
+        {!collapsed.has("trace") && (
+          !selectedPipeline ? (
+            <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
+              Select a flow to inspect runtime activity.
             </div>
-            <p className="text-[11px] text-ink-500">Run ID: <span className="font-mono text-ink-400">{activeRun.id}</span></p>
-            <p className="text-[11px] text-ink-500">Started: {formatTime(activeRun.startedAt)}</p>
-            <p className="text-[11px] text-ink-500">Finished: {formatTime(activeRun.finishedAt)}</p>
-            <p className="text-[11px] text-ink-500">
-              Steps: {activeRun.steps.length} · Blocking gate fails: {blockedGateCount}
-            </p>
-            <p className="line-clamp-2 text-[11px] text-ink-500">Task: {activeRun.task || "(auto task)"}</p>
+          ) : !activeRun ? (
+            <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
+              {startingRun
+                ? "Run request sent. Waiting for first runtime heartbeat..."
+                : "No runs yet for this flow. Start a run to see live debug trace."}
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink-200">Active run</p>
+                <Badge variant={runBadgeVariant(activeRun.status)}>{activeRun.status}</Badge>
+              </div>
+              <p className="text-[11px] text-ink-500">Run ID: <span className="font-mono text-ink-400">{activeRun.id}</span></p>
+              <p className="text-[11px] text-ink-500">Started: {formatTime(activeRun.startedAt)}</p>
+              <p className="text-[11px] text-ink-500">Finished: {formatTime(activeRun.finishedAt)}</p>
+              <p className="text-[11px] text-ink-500">
+                Steps: {activeRun.steps.length} · Blocking gate fails: {blockedGateCount}
+              </p>
+              <p className="line-clamp-2 text-[11px] text-ink-500">Task: {activeRun.task || "(auto task)"}</p>
+            </div>
+          )
+        )}
+      </section>
+
+      <div className="my-5 h-px bg-ink-800/60" />
+
+      <section>
+        <button type="button" onClick={() => toggle("step")} className="flex w-full items-center justify-between text-left cursor-pointer mb-4">
+          <div className="flex items-center gap-2 text-ink-400">
+            <Clock3 className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Current step</span>
+          </div>
+          <ChevronDown className={cn("h-3.5 w-3.5 text-ink-600 transition-transform", !collapsed.has("step") && "rotate-180")} />
+        </button>
+
+        {!collapsed.has("step") && (
+          !activeStep ? (
+            <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
+              No step is running right now.
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink-200">{activeStep.stepName}</p>
+                <Badge variant={stepBadgeVariant(activeStep.status)}>{activeStep.status}</Badge>
+              </div>
+              <p className="text-[11px] text-ink-500">Attempts: {Math.max(1, activeStep.attempts)} · Outcome: {activeStep.workflowOutcome}</p>
+              <p className="text-[11px] text-ink-500">Started: {formatTime(activeStep.startedAt)}</p>
+              {activeStep.error ? <p className="text-[11px] text-red-400">{activeStep.error}</p> : null}
+              {activeStep.output ? (
+                <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-md bg-ink-950/80 p-2 font-mono text-[11px] text-ink-400">
+                  {activeStep.output}
+                </pre>
+              ) : null}
+            </div>
+          )
+        )}
+      </section>
+
+      <div className="my-5 h-px bg-ink-800/60" />
+
+      <section>
+        <button type="button" onClick={() => toggle("logs")} className="flex w-full items-center justify-between text-left cursor-pointer mb-4">
+          <div className="flex items-center gap-2 text-ink-400">
+            <TerminalSquare className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Live logs</span>
+          </div>
+          <ChevronDown className={cn("h-3.5 w-3.5 text-ink-600 transition-transform", !collapsed.has("logs") && "rotate-180")} />
+        </button>
+
+        {!collapsed.has("logs") && (
+          <div className="relative">
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-ink-800/50 bg-ink-950/70 p-3 pr-12 font-mono text-[11px] text-ink-400">
+              {recentLogs.length > 0 ? recentLogs.join("\n") : "No runtime logs yet."}
+            </pre>
+
+            <Tooltip
+              side="left"
+              content={
+                logsCopyState === "copied"
+                  ? "Copied"
+                  : logsCopyState === "error"
+                    ? "Copy failed"
+                    : "Copy logs"
+              }
+            >
+              <span className="absolute top-2 right-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 w-7 rounded-md border-ink-700/80 bg-ink-900/85 px-0"
+                  aria-label="Copy live logs"
+                  disabled={logsText.length === 0}
+                  onClick={() => void handleCopyLogs()}
+                >
+                  {logsCopyState === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
+              </span>
+            </Tooltip>
           </div>
         )}
       </section>
 
       <div className="my-5 h-px bg-ink-800/60" />
 
-      <section className="space-y-4">
-        <div className="flex items-center gap-2 text-ink-400">
-          <Clock3 className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Current step</span>
-        </div>
-
-        {!activeStep ? (
-          <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
-            No step is running right now.
-          </div>
-        ) : (
-          <div className="space-y-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-ink-200">{activeStep.stepName}</p>
-              <Badge variant={stepBadgeVariant(activeStep.status)}>{activeStep.status}</Badge>
-            </div>
-            <p className="text-[11px] text-ink-500">Attempts: {Math.max(1, activeStep.attempts)} · Outcome: {activeStep.workflowOutcome}</p>
-            <p className="text-[11px] text-ink-500">Started: {formatTime(activeStep.startedAt)}</p>
-            {activeStep.error ? <p className="text-[11px] text-red-400">{activeStep.error}</p> : null}
-            {activeStep.output ? (
-              <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-md bg-ink-950/80 p-2 font-mono text-[11px] text-ink-400">
-                {activeStep.output}
-              </pre>
+      <section>
+        <button type="button" onClick={() => toggle("preflight")} className="flex w-full items-center justify-between text-left cursor-pointer mb-4">
+          <div className="flex items-center gap-2 text-ink-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Preflight snapshot</span>
+            {smartRunPlan && !loadingSmartRunPlan ? (
+              <span className="text-[11px] text-ink-600">{passCount}/{smartRunPlan.checks.length} passed</span>
             ) : null}
           </div>
-        )}
-      </section>
+          <ChevronDown className={cn("h-3.5 w-3.5 text-ink-600 transition-transform", !collapsed.has("preflight") && "rotate-180")} />
+        </button>
 
-      <div className="my-5 h-px bg-ink-800/60" />
-
-      <section className="space-y-4">
-        <div className="flex items-center gap-2 text-ink-400">
-          <TerminalSquare className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Live logs</span>
-        </div>
-
-        <div className="relative">
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-ink-800/50 bg-ink-950/70 p-3 pr-12 font-mono text-[11px] text-ink-400">
-            {recentLogs.length > 0 ? recentLogs.join("\n") : "No runtime logs yet."}
-          </pre>
-
-          <Tooltip
-            side="left"
-            content={
-              logsCopyState === "copied"
-                ? "Copied"
-                : logsCopyState === "error"
-                  ? "Copy failed"
-                  : "Copy logs"
-            }
-          >
-            <span className="absolute top-2 right-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                className="h-7 w-7 rounded-md border-ink-700/80 bg-ink-900/85 px-0"
-                aria-label="Copy live logs"
-                disabled={logsText.length === 0}
-                onClick={() => void handleCopyLogs()}
-              >
-                {logsCopyState === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              </Button>
-            </span>
-          </Tooltip>
-        </div>
-      </section>
-
-      <div className="my-5 h-px bg-ink-800/60" />
-
-      <section className="space-y-4">
-        <div className="flex items-center gap-2 text-ink-400">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Preflight snapshot</span>
-          {smartRunPlan && !loadingSmartRunPlan ? (
-            <span className="text-[11px] text-ink-600">{passCount}/{smartRunPlan.checks.length} passed</span>
-          ) : null}
-        </div>
-
-        {loadingSmartRunPlan ? (
-          <div className="flex items-center gap-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Refreshing preflight snapshot...
-          </div>
-        ) : smartRunPlan ? (
-          <div className="space-y-2">
-            {smartRunPlan.checks.map((check) => (
-              <div key={check.id} className="flex items-start gap-2.5 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
-                {preflightIcon(check.status)}
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-ink-200">{check.title}</p>
-                  <p className="mt-0.5 text-[11px] text-ink-500">{check.message}</p>
-                  {check.details ? <p className="mt-0.5 text-[11px] text-ink-600">{check.details}</p> : null}
+        {!collapsed.has("preflight") && (
+          loadingSmartRunPlan ? (
+            <div className="flex items-center gap-2 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Refreshing preflight snapshot...
+            </div>
+          ) : smartRunPlan ? (
+            <div className="space-y-2">
+              {smartRunPlan.checks.map((check) => (
+                <div key={check.id} className="flex items-start gap-2.5 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
+                  {preflightIcon(check.status)}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-ink-200">{check.title}</p>
+                    <p className="mt-0.5 text-[11px] text-ink-500">{check.message}</p>
+                    {check.details ? <p className="mt-0.5 text-[11px] text-ink-600">{check.details}</p> : null}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
-            No preflight plan available yet.
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
+              No preflight plan available yet.
+            </div>
+          )
         )}
       </section>
 
       <div className="my-5 h-px bg-ink-800/60" />
 
-      <section className="space-y-3">
-        <div className="flex items-center gap-2 text-ink-400">
-          <TerminalSquare className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Step timeline</span>
-        </div>
+      <section>
+        <button type="button" onClick={() => toggle("timeline")} className="flex w-full items-center justify-between text-left cursor-pointer mb-3">
+          <div className="flex items-center gap-2 text-ink-400">
+            <TerminalSquare className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Step timeline</span>
+          </div>
+          <ChevronDown className={cn("h-3.5 w-3.5 text-ink-600 transition-transform", !collapsed.has("timeline") && "rotate-180")} />
+        </button>
 
-        {!activeRun ? (
+        {!collapsed.has("timeline") && (!activeRun ? (
           <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-3 text-xs text-ink-500">
             Step timeline appears after first run.
           </div>
@@ -399,7 +449,7 @@ export function DebugPanel({
               );
             })}
           </div>
-        )}
+        ))}
       </section>
     </div>
   );

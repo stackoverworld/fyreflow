@@ -1917,6 +1917,41 @@ export function PipelineCanvas({
   const animatedNodeSet = useMemo(() => new Set(animatedNodeIds), [animatedNodeIds]);
   const animatedLinkSet = useMemo(() => new Set(animatedLinkIds), [animatedLinkIds]);
   const animationEnabled = animatedNodeSet.size > 0 || animatedLinkSet.size > 0;
+
+  // Track nodes that need the glow base class (including during fade-out)
+  const glowReadyTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [glowReadySet, setGlowReadySet] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setGlowReadySet((prev) => {
+      const next = new Set(prev);
+      // Add newly animated nodes
+      for (const id of animatedNodeIds) {
+        next.add(id);
+        // Clear any pending removal timer
+        const timer = glowReadyTimersRef.current.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          glowReadyTimersRef.current.delete(id);
+        }
+      }
+      // Schedule removal for nodes no longer animated (after fade-out)
+      for (const id of prev) {
+        if (!animatedNodeSet.has(id) && !glowReadyTimersRef.current.has(id)) {
+          const timer = setTimeout(() => {
+            glowReadyTimersRef.current.delete(id);
+            setGlowReadySet((current) => {
+              const updated = new Set(current);
+              updated.delete(id);
+              return updated;
+            });
+          }, 700); // slightly longer than the 0.6s CSS transition
+          glowReadyTimersRef.current.set(id, timer);
+        }
+      }
+      return next;
+    });
+  }, [animatedNodeIds, animatedNodeSet]);
   const selectedNodeSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const canDeleteSelection = selectedNodeIds.length > 0 || Boolean(selectedLinkId);
 
@@ -2644,7 +2679,7 @@ export function PipelineCanvas({
         style={{
           height: canvasHeight,
           backgroundImage:
-            "radial-gradient(circle, rgba(154, 154, 163, 0.09) 1px, transparent 1px)",
+            `radial-gradient(circle, rgb(var(--dot-grid-color) / var(--dot-grid-alpha)) 1px, transparent 1px)`,
           backgroundSize: `${18 * viewport.scale}px ${18 * viewport.scale}px`,
           backgroundPosition: `${viewport.x}px ${viewport.y}px`
         }}
@@ -3055,7 +3090,8 @@ export function PipelineCanvas({
               key={node.id}
               className={cn(
                 "group pointer-events-auto absolute select-none rounded-2xl border bg-ink-900/95 p-3 shadow-lg transition-colors",
-                animatedNodeSet.has(node.id) && "node-border-glow",
+                glowReadySet.has(node.id) && "node-border-glow",
+                animatedNodeSet.has(node.id) && "glow-active",
                 readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing",
                 selectedNodeSet.has(node.id)
                   ? selectedNodeId === node.id
@@ -3275,13 +3311,17 @@ export function PipelineCanvas({
             <Hand className="h-3.5 w-3.5" /> Pan
           </FloatingToolbarButton>
 
-          {onAutoLayout ? (
-            <FloatingToolbarButton onClick={triggerAutoLayout} shortcut="L">
-              Auto layout
-            </FloatingToolbarButton>
-          ) : null}
-
           <FloatingToolbarDivider />
+
+          {onAutoLayout ? (
+            <>
+              <FloatingToolbarButton onClick={triggerAutoLayout} shortcut="L">
+                Auto layout
+              </FloatingToolbarButton>
+
+              <FloatingToolbarDivider />
+            </>
+          ) : null}
 
           <FloatingToolbarText muted className="px-2 tabular-nums">
             {Math.round(viewport.scale * 100)}%

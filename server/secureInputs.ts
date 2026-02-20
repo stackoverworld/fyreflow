@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import { normalizeRunInputKey, normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import { decryptSecret, encryptSecret } from "./secretsCrypto.js";
 
 interface SecureInputsFile {
   version: 1;
@@ -38,7 +39,13 @@ function normalizeStoredValues(raw: unknown): RunInputs {
   if (!isRecord(raw)) {
     return {};
   }
-  return normalizeRunInputs(raw);
+
+  const normalized = normalizeRunInputs(raw);
+  const decrypted: RunInputs = {};
+  for (const [key, value] of Object.entries(normalized)) {
+    decrypted[key] = decryptSecret(value);
+  }
+  return decrypted;
 }
 
 async function readSecureInputsFile(pipelineId: string): Promise<RunInputs> {
@@ -63,11 +70,16 @@ async function writeSecureInputsFile(pipelineId: string, values: RunInputs): Pro
   const filePath = securePipelineFilePath(pipelineId);
   await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
 
+  const encryptedValues: RunInputs = {};
+  for (const [key, value] of Object.entries(values)) {
+    encryptedValues[key] = encryptSecret(value);
+  }
+
   const payload: SecureInputsFile = {
     version: 1,
     pipelineId,
     updatedAt: nowIso(),
-    values
+    values: encryptedValues
   };
 
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), {
@@ -124,7 +136,7 @@ export function maskSensitiveInputs(rawInputs: RunInputs, alwaysMaskKeys?: Itera
   const forced = new Set<string>();
   if (alwaysMaskKeys) {
     for (const key of alwaysMaskKeys) {
-      const normalizedKey = key.trim().toLowerCase();
+      const normalizedKey = normalizeRunInputKey(key);
       if (normalizedKey.length > 0) {
         forced.add(normalizedKey);
       }
@@ -163,6 +175,75 @@ export async function upsertPipelineSecureInputs(pipelineId: string, rawInputs: 
 
   await writeSecureInputsFile(pipelineId, next);
   return next;
+}
+
+export interface DeletePipelineSecureInputsResult {
+  deletedKeys: string[];
+  remainingKeys: string[];
+}
+
+export async function deletePipelineSecureInputs(
+  pipelineId: string,
+  keys?: string[]
+): Promise<DeletePipelineSecureInputsResult> {
+  const current = await readSecureInputsFile(pipelineId);
+  const existingKeys = Object.keys(current);
+
+  if (existingKeys.length === 0) {
+    return {
+      deletedKeys: [],
+      remainingKeys: []
+    };
+  }
+
+  const normalizedKeys = Array.isArray(keys)
+    ? keys
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .map((entry) => normalizeRunInputKey(entry))
+    : [];
+
+  const deleteAll = normalizedKeys.length === 0;
+  const keysToDelete = deleteAll ? new Set(existingKeys) : new Set(normalizedKeys);
+  const deletedKeys = existingKeys.filter((key) => keysToDelete.has(key));
+
+  if (deletedKeys.length === 0) {
+    return {
+      deletedKeys: [],
+      remainingKeys: existingKeys.sort()
+    };
+  }
+
+  const next: RunInputs = {};
+  for (const [key, value] of Object.entries(current)) {
+    if (keysToDelete.has(key)) {
+      continue;
+    }
+    next[key] = value;
+  }
+
+  const filePath = securePipelineFilePath(pipelineId);
+  const dirPath = securePipelineDir(pipelineId);
+
+  if (Object.keys(next).length === 0) {
+    try {
+      await fs.rm(filePath, { force: true });
+    } catch {
+      // Ignore missing file errors.
+    }
+
+    try {
+      await fs.rm(dirPath, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors.
+    }
+  } else {
+    await writeSecureInputsFile(pipelineId, next);
+  }
+
+  return {
+    deletedKeys: deletedKeys.sort(),
+    remainingKeys: Object.keys(next).sort()
+  };
 }
 
 export function mergeRunInputsWithSecure(rawInputs: RunInputs | undefined, secureInputs: RunInputs): RunInputs {

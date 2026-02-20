@@ -32,6 +32,11 @@ const kindOptions: Array<{ value: QualityGateKind; label: string; hint: string }
     value: "artifact_exists",
     label: "artifact exists",
     hint: "File must exist at the configured path."
+  },
+  {
+    value: "manual_approval",
+    label: "manual approval",
+    hint: "Pause run and require explicit human approval before routing continues."
   }
 ];
 
@@ -281,7 +286,9 @@ export function QualityGatesPanel({ draft, onChange, readOnly = false }: Quality
                 ) : null}
 
                 <label className="space-y-1">
-                  <span className="text-[11px] uppercase tracking-wide text-ink-500">Failure message</span>
+                  <span className="text-[11px] uppercase tracking-wide text-ink-500">
+                    {gate.kind === "manual_approval" ? "Approval message" : "Failure message"}
+                  </span>
                   <Textarea
                     className="min-h-[64px]"
                     value={gate.message ?? ""}
@@ -291,7 +298,11 @@ export function QualityGatesPanel({ draft, onChange, readOnly = false }: Quality
                       next[index] = { ...gate, message: event.target.value };
                       setGates(next);
                     }}
-                    placeholder="Describe why this gate is important."
+                    placeholder={
+                      gate.kind === "manual_approval"
+                        ? "Describe what reviewer should verify before approving."
+                        : "Describe why this gate is important."
+                    }
                   />
                 </label>
 

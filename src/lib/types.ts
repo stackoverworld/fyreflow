@@ -7,13 +7,20 @@ export type LinkCondition = "always" | "on_pass" | "on_fail";
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpHealth = "unknown" | "healthy" | "degraded" | "down";
 export type StepOutputFormat = "markdown" | "json";
-export type QualityGateKind = "regex_must_match" | "regex_must_not_match" | "json_field_exists" | "artifact_exists";
+export type QualityGateKind =
+  | "regex_must_match"
+  | "regex_must_not_match"
+  | "json_field_exists"
+  | "artifact_exists"
+  | "manual_approval";
 export type QualityGateTarget = "any_step" | string;
 export type QualityGateResultStatus = "pass" | "fail";
 export type SmartRunFieldType = "text" | "multiline" | "secret" | "path" | "url";
 export type SmartRunCheckStatus = "pass" | "warn" | "fail";
 export type RunInputRequestType = SmartRunFieldType | "select";
 export type RunStartupStatus = "pass" | "needs_input" | "blocked";
+export type RunApprovalStatus = "pending" | "approved" | "rejected";
+export type ScheduleRunMode = "smart" | "quick";
 
 export interface ProviderConfig {
   id: ProviderId;
@@ -29,6 +36,7 @@ export interface ProviderConfig {
 export interface ProviderOAuthStatus {
   providerId: ProviderId;
   loginSource: string;
+  cliCommand?: string;
   cliAvailable: boolean;
   loggedIn: boolean;
   tokenAvailable: boolean;
@@ -36,6 +44,14 @@ export interface ProviderOAuthStatus {
   canUseCli: boolean;
   message: string;
   checkedAt: string;
+  runtimeProbe?: ProviderRuntimeProbe;
+}
+
+export interface ProviderRuntimeProbe {
+  status: "pass" | "fail";
+  message: string;
+  checkedAt: string;
+  latencyMs?: number;
 }
 
 export interface PipelineStep {
@@ -77,6 +93,15 @@ export interface PipelineRuntimeConfig {
   stageTimeoutMs: number;
 }
 
+export interface PipelineScheduleConfig {
+  enabled: boolean;
+  cron: string;
+  timezone: string;
+  task: string;
+  runMode: ScheduleRunMode;
+  inputs: Record<string, string>;
+}
+
 export interface PipelineQualityGate {
   id: string;
   name: string;
@@ -99,11 +124,33 @@ export interface Pipeline {
   steps: PipelineStep[];
   links: PipelineLink[];
   runtime: PipelineRuntimeConfig;
+  schedule: PipelineScheduleConfig;
   qualityGates: PipelineQualityGate[];
 }
 
 export type StepRunStatus = "pending" | "running" | "completed" | "failed";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "awaiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface RunApproval {
+  id: string;
+  gateId: string;
+  gateName: string;
+  stepId: string;
+  stepName: string;
+  status: RunApprovalStatus;
+  blocking: boolean;
+  message: string;
+  requestedAt: string;
+  resolvedAt?: string;
+  note?: string;
+}
 
 export interface StepQualityGateResult {
   gateId: string;
@@ -142,6 +189,7 @@ export interface PipelineRun {
   finishedAt?: string;
   logs: string[];
   steps: StepRun[];
+  approvals: RunApproval[];
 }
 
 export interface SmartRunField {
@@ -246,6 +294,13 @@ export interface FlowBuilderRequest {
     content: string;
   }>;
   currentDraft?: PipelinePayload;
+  availableMcpServers?: Array<{
+    id: string;
+    name: string;
+    enabled?: boolean;
+    transport?: McpTransport;
+    summary?: string;
+  }>;
 }
 
 export type FlowBuilderAction = "answer" | "update_current_flow" | "replace_flow";
@@ -317,6 +372,7 @@ export interface PipelinePayload {
     message?: string;
   }>;
   runtime?: Partial<PipelineRuntimeConfig>;
+  schedule?: Partial<PipelineScheduleConfig>;
 }
 
 export interface McpServerPayload {

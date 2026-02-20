@@ -1,11 +1,13 @@
-import { HardDrive, Plus, Save, Server, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, HardDrive, Plus, Save, Server, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { McpServerConfig, McpServerPayload, StorageConfig } from "@/lib/types";
+import { MCP_SERVER_TEMPLATES, type McpServerTemplate } from "@/lib/mcpTemplates";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
 import { Switch } from "@/components/optics/switch";
 import { Textarea } from "@/components/optics/textarea";
+import { cn } from "@/lib/cn";
 
 interface McpSettingsProps {
   mcpServers: McpServerConfig[];
@@ -59,6 +61,101 @@ function createNewServerDraft(): McpDraft {
   };
 }
 
+function toDraftFromTemplate(template: McpServerTemplate): McpDraft {
+  return {
+    ...createNewServerDraft(),
+    ...template.draft,
+    enabled: true,
+    health: "unknown"
+  };
+}
+
+/* ── Transport-aware field set ── */
+function ServerFields({
+  draft,
+  onChange
+}: {
+  draft: McpDraft;
+  onChange: (next: McpDraft) => void;
+}) {
+  const isNetwork = draft.transport === "http" || draft.transport === "sse";
+  const isStdio = draft.transport === "stdio";
+
+  return (
+    <div className="space-y-3">
+      {isNetwork && (
+        <label className="block space-y-1.5">
+          <span className="text-xs text-ink-400">URL</span>
+          <Input
+            value={draft.url}
+            onChange={(e) => onChange({ ...draft, url: e.target.value })}
+            placeholder={draft.transport === "sse" ? "http://localhost:3010/sse" : "http://localhost:3010"}
+          />
+        </label>
+      )}
+
+      {isStdio && (
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Command</span>
+            <Input
+              value={draft.command}
+              onChange={(e) => onChange({ ...draft, command: e.target.value })}
+              placeholder="npx"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Args</span>
+            <Input
+              value={draft.args}
+              onChange={(e) => onChange({ ...draft, args: e.target.value })}
+              placeholder="-y package-name --stdio"
+            />
+          </label>
+        </div>
+      )}
+
+      {isNetwork && (
+        <label className="block space-y-1.5">
+          <span className="text-xs text-ink-400">Headers</span>
+          <Textarea
+            className="min-h-[48px]"
+            value={draft.headers}
+            onChange={(e) => onChange({ ...draft, headers: e.target.value })}
+            placeholder="Authorization: Bearer ..."
+          />
+        </label>
+      )}
+
+      <label className="block space-y-1.5">
+        <span className="text-xs text-ink-400">Environment variables</span>
+        <Textarea
+          className="min-h-[48px]"
+          value={draft.env}
+          onChange={(e) => onChange({ ...draft, env: e.target.value })}
+          placeholder={isStdio ? "FIGMA_TOKEN=..." : "API_KEY=..."}
+        />
+      </label>
+
+      <label className="block space-y-1.5">
+        <span className="text-xs text-ink-400">Tool allowlist</span>
+        <Input
+          value={draft.toolAllowlist}
+          onChange={(e) => onChange({ ...draft, toolAllowlist: e.target.value })}
+          placeholder="Leave empty to allow all tools"
+        />
+      </label>
+    </div>
+  );
+}
+
+const HEALTH_DOT: Record<McpDraft["health"], string> = {
+  unknown: "bg-ink-600",
+  healthy: "bg-emerald-500",
+  degraded: "bg-amber-400",
+  down: "bg-red-500"
+};
+
 export function McpSettings({
   mcpServers,
   storage,
@@ -74,6 +171,8 @@ export function McpSettings({
   const [savingStorage, setSavingStorage] = useState(false);
   const [creatingServer, setCreatingServer] = useState(false);
   const [expandedServerId, setExpandedServerId] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
     setStorageDraft(storage);
@@ -94,6 +193,10 @@ export function McpSettings({
   const storageChanged = useMemo(
     () => JSON.stringify(storageDraft) !== JSON.stringify(storage),
     [storage, storageDraft]
+  );
+  const selectedTemplate = useMemo(
+    () => MCP_SERVER_TEMPLATES.find((template) => template.id === selectedTemplateId) ?? null,
+    [selectedTemplateId]
   );
 
   return (
@@ -116,8 +219,8 @@ export function McpSettings({
           />
         </div>
 
-        <label className="space-y-1">
-          <span className="text-xs text-ink-500">Root path</span>
+        <label className="block space-y-1.5">
+          <span className="text-xs text-ink-400">Root path</span>
           <Input
             value={storageDraft.rootPath}
             onChange={(event) => setStorageDraft((current) => ({ ...current, rootPath: event.target.value }))}
@@ -126,24 +229,24 @@ export function McpSettings({
         </label>
 
         <div className="grid grid-cols-3 gap-2">
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Shared folder</span>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Shared folder</span>
             <Input
               value={storageDraft.sharedFolder}
               onChange={(event) => setStorageDraft((current) => ({ ...current, sharedFolder: event.target.value }))}
             />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Isolated folder</span>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Isolated folder</span>
             <Input
               value={storageDraft.isolatedFolder}
               onChange={(event) => setStorageDraft((current) => ({ ...current, isolatedFolder: event.target.value }))}
             />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Runs folder</span>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Runs folder</span>
             <Input
               value={storageDraft.runsFolder}
               onChange={(event) => setStorageDraft((current) => ({ ...current, runsFolder: event.target.value }))}
@@ -172,18 +275,26 @@ export function McpSettings({
 
       {/* ── MCP Servers section ── */}
       <section className="space-y-4">
-        <div className="flex items-center gap-2 text-ink-400">
-          <Server className="h-3.5 w-3.5" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider">MCP Servers</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-ink-400">
+            <Server className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">MCP Servers</span>
+          </div>
+          <span className="text-[11px] text-ink-600">{mcpServers.length} configured</span>
         </div>
 
-        {mcpServers.length === 0 && (
-          <p className="text-sm text-ink-500">No MCP servers configured.</p>
+        {/* ── Existing servers ── */}
+        {mcpServers.length === 0 && !showAddForm && (
+          <div className="rounded-xl border border-dashed border-ink-800 px-4 py-5 text-center">
+            <p className="text-xs text-ink-500">No MCP servers configured yet.</p>
+            <p className="mt-1 text-[11px] text-ink-600">Add a server to give agents access to external tools.</p>
+          </div>
         )}
 
         {mcpServers.map((server) => {
           const draft = serverDrafts[server.id] ?? toServerDraft(server);
           const isExpanded = expandedServerId === server.id;
+          const changed = JSON.stringify(draft) !== JSON.stringify(toServerDraft(server));
 
           return (
             <div key={server.id} className="rounded-xl border border-ink-800 bg-ink-950/55">
@@ -192,62 +303,47 @@ export function McpSettings({
                 onClick={() => setExpandedServerId(isExpanded ? null : server.id)}
                 className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left cursor-pointer"
               >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink-100">{server.name}</p>
-                  <p className="text-[11px] text-ink-500">
-                    {draft.transport} · {draft.enabled ? "enabled" : "disabled"}
-                  </p>
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", HEALTH_DOT[draft.health])} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-ink-100">{server.name}</p>
+                    <p className="text-[11px] text-ink-500">{draft.transport}{draft.url ? ` · ${draft.url}` : draft.command ? ` · ${draft.command}` : ""}</p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                  <Switch
-                    checked={draft.enabled}
-                    onChange={(checked) =>
-                      setServerDrafts((current) => ({
-                        ...current,
-                        [server.id]: { ...draft, enabled: checked }
-                      }))
-                    }
-                  />
-
-                  <button
-                    type="button"
-                    className="rounded-md p-1.5 text-ink-600 transition-colors hover:bg-red-500/10 hover:text-red-400 cursor-pointer"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      setBusyServerId(server.id);
-                      try {
-                        await onDeleteServer(server.id);
-                      } finally {
-                        setBusyServerId(null);
+                <div className="flex items-center gap-2">
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Switch
+                      checked={draft.enabled}
+                      onChange={(checked) =>
+                        setServerDrafts((current) => ({
+                          ...current,
+                          [server.id]: { ...draft, enabled: checked }
+                        }))
                       }
-                    }}
-                    aria-label="Delete MCP server"
-                    disabled={busyServerId === server.id}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                    />
+                  </div>
+                  <ChevronDown className={cn("h-3.5 w-3.5 text-ink-500 transition-transform", isExpanded && "rotate-180")} />
                 </div>
               </button>
 
               {isExpanded && (
-                <div className="space-y-3 border-t border-ink-800 px-3 py-3">
-                  <label className="space-y-1">
-                    <span className="text-xs text-ink-500">Name</span>
-                    <Input
-                      value={draft.name}
-                      onChange={(event) =>
-                        setServerDrafts((current) => ({
-                          ...current,
-                          [server.id]: { ...draft, name: event.target.value }
-                        }))
-                      }
-                    />
-                  </label>
-
+                <div className="space-y-4 border-t border-ink-800 px-3 py-3">
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1">
-                      <span className="text-xs text-ink-500">Transport</span>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs text-ink-400">Name</span>
+                      <Input
+                        value={draft.name}
+                        onChange={(event) =>
+                          setServerDrafts((current) => ({
+                            ...current,
+                            [server.id]: { ...draft, name: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs text-ink-400">Transport</span>
                       <Select
                         value={draft.transport}
                         onValueChange={(value) =>
@@ -257,136 +353,57 @@ export function McpSettings({
                           }))
                         }
                         options={[
-                          { value: "http", label: "http" },
-                          { value: "sse", label: "sse" },
-                          { value: "stdio", label: "stdio" }
-                        ]}
-                      />
-                    </label>
-
-                    <label className="space-y-1">
-                      <span className="text-xs text-ink-500">Health</span>
-                      <Select
-                        value={draft.health}
-                        onValueChange={(value) =>
-                          setServerDrafts((current) => ({
-                            ...current,
-                            [server.id]: { ...draft, health: value as McpDraft["health"] }
-                          }))
-                        }
-                        options={[
-                          { value: "unknown", label: "unknown" },
-                          { value: "healthy", label: "healthy" },
-                          { value: "degraded", label: "degraded" },
-                          { value: "down", label: "down" }
+                          { value: "http", label: "HTTP" },
+                          { value: "sse", label: "SSE" },
+                          { value: "stdio", label: "Stdio" }
                         ]}
                       />
                     </label>
                   </div>
 
-                  <label className="space-y-1">
-                    <span className="text-xs text-ink-500">URL (for http/sse)</span>
-                    <Input
-                      value={draft.url}
-                      onChange={(event) =>
-                        setServerDrafts((current) => ({
-                          ...current,
-                          [server.id]: { ...draft, url: event.target.value }
-                        }))
-                      }
-                      placeholder="http://localhost:3010"
-                    />
-                  </label>
+                  <ServerFields
+                    draft={draft}
+                    onChange={(next) =>
+                      setServerDrafts((current) => ({
+                        ...current,
+                        [server.id]: next
+                      }))
+                    }
+                  />
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1">
-                      <span className="text-xs text-ink-500">Command (stdio)</span>
-                      <Input
-                        value={draft.command}
-                        onChange={(event) =>
-                          setServerDrafts((current) => ({
-                            ...current,
-                            [server.id]: { ...draft, command: event.target.value }
-                          }))
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busyServerId === server.id || draft.name.trim().length < 2 || !changed}
+                      onClick={async () => {
+                        setBusyServerId(server.id);
+                        try {
+                          await onUpdateServer(server.id, draft);
+                        } finally {
+                          setBusyServerId(null);
                         }
-                        placeholder="npx -y ..."
-                      />
-                    </label>
-
-                    <label className="space-y-1">
-                      <span className="text-xs text-ink-500">Args</span>
-                      <Input
-                        value={draft.args}
-                        onChange={(event) =>
-                          setServerDrafts((current) => ({
-                            ...current,
-                            [server.id]: { ...draft, args: event.target.value }
-                          }))
+                      }}
+                    >
+                      <Save className="h-3.5 w-3.5" /> {busyServerId === server.id ? "Saving..." : "Save"}
+                    </Button>
+                    <button
+                      type="button"
+                      className="rounded-md p-1.5 text-ink-600 transition-colors hover:bg-red-500/10 hover:text-red-400 cursor-pointer"
+                      onClick={async () => {
+                        setBusyServerId(server.id);
+                        try {
+                          await onDeleteServer(server.id);
+                        } finally {
+                          setBusyServerId(null);
                         }
-                        placeholder="--port 3010"
-                      />
-                    </label>
+                      }}
+                      aria-label="Delete MCP server"
+                      disabled={busyServerId === server.id}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-
-                  <label className="space-y-1">
-                    <span className="text-xs text-ink-500">Env bindings</span>
-                    <Textarea
-                      className="min-h-[56px]"
-                      value={draft.env}
-                      onChange={(event) =>
-                        setServerDrafts((current) => ({
-                          ...current,
-                          [server.id]: { ...draft, env: event.target.value }
-                        }))
-                      }
-                      placeholder={"FIGMA_TOKEN=${secrets.figma_token}"}
-                    />
-                  </label>
-
-                  <label className="space-y-1">
-                    <span className="text-xs text-ink-500">Headers</span>
-                    <Textarea
-                      className="min-h-[56px]"
-                      value={draft.headers}
-                      onChange={(event) =>
-                        setServerDrafts((current) => ({
-                          ...current,
-                          [server.id]: { ...draft, headers: event.target.value }
-                        }))
-                      }
-                      placeholder={"Authorization: Bearer ${secrets.token}"}
-                    />
-                  </label>
-
-                  <label className="space-y-1">
-                    <span className="text-xs text-ink-500">Tool allowlist (comma separated)</span>
-                    <Input
-                      value={draft.toolAllowlist}
-                      onChange={(event) =>
-                        setServerDrafts((current) => ({
-                          ...current,
-                          [server.id]: { ...draft, toolAllowlist: event.target.value }
-                        }))
-                      }
-                      placeholder="get_file,get_nodes,get_styles"
-                    />
-                  </label>
-
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busyServerId === server.id || draft.name.trim().length < 2}
-                    onClick={async () => {
-                      setBusyServerId(server.id);
-                      try {
-                        await onUpdateServer(server.id, draft);
-                      } finally {
-                        setBusyServerId(null);
-                      }
-                    }}
-                  >
-                    <Save className="h-3.5 w-3.5" /> {busyServerId === server.id ? "Saving..." : "Save"}
-                  </Button>
                 </div>
               )}
             </div>
@@ -394,78 +411,140 @@ export function McpSettings({
         })}
 
         {/* ── Add new server ── */}
-        <div className="space-y-3 pt-1">
-          <p className="text-xs font-medium text-ink-300">Add new server</p>
-
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Name</span>
-            <Input
-              value={newServer.name}
-              onChange={(event) => setNewServer((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Figma MCP"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Transport</span>
-            <Select
-              value={newServer.transport}
-              onValueChange={(value) =>
-                setNewServer((current) => ({ ...current, transport: value as McpDraft["transport"] }))
-              }
-              options={[
-                { value: "http", label: "http" },
-                { value: "sse", label: "sse" },
-                { value: "stdio", label: "stdio" }
-              ]}
-            />
-          </label>
-
-          <div className="flex items-center justify-between gap-3 px-1 py-1">
-            <div>
-              <p className="text-[13px] text-ink-100">Enabled</p>
-              <p className="text-[11px] text-ink-500">Server will be available to agents.</p>
-            </div>
-            <Switch
-              checked={newServer.enabled}
-              onChange={(checked) => setNewServer((current) => ({ ...current, enabled: checked }))}
-            />
-          </div>
-
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">URL</span>
-            <Input
-              value={newServer.url}
-              onChange={(event) => setNewServer((current) => ({ ...current, url: event.target.value }))}
-              placeholder="http://localhost:3010"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-xs text-ink-500">Command</span>
-            <Input
-              value={newServer.command}
-              onChange={(event) => setNewServer((current) => ({ ...current, command: event.target.value }))}
-              placeholder="npx -y @modelcontextprotocol/server-figma"
-            />
-          </label>
-
+        {!showAddForm ? (
           <Button
             size="sm"
-            disabled={creatingServer || newServer.name.trim().length < 2}
-            onClick={async () => {
-              setCreatingServer(true);
-              try {
-                await onCreateServer(newServer);
-                setNewServer(createNewServerDraft());
-              } finally {
-                setCreatingServer(false);
-              }
-            }}
+            variant="ghost"
+            onClick={() => setShowAddForm(true)}
           >
-            <Plus className="h-3.5 w-3.5" /> {creatingServer ? "Creating..." : "Create server"}
+            <Plus className="h-3.5 w-3.5" /> Add MCP server
           </Button>
-        </div>
+        ) : (
+          <div className="rounded-xl border border-ink-800 bg-ink-950/55">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAddForm(false);
+                setNewServer(createNewServerDraft());
+                setSelectedTemplateId(null);
+              }}
+              className="flex w-full items-center justify-between px-3 py-2.5 text-left cursor-pointer"
+            >
+              <p className="text-sm font-medium text-ink-100">New server</p>
+              <ChevronDown className="h-3.5 w-3.5 text-ink-500 rotate-180" />
+            </button>
+
+            <div className="space-y-4 border-t border-ink-800 px-3 py-3">
+              {/* Templates */}
+              <div className="space-y-2">
+                <p className="text-[11px] text-ink-500">Quick start from template</p>
+                <div className="flex gap-2">
+                  {MCP_SERVER_TEMPLATES.map((template) => {
+                    const active = selectedTemplateId === template.id;
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTemplateId(active ? null : template.id);
+                          setNewServer(active ? createNewServerDraft() : toDraftFromTemplate(template));
+                        }}
+                        className={cn(
+                          "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors cursor-pointer",
+                          active
+                            ? "border-ember-500/50 bg-ember-500/8 text-ink-100"
+                            : "border-ink-800 bg-ink-900/25 text-ink-300 hover:border-ink-700 hover:text-ink-100"
+                        )}
+                      >
+                        <img
+                          src={template.iconSrc}
+                          alt={template.label}
+                          className={cn("h-3.5 w-3.5 object-contain", template.iconClassName)}
+                        />
+                        {template.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedTemplate ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-ink-500">{selectedTemplate.setupHint}</p>
+                    <a
+                      href={selectedTemplate.docsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-500 transition-colors hover:text-ink-200"
+                    >
+                      Docs <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="h-px bg-ink-800/60" />
+
+              {/* Form fields */}
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-ink-400">Name</span>
+                  <Input
+                    value={newServer.name}
+                    onChange={(e) => setNewServer((c) => ({ ...c, name: e.target.value }))}
+                    placeholder="My MCP Server"
+                  />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-ink-400">Transport</span>
+                  <Select
+                    value={newServer.transport}
+                    onValueChange={(value) =>
+                      setNewServer((c) => ({ ...c, transport: value as McpDraft["transport"] }))
+                    }
+                    options={[
+                      { value: "http", label: "HTTP" },
+                      { value: "sse", label: "SSE" },
+                      { value: "stdio", label: "Stdio" }
+                    ]}
+                  />
+                </label>
+              </div>
+
+              <ServerFields
+                draft={newServer}
+                onChange={setNewServer}
+              />
+
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-ink-800/20 px-2.5 py-2">
+                <div>
+                  <p className="text-xs text-ink-100">Enabled</p>
+                  <p className="text-[11px] text-ink-500">Available to agents on create.</p>
+                </div>
+                <Switch
+                  checked={newServer.enabled}
+                  onChange={(checked) => setNewServer((c) => ({ ...c, enabled: checked }))}
+                />
+              </div>
+
+              <Button
+                size="sm"
+                disabled={creatingServer || newServer.name.trim().length < 2}
+                onClick={async () => {
+                  setCreatingServer(true);
+                  try {
+                    await onCreateServer(newServer);
+                    setNewServer(createNewServerDraft());
+                    setSelectedTemplateId(null);
+                    setShowAddForm(false);
+                  } finally {
+                    setCreatingServer(false);
+                  }
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" /> {creatingServer ? "Creating..." : "Create server"}
+              </Button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

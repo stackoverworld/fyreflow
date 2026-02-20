@@ -3,6 +3,7 @@ import path from "node:path";
 import type { LocalStore } from "./storage.js";
 import type {
   PipelineQualityGate,
+  RunApproval,
   McpServerConfig,
   Pipeline,
   PipelineLink,
@@ -18,7 +19,13 @@ import type {
 import { orderPipelineSteps } from "./pipelineGraph.js";
 import { executeProviderStep } from "./providers.js";
 import { executeMcpToolCall, type McpToolCall, type McpToolResult } from "./mcp.js";
-import { formatRunInputsSummary, normalizeRunInputs, replaceInputTokens, type RunInputs } from "./runInputs.js";
+import {
+  formatRunInputsSummary,
+  getRunInputValue,
+  normalizeRunInputs,
+  replaceInputTokens,
+  type RunInputs
+} from "./runInputs.js";
 import { createAbortError, isAbortError, mergeAbortSignals } from "./abort.js";
 
 interface RunPipelineInput {
@@ -50,7 +57,8 @@ interface StepStoragePaths {
 
 const DEFAULT_MAX_LOOPS = 2;
 const DEFAULT_MAX_STEP_EXECUTIONS = 18;
-const DEFAULT_STAGE_TIMEOUT_MS = 240000;
+const DEFAULT_STAGE_TIMEOUT_MS = 420000;
+const RUN_CONTROL_POLL_MS = 350;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -126,6 +134,46 @@ function inferWorkflowOutcome(output: string): WorkflowOutcome {
   }
 
   return "neutral";
+}
+
+function normalizeStepStatus(value: unknown): "pass" | "fail" | "neutral" | "needs_input" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "pass" || normalized === "fail" || normalized === "neutral" || normalized === "needs_input") {
+    return normalized;
+  }
+
+  return null;
+}
+
+function extractInputRequestSignal(
+  output: string,
+  parsedJson?: Record<string, unknown> | null
+): { needsInput: boolean; summary?: string } {
+  const explicit = output.match(/WORKFLOW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|NEEDS[_\s-]?INPUT)/i)?.[1];
+  const explicitStatus = normalizeStepStatus(explicit);
+  if (explicitStatus === "needs_input") {
+    return { needsInput: true };
+  }
+
+  const payload = parsedJson ?? parseJsonOutput(output);
+  if (payload) {
+    const status = normalizeStepStatus(payload.status);
+    const summary = typeof payload.summary === "string" && payload.summary.trim().length > 0 ? payload.summary.trim() : undefined;
+    const requestsRaw = payload.input_requests ?? payload.requests;
+    const hasInputRequests =
+      Array.isArray(requestsRaw) &&
+      requestsRaw.some((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry));
+
+    if (status === "needs_input" || hasInputRequests) {
+      return { needsInput: true, summary };
+    }
+  }
+
+  return { needsInput: false };
 }
 
 function routeMatchesCondition(condition: PipelineLink["condition"], outcome: WorkflowOutcome): boolean {
@@ -428,6 +476,47 @@ function applyStoragePathTokens(template: string, storagePaths: StepStoragePaths
   return path.resolve(storagePaths.runStoragePath, rendered);
 }
 
+function resolveArtifactCandidatePaths(
+  template: string,
+  storagePaths: StepStoragePaths,
+  runInputs: RunInputs
+): { disabledStorage: boolean; paths: string[] } {
+  const resolved = applyStoragePathTokens(template, storagePaths, runInputs);
+  const disabledStorage =
+    resolved.includes("DISABLED") ||
+    (template.includes("{{shared_storage_path}}") && storagePaths.sharedStoragePath === "DISABLED") ||
+    (template.includes("{{isolated_storage_path}}") && storagePaths.isolatedStoragePath === "DISABLED");
+
+  const paths: string[] = [];
+  const addPath = (value: string) => {
+    const normalized = value.trim();
+    if (normalized.length === 0 || paths.includes(normalized)) {
+      return;
+    }
+    paths.push(normalized);
+  };
+
+  if (!disabledStorage) {
+    addPath(resolved);
+  }
+
+  const usesStoragePlaceholder =
+    template.includes("{{shared_storage_path}}") ||
+    template.includes("{{isolated_storage_path}}") ||
+    template.includes("{{run_storage_path}}");
+  const templateTrimmed = template.trim();
+  const isRelativeTemplate = templateTrimmed.length > 0 && !path.isAbsolute(templateTrimmed);
+
+  if (!usesStoragePlaceholder && isRelativeTemplate) {
+    const outputDir = getRunInputValue(runInputs, "output_dir");
+    if (outputDir && outputDir.trim().length > 0) {
+      addPath(path.resolve(outputDir, templateTrimmed));
+    }
+  }
+
+  return { disabledStorage, paths };
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -515,17 +604,18 @@ async function evaluateStepContracts(
   }
 
   for (const fileTemplate of step.requiredOutputFiles) {
-    const resolvedPath = applyStoragePathTokens(fileTemplate, storagePaths, runInputs);
-    const disabledStorage =
-      resolvedPath.includes("DISABLED") ||
-      (fileTemplate.includes("{{shared_storage_path}}") && storagePaths.sharedStoragePath === "DISABLED") ||
-      (fileTemplate.includes("{{isolated_storage_path}}") && storagePaths.isolatedStoragePath === "DISABLED");
-
-    let exists = false;
-    if (!disabledStorage && resolvedPath.length > 0) {
-      exists = await pathExists(resolvedPath);
+    const artifactCandidates = resolveArtifactCandidatePaths(fileTemplate, storagePaths, runInputs);
+    let foundPath: string | null = null;
+    if (!artifactCandidates.disabledStorage) {
+      for (const candidatePath of artifactCandidates.paths) {
+        if (await pathExists(candidatePath)) {
+          foundPath = candidatePath;
+          break;
+        }
+      }
     }
 
+    const exists = foundPath !== null;
     gateResults.push({
       gateId: `contract-artifact-${step.id}-${fileTemplate}`,
       gateName: `Required artifact: ${fileTemplate}`,
@@ -533,11 +623,13 @@ async function evaluateStepContracts(
       status: exists ? "pass" : "fail",
       blocking: true,
       message: exists
-        ? `Required artifact exists: ${resolvedPath}`
+        ? `Required artifact exists: ${foundPath}`
         : `Required artifact is missing: ${fileTemplate}`,
-      details: disabledStorage
+      details: artifactCandidates.disabledStorage
         ? "Storage mode required by this artifact path is disabled for this step."
-        : resolvedPath
+        : artifactCandidates.paths.length > 0
+          ? `Checked paths: ${artifactCandidates.paths.join(" | ")}`
+          : "No candidate artifact paths were resolved."
     });
   }
 
@@ -564,6 +656,10 @@ async function evaluatePipelineQualityGates(
   const results: StepQualityGateResult[] = [];
 
   for (const gate of relevant) {
+    if (gate.kind === "manual_approval") {
+      continue;
+    }
+
     if (gate.kind === "regex_must_match" || gate.kind === "regex_must_not_match") {
       if (!gate.pattern || gate.pattern.trim().length === 0) {
         results.push({
@@ -649,6 +745,19 @@ async function evaluatePipelineQualityGates(
       continue;
     }
 
+    if (gate.kind !== "artifact_exists") {
+      results.push({
+        gateId: gate.id,
+        gateName: gate.name,
+        kind: gate.kind,
+        status: "fail",
+        blocking: gate.blocking,
+        message: gate.message || `Unsupported quality gate kind "${gate.kind}".`,
+        details: "Gate kind is not supported by the evaluator."
+      });
+      continue;
+    }
+
     if (!gate.artifactPath || gate.artifactPath.trim().length === 0) {
       results.push({
         gateId: gate.id,
@@ -662,12 +771,17 @@ async function evaluatePipelineQualityGates(
       continue;
     }
 
-    const resolvedPath = applyStoragePathTokens(gate.artifactPath, storagePaths, runInputs);
-    const disabledStorage =
-      resolvedPath.includes("DISABLED") ||
-      (gate.artifactPath.includes("{{shared_storage_path}}") && storagePaths.sharedStoragePath === "DISABLED") ||
-      (gate.artifactPath.includes("{{isolated_storage_path}}") && storagePaths.isolatedStoragePath === "DISABLED");
-    const exists = !disabledStorage && (await pathExists(resolvedPath));
+    const artifactCandidates = resolveArtifactCandidatePaths(gate.artifactPath, storagePaths, runInputs);
+    let foundPath: string | null = null;
+    if (!artifactCandidates.disabledStorage) {
+      for (const candidatePath of artifactCandidates.paths) {
+        if (await pathExists(candidatePath)) {
+          foundPath = candidatePath;
+          break;
+        }
+      }
+    }
+    const exists = foundPath !== null;
 
     results.push({
       gateId: gate.id,
@@ -677,12 +791,258 @@ async function evaluatePipelineQualityGates(
       blocking: gate.blocking,
       message:
         gate.message ||
-        (exists ? `Artifact found: ${resolvedPath}` : `Artifact missing: ${gate.artifactPath}`),
-      details: disabledStorage ? "Storage policy disabled the required artifact path." : resolvedPath
+        (exists ? `Artifact found: ${foundPath}` : `Artifact missing: ${gate.artifactPath}`),
+      details: artifactCandidates.disabledStorage
+        ? "Storage policy disabled the required artifact path."
+        : artifactCandidates.paths.length > 0
+          ? `Checked paths: ${artifactCandidates.paths.join(" | ")}`
+          : "No candidate artifact paths were resolved."
     });
   }
 
   return results;
+}
+
+function isRunTerminalStatus(status: PipelineRun["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function hasPendingApprovals(run: PipelineRun): boolean {
+  return run.approvals.some((approval) => approval.status === "pending");
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForRunToBeRunnable(
+  store: LocalStore,
+  runId: string,
+  abortSignal?: AbortSignal
+): Promise<boolean> {
+  while (true) {
+    if (abortSignal?.aborted) {
+      return false;
+    }
+
+    const run = store.getRun(runId);
+    if (!run) {
+      return false;
+    }
+
+    if (isRunTerminalStatus(run.status)) {
+      return false;
+    }
+
+    if (run.status === "awaiting_approval" && !hasPendingApprovals(run)) {
+      store.updateRun(runId, (current) => {
+        if (current.status !== "awaiting_approval" || hasPendingApprovals(current)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: "running",
+          logs: [...current.logs, "Recovered from awaiting_approval state with no pending approvals."]
+        };
+      });
+      return true;
+    }
+
+    if (run.status === "paused" || run.status === "awaiting_approval") {
+      await sleep(RUN_CONTROL_POLL_MS);
+      continue;
+    }
+
+    return true;
+  }
+}
+
+function listManualApprovalGates(step: PipelineStep, qualityGates: PipelineQualityGate[]): PipelineQualityGate[] {
+  return qualityGates.filter(
+    (gate) =>
+      gate.kind === "manual_approval" && (gate.targetStepId === "any_step" || gate.targetStepId === step.id)
+  );
+}
+
+function createManualApprovalId(gateId: string, stepId: string, attempt: number): string {
+  return `${gateId}:${stepId}:attempt:${attempt}`;
+}
+
+function ensureManualApprovalsRequested(
+  store: LocalStore,
+  runId: string,
+  step: PipelineStep,
+  gates: PipelineQualityGate[],
+  attempt: number
+): string[] {
+  const approvalIds = gates.map((gate) => createManualApprovalId(gate.id, step.id, attempt));
+
+  store.updateRun(runId, (run) => {
+    const approvals: RunApproval[] = [...run.approvals];
+    const addedNames: string[] = [];
+
+    for (const [index, gate] of gates.entries()) {
+      const approvalId = approvalIds[index];
+      const existing = approvals.find((entry) => entry.id === approvalId);
+      if (existing) {
+        continue;
+      }
+
+      approvals.push({
+        id: approvalId,
+        gateId: gate.id,
+        gateName: gate.name,
+        stepId: step.id,
+        stepName: step.name,
+        status: "pending",
+        blocking: gate.blocking,
+        message:
+          typeof gate.message === "string" && gate.message.trim().length > 0
+            ? gate.message.trim()
+            : `Manual approval required for "${gate.name}".`,
+        requestedAt: nowIso()
+      });
+      addedNames.push(gate.name);
+    }
+
+    const hasPendingCurrent = approvalIds.some((approvalId) => {
+      const entry = approvals.find((approval) => approval.id === approvalId);
+      return entry?.status === "pending";
+    });
+
+    const nextStatus =
+      run.status === "paused" || isRunTerminalStatus(run.status)
+        ? run.status
+        : hasPendingCurrent
+          ? "awaiting_approval"
+          : run.status;
+
+    return {
+      ...run,
+      status: nextStatus,
+      approvals,
+      logs:
+        addedNames.length > 0
+          ? [
+              ...run.logs,
+              `${step.name} is waiting for manual approval: ${addedNames.join(", ")}`
+            ]
+          : run.logs
+    };
+  });
+
+  return approvalIds;
+}
+
+async function waitForManualApprovals(
+  store: LocalStore,
+  runId: string,
+  step: PipelineStep,
+  gates: PipelineQualityGate[],
+  attempt: number,
+  abortSignal?: AbortSignal
+): Promise<StepQualityGateResult[]> {
+  if (gates.length === 0) {
+    return [];
+  }
+
+  const approvalIds = ensureManualApprovalsRequested(store, runId, step, gates, attempt);
+
+  while (true) {
+    if (abortSignal?.aborted) {
+      throw createAbortError("Run stopped by user");
+    }
+
+    const run = store.getRun(runId);
+    if (!run) {
+      throw createAbortError("Run not found");
+    }
+
+    if (run.status === "cancelled") {
+      throw createAbortError("Run stopped by user");
+    }
+
+    if (run.status === "failed") {
+      throw createAbortError("Run failed while waiting for manual approval");
+    }
+
+    if (run.status === "completed") {
+      throw createAbortError("Run completed unexpectedly while waiting for manual approval");
+    }
+
+    const approvalsById = new Map(run.approvals.map((entry) => [entry.id, entry]));
+    const hasPending = approvalIds.some((approvalId) => {
+      const approval = approvalsById.get(approvalId);
+      return !approval || approval.status === "pending";
+    });
+
+    if (!hasPending) {
+      if (run.status === "paused") {
+        await sleep(RUN_CONTROL_POLL_MS);
+        continue;
+      }
+
+      store.updateRun(runId, (current) => {
+        if (current.status !== "awaiting_approval") {
+          return current;
+        }
+
+        if (hasPendingApprovals(current)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: "running",
+          logs: [...current.logs, `${step.name} manual approvals resolved; resuming execution.`]
+        };
+      });
+      break;
+    }
+
+    if (run.status !== "paused" && run.status !== "awaiting_approval") {
+      store.updateRun(runId, (current) => {
+        if (isRunTerminalStatus(current.status) || current.status === "paused" || current.status === "awaiting_approval") {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: "awaiting_approval"
+        };
+      });
+    }
+
+    await sleep(RUN_CONTROL_POLL_MS);
+  }
+
+  const resolvedRun = store.getRun(runId);
+  const approvalsById = new Map((resolvedRun?.approvals ?? []).map((entry) => [entry.id, entry]));
+
+  return gates.map((gate, index) => {
+    const approval = approvalsById.get(approvalIds[index]);
+    const approved = approval?.status === "approved";
+
+    return {
+      gateId: gate.id,
+      gateName: gate.name,
+      kind: "manual_approval",
+      status: approved ? "pass" : "fail",
+      blocking: gate.blocking,
+      message:
+        gate.message && gate.message.trim().length > 0
+          ? gate.message
+          : approved
+            ? `Manual approval granted for "${gate.name}".`
+            : `Manual approval rejected for "${gate.name}".`,
+      details: approval
+        ? `decision=${approval.status}${approval.note ? ` note=${approval.note}` : ""}`
+        : "Manual approval record missing."
+    };
+  });
 }
 
 function formatBlockingGateFailures(results: StepQualityGateResult[]): string {
@@ -840,9 +1200,12 @@ function markRunStart(store: LocalStore, runId: string): void {
       return run;
     }
 
+    const status: PipelineRun["status"] =
+      run.status === "paused" || run.status === "awaiting_approval" ? run.status : "running";
+
     return {
       ...run,
-      status: "running",
+      status,
       logs: [...run.logs, `Run started at ${startedAt}`]
     };
   });
@@ -887,7 +1250,7 @@ function markRunCancelled(store: LocalStore, runId: string, reason: string): voi
       return run;
     }
 
-    if (run.status !== "queued" && run.status !== "running") {
+    if (run.status !== "queued" && run.status !== "running" && run.status !== "paused" && run.status !== "awaiting_approval") {
       return run;
     }
 
@@ -917,12 +1280,129 @@ export function cancelRun(store: LocalStore, runId: string, reason = "Stopped by
     return false;
   }
 
-  if (run.status !== "queued" && run.status !== "running") {
+  if (run.status !== "queued" && run.status !== "running" && run.status !== "paused" && run.status !== "awaiting_approval") {
     return false;
   }
 
   markRunCancelled(store, runId, reason);
   return true;
+}
+
+export function pauseRun(store: LocalStore, runId: string, reason = "Paused by user"): boolean {
+  const run = store.getRun(runId);
+  if (!run) {
+    return false;
+  }
+
+  if (run.status !== "queued" && run.status !== "running" && run.status !== "awaiting_approval") {
+    return false;
+  }
+
+  store.updateRun(runId, (current) => {
+    if (current.status !== "queued" && current.status !== "running" && current.status !== "awaiting_approval") {
+      return current;
+    }
+
+    return {
+      ...current,
+      status: "paused",
+      logs: [...current.logs, `Run paused: ${reason}`]
+    };
+  });
+
+  return true;
+}
+
+export function resumeRun(store: LocalStore, runId: string, reason = "Resumed by user"): boolean {
+  const run = store.getRun(runId);
+  if (!run || run.status !== "paused") {
+    return false;
+  }
+
+  store.updateRun(runId, (current) => {
+    if (current.status !== "paused") {
+      return current;
+    }
+
+    const nextStatus = hasPendingApprovals(current) ? "awaiting_approval" : "running";
+    return {
+      ...current,
+      status: nextStatus,
+      logs: [...current.logs, `Run resumed: ${reason}`]
+    };
+  });
+
+  return true;
+}
+
+export type ApprovalDecision = "approved" | "rejected";
+export type ResolveRunApprovalResult =
+  | { status: "ok"; run: PipelineRun }
+  | { status: "run_not_found" }
+  | { status: "approval_not_found" }
+  | { status: "already_resolved"; run: PipelineRun };
+
+export function resolveRunApproval(
+  store: LocalStore,
+  runId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+  note?: string
+): ResolveRunApprovalResult {
+  const run = store.getRun(runId);
+  if (!run) {
+    return { status: "run_not_found" };
+  }
+
+  const existing = run.approvals.find((approval) => approval.id === approvalId);
+  if (!existing) {
+    return { status: "approval_not_found" };
+  }
+
+  if (existing.status !== "pending") {
+    return { status: "already_resolved", run };
+  }
+
+  const resolvedAt = nowIso();
+  const trimmedNote = typeof note === "string" && note.trim().length > 0 ? note.trim() : undefined;
+  const updated = store.updateRun(runId, (current) => {
+    const approvals = current.approvals.map((approval) => {
+      if (approval.id !== approvalId || approval.status !== "pending") {
+        return approval;
+      }
+
+      return {
+        ...approval,
+        status: decision,
+        resolvedAt,
+        note: trimmedNote
+      };
+    });
+
+    const pendingLeft = approvals.some((approval) => approval.status === "pending");
+    const nextStatus: PipelineRun["status"] =
+      current.status === "paused"
+        ? "paused"
+        : current.status === "awaiting_approval" && !pendingLeft
+          ? "running"
+          : current.status;
+
+    return {
+      ...current,
+      status: nextStatus,
+      approvals,
+      logs: [
+        ...current.logs,
+        `Manual approval ${decision}: ${existing.gateName} (${existing.stepName})${trimmedNote ? ` — ${trimmedNote}` : ""}`
+      ]
+    };
+  });
+
+  if (!updated) {
+    return { status: "run_not_found" };
+  }
+
+  return { status: "ok", run: updated };
 }
 
 function markStepRunning(store: LocalStore, runId: string, step: PipelineStep, context: string, attempt: number): void {
@@ -997,6 +1477,16 @@ function resolveRunRootPath(storage: StorageConfig, runId: string): string {
   return path.join(storage.rootPath, storage.runsFolder, safeStorageSegment(runId));
 }
 
+async function persistPipelineSnapshot(runRootPath: string, pipeline: Pipeline): Promise<void> {
+  await fs.mkdir(runRootPath, { recursive: true });
+  const snapshotPath = path.join(runRootPath, "pipeline-snapshot.json");
+  const payload = {
+    capturedAt: nowIso(),
+    pipeline
+  };
+  await fs.writeFile(snapshotPath, JSON.stringify(payload, null, 2), "utf8");
+}
+
 async function persistRunStateSnapshot(store: LocalStore, runId: string, runRootPath: string): Promise<void> {
   const run = store.getRun(runId);
   if (!run) {
@@ -1015,6 +1505,19 @@ async function persistRunStateSnapshot(store: LocalStore, runId: string, runRoot
     finishedAt: run.finishedAt,
     generatedAt: nowIso(),
     logs: run.logs,
+    approvals: run.approvals.map((approval) => ({
+      id: approval.id,
+      gateId: approval.gateId,
+      gateName: approval.gateName,
+      stepId: approval.stepId,
+      stepName: approval.stepName,
+      status: approval.status,
+      blocking: approval.blocking,
+      message: approval.message,
+      requestedAt: approval.requestedAt,
+      resolvedAt: approval.resolvedAt,
+      note: approval.note
+    })),
     steps: run.steps.map((step) => ({
       stepId: step.stepId,
       stepName: step.stepName,
@@ -1067,6 +1570,32 @@ async function executeStep(
   if (!provider) {
     return `Provider ${step.providerId} is not configured. Configure credentials in Provider Settings.`;
   }
+
+  const resolveEffectiveStageTimeoutMs = (): number => {
+    const boundedBase = Math.max(10_000, Math.min(1_200_000, Math.floor(stageTimeoutMs || DEFAULT_STAGE_TIMEOUT_MS)));
+    const model = (step.model || provider.defaultModel || "").toLowerCase();
+    const isHighEffort = step.reasoningEffort === "high" || step.reasoningEffort === "xhigh";
+    let effective = boundedBase;
+
+    if (provider.id === "claude") {
+      if (model.includes("opus")) {
+        effective = Math.max(effective, isHighEffort ? 900_000 : 780_000);
+      } else {
+        effective = Math.max(effective, 420_000);
+      }
+      if (step.use1MContext) {
+        effective = Math.max(effective, 900_000);
+      }
+      if (step.contextWindowTokens >= 500_000) {
+        effective = Math.max(effective, 900_000);
+      }
+    } else if (step.use1MContext) {
+      effective = Math.max(effective, 600_000);
+    }
+
+    return Math.min(effective, 1_200_000);
+  };
+  const effectiveStageTimeoutMs = resolveEffectiveStageTimeoutMs();
 
   const executableStep: PipelineStep = {
     ...step,
@@ -1130,8 +1659,8 @@ async function executeStep(
 
     const timeoutController = new AbortController();
     const timer = setTimeout(() => {
-      timeoutController.abort(createAbortError(`${step.name} (${step.role}) timed out after ${stageTimeoutMs}ms`));
-    }, stageTimeoutMs);
+      timeoutController.abort(createAbortError(`${step.name} (${step.role}) timed out after ${effectiveStageTimeoutMs}ms`));
+    }, effectiveStageTimeoutMs);
     const stepSignal = mergeAbortSignals([abortSignal, timeoutController.signal]);
 
     let output: string;
@@ -1172,7 +1701,12 @@ async function executeStep(
         continue;
       }
 
-      const result = await executeMcpToolCall(mcpServersById.get(call.serverId), call, stageTimeoutMs, abortSignal);
+      const result = await executeMcpToolCall(
+        mcpServersById.get(call.serverId),
+        call,
+        effectiveStageTimeoutMs,
+        abortSignal
+      );
       results.push(result);
     }
 
@@ -1300,6 +1834,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
   }
 
   markRunStart(store, runId);
+  await persistPipelineSnapshot(runRootPath, pipeline);
   await persistRunStateSnapshot(store, runId, runRootPath);
 
   if (await stopIfAborted()) {
@@ -1310,6 +1845,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
 
   while (true) {
     if (await stopIfAborted()) {
+      return;
+    }
+
+    if (!(await waitForRunToBeRunnable(store, runId, abortSignal))) {
+      await persistRunStateSnapshot(store, runId, runRootPath);
       return;
     }
 
@@ -1376,16 +1916,27 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
       );
       const inferredOutcome = inferWorkflowOutcome(output);
       const contractEvaluation = await evaluateStepContracts(step, output, storagePaths, runInputs);
+      const pipelineGateResults = await evaluatePipelineQualityGates(
+        step,
+        output,
+        contractEvaluation.parsedJson,
+        pipeline.qualityGates ?? [],
+        storagePaths,
+        runInputs
+      );
+      const manualApprovalGates = listManualApprovalGates(step, pipeline.qualityGates ?? []);
+      const manualApprovalResults = await waitForManualApprovals(
+        store,
+        runId,
+        step,
+        manualApprovalGates,
+        attempt,
+        abortSignal
+      );
       const qualityGateResults = [
         ...contractEvaluation.gateResults,
-        ...(await evaluatePipelineQualityGates(
-          step,
-          output,
-          contractEvaluation.parsedJson,
-          pipeline.qualityGates ?? [],
-          storagePaths,
-          runInputs
-        ))
+        ...pipelineGateResults,
+        ...manualApprovalResults
       ];
       const hasBlockingGateFailure = qualityGateResults.some(
         (result) => result.status === "fail" && result.blocking
@@ -1394,10 +1945,16 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
       const outputWithQuality = hasBlockingGateFailure && blockingFailureSummary.length > 0
         ? `${output}\n\n${blockingFailureSummary}`
         : output;
-      const workflowOutcome: WorkflowOutcome = hasBlockingGateFailure ? "fail" : inferredOutcome;
-      const outgoingLinks = outgoingById.get(stepId) ?? [];
-      const routedLinks = outgoingLinks.filter((link) => routeMatchesCondition(link.condition, workflowOutcome));
-      const subagentNotes = buildDelegationNotes(step, routedLinks, outgoingLinks.length, stepById);
+      const inputSignal = extractInputRequestSignal(output, contractEvaluation.parsedJson);
+      const shouldStopForInput = inputSignal.needsInput;
+      const workflowOutcome: WorkflowOutcome = hasBlockingGateFailure || shouldStopForInput ? "fail" : inferredOutcome;
+      const outgoingLinks = shouldStopForInput ? [] : outgoingById.get(stepId) ?? [];
+      const routedLinks = shouldStopForInput
+        ? []
+        : outgoingLinks.filter((link) => routeMatchesCondition(link.condition, workflowOutcome));
+      const subagentNotes = shouldStopForInput
+        ? []
+        : buildDelegationNotes(step, routedLinks, outgoingLinks.length, stepById);
 
       attemptsByStep.set(stepId, attempt);
       latestOutputByStepId.set(stepId, outputWithQuality);
@@ -1419,6 +1976,16 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
         attempt
       );
       await persistRunStateSnapshot(store, runId, runRootPath);
+
+      if (shouldStopForInput) {
+        const reason = inputSignal.summary
+          ? `${step.name} requested additional input: ${inputSignal.summary}`
+          : `${step.name} requested additional input`;
+        appendRunLog(store, runId, `${step.name} requires user input; stopping run for remediation.`);
+        markRunFailed(store, runId, reason);
+        await persistRunStateSnapshot(store, runId, runRootPath);
+        return;
+      }
 
       if (hasBlockingGateFailure) {
         const failedGates = qualityGateResults

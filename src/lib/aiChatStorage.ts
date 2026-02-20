@@ -1,6 +1,6 @@
 import type { AiChatMessage, PipelinePayload } from "@/lib/types";
 
-const AI_CHAT_STORAGE_PREFIX = "agents-dashboard:ai-chat:";
+const AI_CHAT_STORAGE_PREFIX = "fyreflow:ai-chat:";
 const MAX_MESSAGES_PER_WORKFLOW = 60;
 
 function getStorageKey(workflowKey: string): string {

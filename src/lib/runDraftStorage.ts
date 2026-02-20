@@ -1,3 +1,9 @@
+import {
+  areRunInputKeysEquivalent,
+  normalizeRunInputKey,
+  pickPreferredRunInputKey
+} from "@/lib/runInputAliases";
+
 export type RunMode = "smart" | "quick";
 
 export interface RunDraftState {
@@ -6,7 +12,8 @@ export interface RunDraftState {
   inputs: Record<string, string>;
 }
 
-const RUN_DRAFT_PREFIX = "agents-dashboard:run-draft:";
+const RUN_DRAFT_PREFIX = "fyreflow:run-draft:";
+const SENSITIVE_KEY_PATTERN = /(token|secret|password|api[_-]?key|oauth)/i;
 
 function runDraftKey(scopeId: string): string {
   return `${RUN_DRAFT_PREFIX}${scopeId}`;
@@ -18,22 +25,56 @@ function normalizeInputs(raw: unknown): Record<string, string> {
   }
 
   const result: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(raw)) {
-    const key = rawKey.trim();
-    if (key.length === 0) {
+  const entries = Object.entries(raw)
+    .map(([rawKey, rawValue]) => {
+      const originalKey = rawKey.trim();
+      const key = normalizeRunInputKey(originalKey);
+      return {
+        originalKey,
+        key,
+        rawValue
+      };
+    })
+    .filter((entry) => entry.key.length > 0)
+    .sort((left, right) => left.originalKey.localeCompare(right.originalKey));
+
+  for (const entry of entries) {
+    if (SENSITIVE_KEY_PATTERN.test(entry.originalKey) || SENSITIVE_KEY_PATTERN.test(entry.key)) {
       continue;
     }
 
-    if (typeof rawValue === "string") {
-      result[key] = rawValue;
+    if (entry.rawValue === null || entry.rawValue === undefined) {
       continue;
     }
 
-    if (rawValue === null || rawValue === undefined) {
+    const equivalentKey = Object.keys(result).find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, entry.key)
+    );
+    const key =
+      equivalentKey === undefined ? entry.key : pickPreferredRunInputKey(equivalentKey, entry.key);
+    const incoming = typeof entry.rawValue === "string" ? entry.rawValue : String(entry.rawValue);
+
+    if (equivalentKey && equivalentKey !== key) {
+      const existingValue = result[equivalentKey];
+      delete result[equivalentKey];
+      result[key] = existingValue;
+    }
+
+    const existing = result[key];
+    if (existing === undefined) {
+      result[key] = incoming;
       continue;
     }
 
-    result[key] = String(rawValue);
+    const existingHasValue = existing.trim().length > 0;
+    const incomingHasValue = incoming.trim().length > 0;
+    if (!incomingHasValue) {
+      continue;
+    }
+
+    if (!existingHasValue) {
+      result[key] = incoming;
+    }
   }
 
   return result;

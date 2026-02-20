@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -20,7 +21,9 @@ interface SelectProps {
 export function Select({ value, onValueChange, options, placeholder, className, disabled }: SelectProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
   const selected = options.find((o) => o.value === value);
 
@@ -29,6 +32,34 @@ export function Select({ value, onValueChange, options, placeholder, className, 
       setOpen(false);
     }
   }, [disabled, open]);
+
+  // Position the dropdown relative to the trigger using fixed positioning
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+
+    const updatePosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      setDropdownStyle({
+        position: "fixed",
+        top: rect.bottom + 6,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999
+      });
+    };
+
+    updatePosition();
+
+    // Reposition on scroll/resize so it follows the trigger
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -40,7 +71,11 @@ export function Select({ value, onValueChange, options, placeholder, className, 
     };
 
     const onClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        containerRef.current && !containerRef.current.contains(target) &&
+        listRef.current && !listRef.current.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -62,9 +97,57 @@ export function Select({ value, onValueChange, options, placeholder, className, 
     }
   }, [open]);
 
+  const dropdownContent = (
+    <AnimatePresence>
+      {open && !disabled && (
+        <motion.div
+          ref={listRef}
+          initial={{ opacity: 0, scale: 0.95, y: -4 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: -4 }}
+          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+          style={dropdownStyle}
+          className="max-h-56 min-w-[140px] origin-top overflow-y-auto rounded-xl border border-ink-700/60 bg-ink-900 p-1 shadow-xl"
+        >
+          <div className="space-y-0.5">
+            {options.map((option) => {
+              const isActive = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  data-active={isActive || undefined}
+                  onClick={() => {
+                    onValueChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors cursor-pointer",
+                    isActive
+                      ? "bg-ember-500/10 text-ember-300"
+                      : "text-ink-200 hover:bg-ink-800/60"
+                  )}
+                >
+                  <Check
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      isActive ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="truncate">{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
   return (
     <div ref={containerRef} className={cn("relative", className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => {
@@ -93,49 +176,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
         </motion.span>
       </button>
 
-      <AnimatePresence>
-        {open && !disabled && (
-          <motion.div
-            ref={listRef}
-            initial={{ opacity: 0, scale: 0.95, y: -4 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: -4 }}
-            transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-56 min-w-[140px] w-full origin-top overflow-y-auto rounded-xl border border-ink-700/60 bg-ink-900 p-1 shadow-xl"
-          >
-            <div className="space-y-0.5">
-              {options.map((option) => {
-                const isActive = option.value === value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    data-active={isActive || undefined}
-                    onClick={() => {
-                      onValueChange(option.value);
-                      setOpen(false);
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors cursor-pointer",
-                      isActive
-                        ? "bg-ember-500/10 text-ember-300"
-                        : "text-ink-200 hover:bg-ink-800/60"
-                    )}
-                  >
-                    <Check
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0",
-                        isActive ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    <span className="truncate">{option.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {createPortal(dropdownContent, document.body)}
     </div>
   );
 }

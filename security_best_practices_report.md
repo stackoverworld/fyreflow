@@ -4,8 +4,51 @@
 - The Express API currently accepts requests from any origin, and there are no header or error-handling hardenings around the middleware chain to keep attackers from probing and fingerprinting it.
 - The React shell ships with no Content-Security-Policy or other security headers, so untrusted prompts, model output, and future third-party scripts cannot rely on browser-enforced defenses.
 - Zod schemas are used on every endpoint boundary (pipeline, provider, run) to normalize and validate user input before it touches storage or downstream execution.
+- There is currently no authentication/authorization around the Express routes, so any client that reaches port 8787 can mutate pipelines, providers, secure inputs, MCP servers, or queue runs.
+- All secrets (provider keys, OAuth tokens, secure pipeline inputs, MCP env/headers) live in plaintext JSON files and the API runs only over HTTP, so they can be read from disk or intercepted on the network.
 
 ## Findings
+
+### Critical
+#### FIND-004: API endpoints expose secrets and actions without any authentication/authorization
+- Rule ID: CUSTOM-AUTHZ-001
+- Severity: Critical
+- Location: `server/index.ts:526-833`
+- Evidence: Every pipeline, provider, secure-input, MCP, and run endpoint (see `/api/pipelines` through `/api/runs/:runId/stop`) is mounted immediately after the Express app is configured, yet no authentication/authorization middleware is attached anywhere before these routes execute.
+- Impact: Any process that can reach port 8787 can mutate pipelines, provider API keys, pipeline secure inputs, MCP servers, or trigger runs—which means a simple port scan yields full control over agent prompts, credentials, and remotely executed MCP commands.
+- Fix: Introduce a mandatory auth layer (JWT, API key, mTLS, etc.), enforce role/permission checks before state-changing endpoints, and fail-along requests that lack valid credentials. Rotate tokens periodically and tie them to the Electron shell if that is the only client.
+- Mitigation: Limit TCP/IP access with firewalls or VPNs until auth is in place and audit every unauthenticated request for incident response.
+- False positive notes: If the server is guaranteed to run inside a mutually authenticated tunnel (e.g., local Electron + named pipe only), document that constraint so this finding can be re-evaluated.
+
+#### FIND-005: Secrets (provider keys, OAuth tokens, secure inputs) are persisted in plaintext JSON state
+- Rule ID: CUSTOM-SECRETS-001
+- Severity: Critical
+- Location: `server/storage.ts:1-714`, `server/secureInputs.ts:12-164`
+- Evidence: `LocalStore` writes provider API keys, OAuth tokens, and MCP `env`/`headers` directly into `data/local-db.json` (see `DB_PATH` and `upsertProvider`/`createMcpServer`), and secure pipeline inputs are serialized as JSON files under `data/pipeline-secure-inputs/<pipeline>/secure-inputs.json` with only Unix file permissions guarding them.
+- Impact: A compromised host, backup, or unencrypted copy of these files immediately reveals every provisioning secret, so attackers gain access to downstream LLM providers and MCP credentials and can inject new workflows.
+- Fix: Encrypt these files at rest (e.g., with a key pulled from the environment or a secret manager) or move secrets into a dedicated vault and only cache non-sensitive metadata locally; always rotate encryption keys and never serialize raw secrets in shared state.
+- Mitigation: Harden filesystem ACLs around the `data` directory, avoid exposing the JSON files to backup processes, and delete secrets from disk once they are no longer needed.
+- False positive notes: If secrets are mirrored from a hardened DSM/Vault and the JSON payloads contain only encrypted blobs, document that so this finding can be revisited.
+
+#### FIND-006: Transport defaults assume plaintext HTTP and leak every secret in flight
+- Rule ID: CUSTOM-TRANSPORT-001
+- Severity: Critical
+- Location: `server/index.ts:526-845`
+- Evidence: The server only calls `app.listen(port)` (logged as `Agents dashboard API listening on http://localhost:${port}`) without TLS configuration or any `req.secure` checks, so all API traffic—including provider tokens, pipeline inputs, and MCP credentials—is served over unencrypted HTTP unless the deployment manually adds TLS.
+- Impact: Without HTTPS, every secret the API handles can be intercepted or modified by a man-in-the-middle, and attackers can hijack MCP commands or steal pipeline definitions while in transit.
+- Fix: Require HTTPS in production (e.g., run Express with TLS or reject `req.protocol !== 'https'` after trusting only a fronting proxy) and document that TLS termination is mandatory; consider automatically redirecting HTTP → HTTPS when the gateway indicates a secure endpoint.
+- Mitigation: Deploy behind a reverse proxy that terminates TLS, sets `X-Forwarded-Proto`, and configure Express to trust only that proxy so non-HTTPS requests are rejected.
+- False positive notes: If the server is intentionally only ever reached over a Unix domain socket or internal loopback without external network exposure, state that assumption so we can close this finding.
+
+#### FIND-007: MCP credential blobs are stored raw and replayed into command execution
+- Rule ID: CUSTOM-MCP-001
+- Severity: Critical
+- Location: `server/storage.ts:639-714`, `server/mcp.ts:69-220`
+- Evidence: MCP definitions persist arbitrary `env` and `headers` strings (the carrier for credentials) in `LocalStore`, and `callStdioMcp`/`callHttpLikeMcp` parse and inject them verbatim into spawned commands or HTTP headers without encryption, validation, or per-field access controls.
+- Impact: Because the config API is unauthenticated and secrets sit in plaintext JSON, an attacker can both harvest MCP secrets and use them to execute arbitrary binaries or RPC calls, effectively turning the MCP subsystem into a remote command-execution backdoor.
+- Fix: Treat MCP `env`/`headers` as secrets: store them encrypted, enforce that only authenticated users can write or modify MCP records, validate each entry before piping it to `spawn` or `fetch`, and consider signing MCP definitions so only trusted clients can add new servers.
+- Mitigation: Keep MCP configs in a separate secured store and postpone exposing this API to the public internet until both auth and encryption are in place.
+- False positive notes: If MCP env/headers are guaranteed to be empty or only contain safe metadata, document that limitation so we can re-evaluate this finding.
 
 ### Medium
 #### FIND-001: Open CORS exposes state-changing API endpoints to every origin

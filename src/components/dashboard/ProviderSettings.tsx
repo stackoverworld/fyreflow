@@ -1,4 +1,4 @@
-import { CheckCircle2, KeyRound, Link2, LockKeyhole, RefreshCw, Save, Settings2, XCircle } from "lucide-react";
+import { CheckCircle2, KeyRound, Link2, LockKeyhole, RefreshCw, Save, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getProviderOAuthStatus,
@@ -6,9 +6,11 @@ import {
   syncProviderOAuthToken
 } from "@/lib/api";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
+import { MODEL_CATALOG } from "@/lib/modelCatalog";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
 import { Input } from "@/components/optics/input";
+import { AnthropicIcon, OpenAIIcon } from "@/components/optics/icons";
 import { Select } from "@/components/optics/select";
 
 interface ProviderSettingsProps {
@@ -23,6 +25,10 @@ interface ProviderSettingsProps {
 type StatusMap = Record<ProviderId, ProviderOAuthStatus | null>;
 type MessageMap = Record<ProviderId, string>;
 const PROVIDER_ORDER: ProviderId[] = ["openai", "claude"];
+const PROVIDER_DISPLAY_LABEL: Record<ProviderId, string> = {
+  openai: "OpenAI / Codex",
+  claude: "Anthropic"
+};
 
 export function ProviderSettings({
   providers,
@@ -37,38 +43,50 @@ export function ProviderSettings({
   const [oauthBusyId, setOauthBusyId] = useState<ProviderId | null>(null);
   const autoSwitchedProvidersRef = useRef<Set<ProviderId>>(new Set());
   const oauthBootstrapLoadingRef = useRef<Set<ProviderId>>(new Set());
+  const runtimeProbeBootstrapRef = useRef<Set<ProviderId>>(new Set());
 
   useEffect(() => {
     setDrafts(providers);
   }, [providers]);
 
-  const loadOAuthStatus = useCallback(async (providerId: ProviderId): Promise<ProviderOAuthStatus | null> => {
-    try {
-      const response = await getProviderOAuthStatus(providerId);
-      onOAuthStatusChange(providerId, response.status);
-      onOAuthMessageChange(providerId, response.status.message);
-      return response.status;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load OAuth status";
-      onOAuthMessageChange(providerId, message);
-      return null;
-    }
-  }, [onOAuthMessageChange, onOAuthStatusChange]);
+  const loadOAuthStatus = useCallback(
+    async (
+      providerId: ProviderId,
+      options?: {
+        includeRuntimeProbe?: boolean;
+      }
+    ): Promise<ProviderOAuthStatus | null> => {
+      try {
+        const response = await getProviderOAuthStatus(providerId, options);
+        onOAuthStatusChange(providerId, response.status);
+        onOAuthMessageChange(providerId, response.status.message);
+        return response.status;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load OAuth status";
+        onOAuthMessageChange(providerId, message);
+        return null;
+      }
+    },
+    [onOAuthMessageChange, onOAuthStatusChange]
+  );
 
-  const pollOAuthStatus = useCallback(async (providerId: ProviderId, attempts = 18): Promise<ProviderOAuthStatus | null> => {
-    for (let index = 0; index < attempts; index += 1) {
-      const status = await loadOAuthStatus(providerId);
-      if (status?.loggedIn) {
-        return status;
+  const pollOAuthStatus = useCallback(
+    async (providerId: ProviderId, attempts = 18): Promise<ProviderOAuthStatus | null> => {
+      for (let index = 0; index < attempts; index += 1) {
+        const status = await loadOAuthStatus(providerId);
+        if (status?.loggedIn) {
+          return status;
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 1800);
+        });
       }
 
-      await new Promise((resolve) => {
-        window.setTimeout(resolve, 1800);
-      });
-    }
-
-    return loadOAuthStatus(providerId);
-  }, [loadOAuthStatus]);
+      return loadOAuthStatus(providerId);
+    },
+    [loadOAuthStatus]
+  );
 
   useEffect(() => {
     for (const providerId of PROVIDER_ORDER) {
@@ -82,6 +100,27 @@ export function ProviderSettings({
       });
     }
   }, [loadOAuthStatus, oauthMessages, oauthStatuses]);
+
+  useEffect(() => {
+    for (const providerId of PROVIDER_ORDER) {
+      const provider = drafts[providerId];
+      const status = oauthStatuses[providerId];
+
+      if (!provider || provider.authMode !== "oauth") {
+        runtimeProbeBootstrapRef.current.delete(providerId);
+        continue;
+      }
+
+      if (!status || status.runtimeProbe || oauthBusyId !== null || runtimeProbeBootstrapRef.current.has(providerId)) {
+        continue;
+      }
+
+      runtimeProbeBootstrapRef.current.add(providerId);
+      void loadOAuthStatus(providerId, { includeRuntimeProbe: true }).finally(() => {
+        runtimeProbeBootstrapRef.current.delete(providerId);
+      });
+    }
+  }, [drafts, loadOAuthStatus, oauthBusyId, oauthStatuses]);
 
   useEffect(() => {
     for (const providerId of PROVIDER_ORDER) {
@@ -149,6 +188,7 @@ export function ProviderSettings({
         const status = oauthStatuses[providerId];
         const isLoggedIn = status?.loggedIn === true;
         const canUseCli = status?.canUseCli === true;
+        const runtimeProbe = status?.runtimeProbe;
         const showOauthTokenInput = authMode !== "oauth" || providerId === "openai";
 
         return (
@@ -158,8 +198,12 @@ export function ProviderSettings({
             <section className="space-y-4">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-ink-400">
-                  <Settings2 className="h-3.5 w-3.5" />
-                  <span className="text-[11px] font-semibold uppercase tracking-wider">{provider.label}</span>
+                  {providerId === "openai" ? (
+                    <OpenAIIcon className="h-3.5 w-3.5" />
+                  ) : (
+                    <AnthropicIcon className="h-3.5 w-3.5" />
+                  )}
+                  <span className="text-[11px] font-semibold uppercase tracking-wider">{PROVIDER_DISPLAY_LABEL[providerId]}</span>
                 </div>
                 <span className="text-[11px] text-ink-600">{new Date(provider.updatedAt).toLocaleString()}</span>
               </div>
@@ -229,11 +273,11 @@ export function ProviderSettings({
                   <div className="flex flex-wrap items-center gap-2">
                     {isLoggedIn ? (
                       <Badge variant="success">
-                        <CheckCircle2 className="mr-1 h-3 w-3" /> Connected
+                        <CheckCircle2 className="mr-1 h-3 w-3" /> Auth connected
                       </Badge>
                     ) : (
                       <Badge variant="danger">
-                        <XCircle className="mr-1 h-3 w-3" /> Not connected
+                        <XCircle className="mr-1 h-3 w-3" /> Auth missing
                       </Badge>
                     )}
                     {canUseCli ? (
@@ -241,9 +285,27 @@ export function ProviderSettings({
                     ) : (
                       <Badge variant="warning">CLI unavailable</Badge>
                     )}
+                    {runtimeProbe ? (
+                      <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
+                        {runtimeProbe.status === "pass" ? "Runtime ready" : "Runtime issue"}
+                      </Badge>
+                    ) : (
+                      <Badge variant="warning">Runtime unchecked</Badge>
+                    )}
                   </div>
 
                   <p className="text-xs text-ink-500">{oauthStatusLine(providerId)}</p>
+                  {status?.cliCommand ? <p className="text-xs text-ink-600">CLI command: {status.cliCommand}</p> : null}
+                  {runtimeProbe ? (
+                    <p className={runtimeProbe.status === "pass" ? "text-xs text-ink-500" : "text-xs text-red-400"}>
+                      {runtimeProbe.message}
+                      {runtimeProbe.latencyMs !== undefined ? ` (${runtimeProbe.latencyMs}ms)` : ""}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-ink-600">
+                      Runtime probe was not executed yet. Click Refresh to validate real run capability.
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -256,6 +318,7 @@ export function ProviderSettings({
                           const response = await startProviderOAuthLogin(providerId);
                           onOAuthMessageChange(providerId, response.result.message);
                           await pollOAuthStatus(providerId);
+                          await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
                         } finally {
                           setOauthBusyId(null);
                         }
@@ -298,7 +361,7 @@ export function ProviderSettings({
                       onClick={async () => {
                         setOauthBusyId(providerId);
                         try {
-                          await loadOAuthStatus(providerId);
+                          await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
                         } finally {
                           setOauthBusyId(null);
                         }
@@ -333,22 +396,26 @@ export function ProviderSettings({
                 />
               </label>
 
-              <label className="block space-y-1.5">
+              <div className="space-y-1.5">
                 <span className="text-xs text-ink-400">Default model</span>
-                <Input
+                <Select
                   value={provider.defaultModel}
-                  onChange={(event) =>
+                  onValueChange={(value) =>
                     setDrafts((current) => ({
                       ...current,
                       [providerId]: {
                         ...current[providerId],
-                        defaultModel: event.target.value
+                        defaultModel: value
                       }
                     }))
                   }
-                  placeholder={providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6"}
+                  options={MODEL_CATALOG[providerId].map((entry) => ({
+                    value: entry.id,
+                    label: entry.label
+                  }))}
+                  placeholder="Select model..."
                 />
-              </label>
+              </div>
 
               <Button
                 variant="secondary"
