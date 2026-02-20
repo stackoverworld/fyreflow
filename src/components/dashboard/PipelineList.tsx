@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 interface PipelineListProps {
   pipelines: Pipeline[];
   selectedId: string | null;
+  activePipelineIds?: string[];
   onSelect: (pipelineId: string) => void;
   onCreate: () => void;
   onDelete: (pipelineId: string) => void;
@@ -23,7 +24,8 @@ function timeAgo(date: Date): string {
   return date.toLocaleDateString();
 }
 
-export function PipelineList({ pipelines, selectedId, onSelect, onCreate, onDelete }: PipelineListProps) {
+export function PipelineList({ pipelines, selectedId, activePipelineIds = [], onSelect, onCreate, onDelete }: PipelineListProps) {
+  const activeSet = new Set(activePipelineIds);
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -36,6 +38,7 @@ export function PipelineList({ pipelines, selectedId, onSelect, onCreate, onDele
       <div className="space-y-1">
         {pipelines.map((pipeline) => {
           const isActive = selectedId === pipeline.id;
+          const isRunning = activeSet.has(pipeline.id);
 
           return (
             <button
@@ -64,12 +67,19 @@ export function PipelineList({ pipelines, selectedId, onSelect, onCreate, onDele
 
                 <button
                   type="button"
+                  disabled={isRunning}
                   onClick={(event) => {
                     event.stopPropagation();
                     onDelete(pipeline.id);
                   }}
-                  className="shrink-0 rounded-md p-1 text-ink-700 opacity-0 transition-[color,opacity] duration-150 hover:text-red-400 group-hover:opacity-100"
+                  className={cn(
+                    "shrink-0 rounded-md p-1 transition-[color,opacity] duration-150",
+                    isRunning
+                      ? "text-ink-700 opacity-40 cursor-not-allowed"
+                      : "text-ink-700 opacity-0 hover:text-red-400 group-hover:opacity-100"
+                  )}
                   aria-label={`Delete ${pipeline.name}`}
+                  title={isRunning ? "Cannot delete a running flow." : undefined}
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
@@ -80,6 +90,12 @@ export function PipelineList({ pipelines, selectedId, onSelect, onCreate, onDele
                 <span>{pipeline.steps.length} steps</span>
                 <span className="text-ink-700">·</span>
                 <span>{timeAgo(new Date(pipeline.updatedAt))}</span>
+                {isRunning ? (
+                  <>
+                    <span className="text-ink-700">·</span>
+                    <span className="text-amber-400">running</span>
+                  </>
+                ) : null}
               </div>
             </button>
           );

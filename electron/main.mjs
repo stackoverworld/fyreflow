@@ -14,6 +14,7 @@ function createMainWindow() {
     height: 900,
     minWidth: 1100,
     minHeight: 700,
+    backgroundColor: "#131314",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 13 },
     webPreferences: {

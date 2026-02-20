@@ -14,14 +14,21 @@ interface SelectProps {
   options: SelectOption[];
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }
 
-export function Select({ value, onValueChange, options, placeholder, className }: SelectProps) {
+export function Select({ value, onValueChange, options, placeholder, className, disabled }: SelectProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const selected = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (disabled && open) {
+      setOpen(false);
+    }
+  }, [disabled, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,27 +66,35 @@ export function Select({ value, onValueChange, options, placeholder, className }
     <div ref={containerRef} className={cn("relative", className)}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) {
+            return;
+          }
+          setOpen((v) => !v);
+        }}
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-xl border border-ink-800 bg-ink-950/60 px-3 text-sm text-ink-50",
           "focus:border-ember-500/60 focus:outline-none focus:ring-2 focus:ring-ember-500/20",
           "transition-colors cursor-pointer",
-          open && "border-ember-500/60 ring-2 ring-ember-500/20"
+          open && "border-ember-500/60 ring-2 ring-ember-500/20",
+          disabled && "cursor-not-allowed opacity-55"
         )}
       >
         <span className={cn("truncate", !selected && "text-ink-500")}>
           {selected?.label ?? placeholder ?? "Select..."}
         </span>
         <motion.span
+          className="ml-2 inline-flex items-center justify-center"
           animate={{ rotate: open ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ type: "spring", stiffness: 300, damping: 20 }}
         >
-          <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-ink-500" />
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-500" />
         </motion.span>
       </button>
 
       <AnimatePresence>
-        {open && (
+        {open && !disabled && (
           <motion.div
             ref={listRef}
             initial={{ opacity: 0, scale: 0.95, y: -4 }}

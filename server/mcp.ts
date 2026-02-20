@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { McpServerConfig } from "./types.js";
+import { createAbortError, mergeAbortSignals } from "./abort.js";
 
 export interface McpToolCall {
   serverId: string;
@@ -93,7 +94,8 @@ function runCommand(
   args: string[],
   stdinInput: string | undefined,
   timeoutMs: number,
-  extraEnv?: Record<string, string>
+  extraEnv?: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -106,11 +108,44 @@ function runCommand(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (signal && abortListener) {
+        signal.removeEventListener("abort", abortListener);
+      }
+      fn();
+    };
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
+      finish(() => reject(new Error(`${command} timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
+
+    const abortListener = signal
+      ? () => {
+          child.kill("SIGTERM");
+          finish(() => reject(createAbortError(`${command} aborted`)));
+        }
+      : null;
+
+    if (signal?.aborted) {
+      if (abortListener) {
+        abortListener();
+      } else {
+        finish(() => reject(createAbortError(`${command} aborted`)));
+      }
+      return;
+    }
+
+    if (signal && abortListener) {
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
 
     child.stdout.on("data", (chunk: Buffer | string) => {
       stdout += chunk.toString();
@@ -121,19 +156,16 @@ function runCommand(
     });
 
     child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finish(() => reject(error));
     });
 
     child.once("close", (code) => {
-      clearTimeout(timer);
-
       if (code === 0) {
-        resolve({ stdout, stderr });
+        finish(() => resolve({ stdout, stderr }));
         return;
       }
 
-      reject(new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 500)}`));
+      finish(() => reject(new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 500)}`)));
     });
 
     if (stdinInput && stdinInput.length > 0) {
@@ -152,7 +184,12 @@ function isToolAllowed(server: McpServerConfig, tool: string): boolean {
   return allowlist.includes("*") || allowlist.includes(tool);
 }
 
-async function callHttpLikeMcp(server: McpServerConfig, call: McpToolCall, timeoutMs: number): Promise<unknown> {
+async function callHttpLikeMcp(
+  server: McpServerConfig,
+  call: McpToolCall,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<unknown> {
   const endpoint = server.url.trim();
   if (endpoint.length === 0) {
     throw new Error("MCP server URL is empty");
@@ -160,6 +197,7 @@ async function callHttpLikeMcp(server: McpServerConfig, call: McpToolCall, timeo
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const requestSignal = mergeAbortSignals([signal, controller.signal]);
 
   try {
     const headers = {
@@ -179,7 +217,7 @@ async function callHttpLikeMcp(server: McpServerConfig, call: McpToolCall, timeo
           arguments: call.arguments ?? {}
         }
       }),
-      signal: controller.signal
+      signal: requestSignal
     });
 
     if (!response.ok) {
@@ -217,7 +255,12 @@ async function callHttpLikeMcp(server: McpServerConfig, call: McpToolCall, timeo
   }
 }
 
-async function callStdioMcp(server: McpServerConfig, call: McpToolCall, timeoutMs: number): Promise<unknown> {
+async function callStdioMcp(
+  server: McpServerConfig,
+  call: McpToolCall,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<unknown> {
   const command = server.command.trim();
   if (command.length === 0) {
     throw new Error("MCP stdio command is empty");
@@ -230,7 +273,7 @@ async function callStdioMcp(server: McpServerConfig, call: McpToolCall, timeoutM
     arguments: call.arguments ?? {}
   });
 
-  const { stdout } = await runCommand(command, args, payload, timeoutMs, env);
+  const { stdout } = await runCommand(command, args, payload, timeoutMs, env, signal);
   const trimmed = stdout.trim();
   if (trimmed.length === 0) {
     return "MCP stdio command returned no output";
@@ -246,7 +289,8 @@ async function callStdioMcp(server: McpServerConfig, call: McpToolCall, timeoutM
 export async function executeMcpToolCall(
   server: McpServerConfig | undefined,
   call: McpToolCall,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<McpToolResult> {
   if (!server) {
     return {
@@ -278,8 +322,8 @@ export async function executeMcpToolCall(
   try {
     const output =
       server.transport === "stdio"
-        ? await callStdioMcp(server, call, timeoutMs)
-        : await callHttpLikeMcp(server, call, timeoutMs);
+        ? await callStdioMcp(server, call, timeoutMs, signal)
+        : await callHttpLikeMcp(server, call, timeoutMs, signal);
 
     return {
       serverId: call.serverId,

@@ -9,6 +9,7 @@ import type {
   ProviderConfig,
   ProviderId,
   ProviderOAuthStatus,
+  RunStartupCheck,
   SmartRunPlan,
   StorageConfig,
   StorageConfigPayload
@@ -119,10 +120,16 @@ export async function syncProviderOAuthToken(providerId: ProviderId) {
   });
 }
 
-export async function startRun(pipelineId: string, task: string, inputs?: Record<string, string>) {
+export async function startRun(pipelineId: string, task?: string, inputs?: Record<string, string>) {
   return request<{ run: PipelineRun }>(`/api/pipelines/${pipelineId}/runs`, {
     method: "POST",
     body: JSON.stringify({ task, inputs })
+  });
+}
+
+export async function stopRun(runId: string) {
+  return request<{ run: PipelineRun }>(`/api/runs/${runId}/stop`, {
+    method: "POST"
   });
 }
 
@@ -130,6 +137,20 @@ export async function getSmartRunPlan(pipelineId: string, inputs?: Record<string
   return request<{ plan: SmartRunPlan }>(`/api/pipelines/${pipelineId}/smart-run-plan`, {
     method: "POST",
     body: JSON.stringify({ inputs: inputs ?? {} })
+  });
+}
+
+export async function getRunStartupCheck(pipelineId: string, task?: string, inputs?: Record<string, string>) {
+  return request<{ check: RunStartupCheck }>(`/api/pipelines/${pipelineId}/startup-check`, {
+    method: "POST",
+    body: JSON.stringify({ task, inputs: inputs ?? {} })
+  });
+}
+
+export async function savePipelineSecureInputs(pipelineId: string, inputs: Record<string, string>) {
+  return request<{ savedKeys: string[] }>(`/api/pipelines/${pipelineId}/secure-inputs`, {
+    method: "POST",
+    body: JSON.stringify({ inputs })
   });
 }
 

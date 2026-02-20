@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  Bug,
   Cable,
   Layers,
   ListChecks,
@@ -10,6 +11,7 @@ import {
   Redo2,
   Settings2,
   ShieldCheck,
+  Square,
   Sparkles,
   Undo2,
   Workflow,
@@ -20,17 +22,22 @@ import {
   createPipeline,
   deleteMcpServer,
   deletePipeline,
+  getRunStartupCheck,
   getSmartRunPlan,
   getState,
   listRuns,
+  savePipelineSecureInputs,
   startRun,
+  stopRun,
   updateMcpServer,
   updatePipeline,
   updateProvider,
   updateStorageConfig
 } from "@/lib/api";
 import { moveAiChatHistory } from "@/lib/aiChatStorage";
+import { loadRunDraft, moveRunDraft, saveRunDraft } from "@/lib/runDraftStorage";
 import { getDefaultContextWindowForModel, getDefaultModelForProvider, MODEL_CATALOG } from "@/lib/modelCatalog";
+import { parseRunInputRequestsFromText } from "@/lib/runInputRequests";
 import type {
   DashboardState,
   LinkCondition,
@@ -38,6 +45,8 @@ import type {
   PipelinePayload,
   ProviderId,
   ProviderOAuthStatus,
+  RunInputRequest,
+  RunStartupBlocker,
   SmartRunPlan
 } from "@/lib/types";
 import { PipelineList } from "@/components/dashboard/PipelineList";
@@ -45,8 +54,10 @@ import { PipelineEditor } from "@/components/dashboard/PipelineEditor";
 import { ProviderSettings } from "@/components/dashboard/ProviderSettings";
 import { RunPanel } from "@/components/dashboard/RunPanel";
 import { AiBuilderPanel } from "@/components/dashboard/AiBuilderPanel";
+import { DebugPanel } from "@/components/dashboard/DebugPanel";
 import { McpSettings } from "@/components/dashboard/McpSettings";
 import { QualityGatesPanel } from "@/components/dashboard/QualityGatesPanel";
+import { RunInputRequestModal } from "@/components/dashboard/RunInputRequestModal";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Textarea } from "@/components/optics/textarea";
@@ -54,14 +65,16 @@ import { Tooltip } from "@/components/optics/tooltip";
 import { SlidePanel } from "@/components/optics/slide-panel";
 import { cn } from "@/lib/cn";
 
-type WorkspacePanel = "pipelines" | "flow" | "contracts" | "providers" | "mcp" | "run" | "ai" | null;
+type WorkspacePanel = "pipelines" | "flow" | "contracts" | "providers" | "mcp" | "run" | "ai" | "debug" | null;
 type ProviderOAuthStatusMap = Record<ProviderId, ProviderOAuthStatus | null>;
 type ProviderOAuthMessageMap = Record<ProviderId, string>;
 const DEFAULT_MAX_LOOPS = 2;
 const DEFAULT_MAX_STEP_EXECUTIONS = 18;
 const DEFAULT_STAGE_TIMEOUT_MS = 240000;
 const DRAFT_HISTORY_LIMIT = 120;
-const AUTOSAVE_DELAY_MS = 550;
+const AUTOSAVE_DELAY_MS = 1000;
+const SMART_RUN_PLAN_CACHE_LIMIT = 24;
+const RUNTIME_INPUT_PROMPT_CACHE_LIMIT = 240;
 
 function createStepId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -262,6 +275,52 @@ function jsonEquals(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function normalizeSmartRunInputs(inputs?: Record<string, string>): Record<string, string> {
+  if (!inputs) {
+    return {};
+  }
+
+  const normalizedEntries = Object.entries(inputs)
+    .map(([key, value]) => [key.trim(), value] as const)
+    .filter(([key]) => key.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of normalizedEntries) {
+    if (value.trim() === "[secure]") {
+      continue;
+    }
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
+function buildSmartRunPlanSignature(pipelineId: string, inputs?: Record<string, string>): string {
+  const normalized = normalizeSmartRunInputs(inputs);
+  const entries = Object.entries(normalized);
+  return `${pipelineId}:${JSON.stringify(entries)}`;
+}
+
+function setSmartRunPlanCacheEntry(cache: Map<string, SmartRunPlan>, signature: string, plan: SmartRunPlan): void {
+  if (cache.has(signature)) {
+    cache.delete(signature);
+  }
+  cache.set(signature, plan);
+
+  while (cache.size > SMART_RUN_PLAN_CACHE_LIMIT) {
+    const oldestSignature = cache.keys().next().value;
+    if (typeof oldestSignature !== "string") {
+      break;
+    }
+    cache.delete(oldestSignature);
+  }
+}
+
+function hasRunInputValue(inputs: Record<string, string> | undefined, key: string): boolean {
+  const value = inputs?.[key.trim().toLowerCase()];
+  return typeof value === "string" && value.trim().length > 0 && value.trim() !== "[secure]";
+}
+
 function getPipelineSaveValidationError(draft: PipelinePayload): string | null {
   if (draft.name.trim().length < 2) {
     return "Flow name must have at least 2 characters.";
@@ -382,6 +441,20 @@ function ToolButton({ active, disabled, label, onClick, children }: ToolButtonPr
   );
 }
 
+type RunInputModalSource = "startup" | "runtime";
+
+interface RunInputModalContext {
+  source: RunInputModalSource;
+  pipelineId: string;
+  task: string;
+  runId?: string;
+  requests: RunInputRequest[];
+  blockers: RunStartupBlocker[];
+  summary: string;
+  inputs: Record<string, string>;
+  confirmLabel: string;
+}
+
 export default function App() {
   const [pipelines, setPipelines] = useState<DashboardState["pipelines"]>([]);
   const [providers, setProviders] = useState<DashboardState["providers"] | null>(null);
@@ -400,15 +473,22 @@ export default function App() {
   const [baselineDraft, setBaselineDraft] = useState<PipelinePayload>(emptyDraft());
   const [isNewDraft, setIsNewDraft] = useState(false);
   const [savingPipeline, setSavingPipeline] = useState(false);
-  const [startingRun, setStartingRun] = useState(false);
+  const [startingRunPipelineId, setStartingRunPipelineId] = useState<string | null>(null);
+  const [stoppingRunPipelineId, setStoppingRunPipelineId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string>("");
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const smartRunPlanRequestIdRef = useRef(0);
+  const smartRunPlanLastSignatureRef = useRef("");
+  const smartRunPlanInFlightSignatureRef = useRef("");
+  const smartRunPlanCacheRef = useRef<Map<string, SmartRunPlan>>(new Map());
+  const smartRunPlanRef = useRef<SmartRunPlan | null>(null);
   const savingPipelineRef = useRef(false);
   const selectedPipelineIdRef = useRef<string | null>(null);
   const draftWorkflowKeyRef = useRef<string>(draftWorkflowKey);
   const [activePanel, setActivePanel] = useState<WorkspacePanel>(null);
   const [stepPanelOpen, setStepPanelOpen] = useState(false);
+  const [canvasDragActive, setCanvasDragActive] = useState(false);
   const [providerOauthStatuses, setProviderOauthStatuses] = useState<ProviderOAuthStatusMap>({
     openai: null,
     claude: null
@@ -417,6 +497,9 @@ export default function App() {
     openai: "",
     claude: ""
   });
+  const [runInputModal, setRunInputModal] = useState<RunInputModalContext | null>(null);
+  const [processingRunInputModal, setProcessingRunInputModal] = useState(false);
+  const runtimeInputPromptSeenRef = useRef<Set<string>>(new Set());
   const draft = draftHistory.draft;
   const canUndo = draftHistory.undoStack.length > 0;
   const canRedo = draftHistory.redoStack.length > 0;
@@ -442,8 +525,16 @@ export default function App() {
   }, [selectedPipelineId]);
 
   useEffect(() => {
+    runtimeInputPromptSeenRef.current = new Set();
+  }, [selectedPipelineId]);
+
+  useEffect(() => {
     draftWorkflowKeyRef.current = draftWorkflowKey;
   }, [draftWorkflowKey]);
+
+  useEffect(() => {
+    smartRunPlanRef.current = smartRunPlan;
+  }, [smartRunPlan]);
 
   useEffect(() => {
     return () => {
@@ -462,6 +553,18 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const selectedPipelineLocked = Boolean(
+        selectedPipelineId &&
+          (runs.some(
+            (run) => run.pipelineId === selectedPipelineId && (run.status === "queued" || run.status === "running")
+          ) ||
+            startingRunPipelineId === selectedPipelineId ||
+            stoppingRunPipelineId === selectedPipelineId)
+      );
+      if (selectedPipelineLocked) {
+        return;
+      }
+
       const target = event.target as HTMLElement | null;
       const isTypingField =
         target instanceof HTMLInputElement ||
@@ -500,7 +603,16 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canRedo, canUndo, redoDraftChange, undoDraftChange]);
+  }, [
+    canRedo,
+    canUndo,
+    redoDraftChange,
+    runs,
+    selectedPipelineId,
+    startingRunPipelineId,
+    stoppingRunPipelineId,
+    undoDraftChange
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -572,22 +684,63 @@ export default function App() {
     }
     return pipelines.find((pipeline) => pipeline.id === selectedPipelineId);
   }, [pipelines, selectedPipelineId]);
+  const activePipelineRun = useMemo(() => {
+    if (!selectedPipelineId) {
+      return null;
+    }
+
+    const running = runs.find((run) => run.pipelineId === selectedPipelineId && run.status === "running");
+    if (running) {
+      return running;
+    }
+
+    return runs.find((run) => run.pipelineId === selectedPipelineId && run.status === "queued") ?? null;
+  }, [runs, selectedPipelineId]);
+  const activeRunPipelineIds = useMemo(() => {
+    const ids = new Set(runs.filter((run) => run.status === "queued" || run.status === "running").map((run) => run.pipelineId));
+    if (startingRunPipelineId) {
+      ids.add(startingRunPipelineId);
+    }
+    if (stoppingRunPipelineId) {
+      ids.add(stoppingRunPipelineId);
+    }
+    return [...ids];
+  }, [runs, startingRunPipelineId, stoppingRunPipelineId]);
+  const startingRun = Boolean(selectedPipelineId && startingRunPipelineId === selectedPipelineId);
+  const stoppingRun = Boolean(selectedPipelineId && stoppingRunPipelineId === selectedPipelineId);
+  const selectedPipelineRunActive = Boolean(activePipelineRun);
+  const selectedPipelineEditLocked = selectedPipelineRunActive || startingRun || stoppingRun;
+  const applyEditableDraftChange = useCallback(
+    (next: SetStateAction<PipelinePayload>) => {
+      if (selectedPipelineEditLocked) {
+        return;
+      }
+
+      applyDraftChange(next);
+    },
+    [applyDraftChange, selectedPipelineEditLocked]
+  );
   const runtimeDraft = useMemo(() => normalizeRuntime(draft.runtime), [draft.runtime]);
   const aiWorkflowKey = selectedPipelineId ?? draftWorkflowKey;
-  const runDisabled = !selectedPipelineId || startingRun || savingPipeline || isDirty;
-  const runTooltip = !selectedPipelineId
-    ? pipelineSaveValidationError
-      ? `Fix before autosave: ${pipelineSaveValidationError}`
-      : "Autosave pending..."
-    : startingRun
-      ? "Running..."
-      : pipelineSaveValidationError
+  const runPanelToggleDisabled =
+    !selectedPipelineId || startingRun || stoppingRun || savingPipeline || isDirty || canvasDragActive;
+  const runTooltip = selectedPipelineRunActive
+    ? "Run in progress."
+    : !selectedPipelineId
+      ? pipelineSaveValidationError
         ? `Fix before autosave: ${pipelineSaveValidationError}`
-        : savingPipeline || isDirty
-          ? "Autosaving changes..."
-          : "Run flow";
+        : "Autosave pending..."
+      : canvasDragActive
+        ? "Finish moving nodes before running."
+        : pipelineSaveValidationError
+          ? `Fix before autosave: ${pipelineSaveValidationError}`
+          : savingPipeline || isDirty
+            ? "Autosaving changes..."
+            : "Run flow";
   const autosaveStatusLabel = pipelineSaveValidationError
     ? `Autosave paused: ${pipelineSaveValidationError}`
+    : canvasDragActive
+      ? "Autosave paused while moving nodes..."
     : savingPipeline
       ? "Autosaving changes..."
       : isDirty
@@ -636,6 +789,15 @@ export default function App() {
   };
 
   const handleDeletePipeline = async (pipelineId: string) => {
+    const hasActiveRun =
+      runs.some((run) => run.pipelineId === pipelineId && (run.status === "queued" || run.status === "running")) ||
+      startingRunPipelineId === pipelineId ||
+      stoppingRunPipelineId === pipelineId;
+    if (hasActiveRun) {
+      setNotice("Stop the running flow before deleting it.");
+      return;
+    }
+
     try {
       await deletePipeline(pipelineId);
       const nextPipelines = pipelines.filter((pipeline) => pipeline.id !== pipelineId);
@@ -692,6 +854,7 @@ export default function App() {
           const response = await createPipeline(payload);
           const created = response.pipeline;
           moveAiChatHistory(saveTargetDraftKey, created.id);
+          moveRunDraft(saveTargetDraftKey, created.id);
           setPipelines((current) => [created, ...current.filter((pipeline) => pipeline.id !== created.id)]);
           if (
             selectedPipelineIdRef.current === saveTargetPipelineId &&
@@ -736,7 +899,7 @@ export default function App() {
   useEffect(() => {
     clearTimeout(autosaveTimerRef.current);
 
-    if (!isDirty || pipelineSaveValidationError || savingPipeline) {
+    if (!isDirty || pipelineSaveValidationError || savingPipeline || canvasDragActive) {
       return;
     }
 
@@ -745,7 +908,7 @@ export default function App() {
     }, AUTOSAVE_DELAY_MS);
 
     return () => clearTimeout(autosaveTimerRef.current);
-  }, [baselineDraft, draft, handleSavePipeline, isDirty, pipelineSaveValidationError, savingPipeline]);
+  }, [baselineDraft, canvasDragActive, draft, handleSavePipeline, isDirty, pipelineSaveValidationError, savingPipeline]);
 
   const handleSaveProvider = async (providerId: ProviderId, patch: Partial<DashboardState["providers"][ProviderId]>) => {
     try {
@@ -858,8 +1021,91 @@ export default function App() {
     }
   };
 
-  const handleStartRun = async (task: string, inputs?: Record<string, string>) => {
-    if (!selectedPipelineId) {
+  const persistRunDraftInputs = useCallback(
+    (task: string, inputs: Record<string, string>) => {
+      const currentDraft = loadRunDraft(aiWorkflowKey);
+      saveRunDraft(aiWorkflowKey, {
+        ...currentDraft,
+        task: task.trim().length > 0 ? task.trim() : currentDraft.task,
+        inputs: {
+          ...currentDraft.inputs,
+          ...inputs
+        }
+      });
+    },
+    [aiWorkflowKey]
+  );
+
+  const runStartupCheckBeforeStart = useCallback(
+    async ({
+      pipelineId,
+      task,
+      inputs,
+      source,
+      runId
+    }: {
+      pipelineId: string;
+      task: string;
+      inputs: Record<string, string>;
+      source: RunInputModalSource;
+      runId?: string;
+    }): Promise<"pass" | "needs_input" | "blocked"> => {
+      const response = await getRunStartupCheck(pipelineId, task, inputs);
+      const check = response.check;
+
+      if (check.requests.length > 0) {
+        setRunInputModal({
+          source,
+          pipelineId,
+          runId,
+          task,
+          requests: check.requests,
+          blockers: check.blockers,
+          summary: check.summary,
+          inputs,
+          confirmLabel: source === "runtime" ? "Apply & Restart Run" : "Apply & Start Run"
+        });
+        return "needs_input";
+      }
+
+      if (check.status === "blocked") {
+        const firstBlocker = check.blockers[0];
+        setNotice(check.summary || firstBlocker?.message || "Startup check failed.");
+        return "blocked";
+      }
+
+      if (check.status === "needs_input") {
+        setNotice(check.summary || "Additional inputs are required before run.");
+        return "needs_input";
+      }
+
+      return "pass";
+    },
+    []
+  );
+
+  const launchRun = useCallback(async (pipelineId: string, task: string, inputs: Record<string, string>) => {
+    const response = await startRun(pipelineId, task, inputs);
+    setRuns((current) => [response.run, ...current].slice(0, 40));
+    setNotice("Flow run started.");
+
+    const refreshed = await listRuns(40);
+    setRuns(refreshed.runs);
+  }, []);
+
+  const handleStartRun = async (
+    task: string,
+    inputs?: Record<string, string>,
+    options?: {
+      pipelineId?: string;
+      source?: RunInputModalSource;
+      runId?: string;
+      skipAutosaveCheck?: boolean;
+      skipActiveRunCheck?: boolean;
+    }
+  ) => {
+    const targetPipelineId = options?.pipelineId ?? selectedPipelineId;
+    if (!targetPipelineId) {
       if (pipelineSaveValidationError) {
         setNotice(`Fix flow before run: ${pipelineSaveValidationError}`);
       } else {
@@ -868,7 +1114,17 @@ export default function App() {
       return;
     }
 
-    if (savingPipeline || isDirty) {
+    if (!options?.skipActiveRunCheck) {
+      const hasActiveRun = runs.some(
+        (run) => run.pipelineId === targetPipelineId && (run.status === "queued" || run.status === "running")
+      );
+      if (hasActiveRun) {
+        setNotice("This flow is already running.");
+        return;
+      }
+    }
+
+    if (!options?.skipAutosaveCheck && targetPipelineId === selectedPipelineId && (savingPipeline || isDirty)) {
       if (pipelineSaveValidationError) {
         setNotice(`Fix flow before run: ${pipelineSaveValidationError}`);
       } else {
@@ -877,39 +1133,234 @@ export default function App() {
       return;
     }
 
-    setStartingRun(true);
+    const normalizedTask = task.trim();
+    const normalizedInputs = normalizeSmartRunInputs(inputs);
+    persistRunDraftInputs(normalizedTask, normalizedInputs);
+    setStartingRunPipelineId(targetPipelineId);
 
     try {
-      const response = await startRun(selectedPipelineId, task, inputs);
-      setRuns((current) => [response.run, ...current].slice(0, 40));
-      setNotice("Flow run started.");
+      const startupCheckResult = await runStartupCheckBeforeStart({
+        pipelineId: targetPipelineId,
+        task: normalizedTask,
+        inputs: normalizedInputs,
+        source: options?.source ?? "startup",
+        runId: options?.runId
+      });
+      if (startupCheckResult !== "pass") {
+        return;
+      }
 
-      const refreshed = await listRuns(40);
-      setRuns(refreshed.runs);
+      await launchRun(targetPipelineId, normalizedTask, normalizedInputs);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start run";
       setNotice(message);
     } finally {
-      setStartingRun(false);
+      setStartingRunPipelineId((current) => (current === targetPipelineId ? null : current));
     }
   };
 
-  const handleLoadSmartRunPlan = useCallback(
-    async (inputs?: Record<string, string>) => {
-      if (!selectedPipelineId) {
-        setSmartRunPlan(null);
+  const handleStopRun = async (runId?: string) => {
+    const targetRunId = runId ?? activePipelineRun?.id;
+    if (!targetRunId) {
+      setNotice("No active run to stop.");
+      return;
+    }
+
+    const targetRun = runs.find((entry) => entry.id === targetRunId);
+    const targetPipelineId = targetRun?.pipelineId ?? activePipelineRun?.pipelineId ?? selectedPipelineId ?? null;
+    if (targetPipelineId) {
+      setStoppingRunPipelineId(targetPipelineId);
+    }
+
+    try {
+      const response = await stopRun(targetRunId);
+      setRuns((current) => current.map((run) => (run.id === response.run.id ? response.run : run)));
+      setNotice("Flow run stopped.");
+
+      const refreshed = await listRuns(40);
+      setRuns(refreshed.runs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to stop run";
+      setNotice(message);
+    } finally {
+      if (targetPipelineId) {
+        setStoppingRunPipelineId((current) => (current === targetPipelineId ? null : current));
+      }
+    }
+  };
+
+  const handleConfirmRunInputModal = useCallback(
+    async (submittedValues: Record<string, string>) => {
+      if (!runInputModal) {
         return;
       }
 
+      const mergedInputs = normalizeSmartRunInputs({
+        ...runInputModal.inputs,
+        ...submittedValues
+      });
+      persistRunDraftInputs(runInputModal.task, mergedInputs);
+      setProcessingRunInputModal(true);
+
+      try {
+        const modalContext = runInputModal;
+        setRunInputModal(null);
+
+        const secureInputsToSave: Record<string, string> = {};
+        for (const request of modalContext.requests) {
+          if (request.type !== "secret") {
+            continue;
+          }
+
+          const value = mergedInputs[request.key];
+          if (typeof value !== "string" || value.trim().length === 0 || value.trim() === "[secure]") {
+            continue;
+          }
+
+          secureInputsToSave[request.key] = value;
+        }
+
+        if (Object.keys(secureInputsToSave).length > 0) {
+          await savePipelineSecureInputs(modalContext.pipelineId, secureInputsToSave);
+        }
+
+        if (modalContext.source === "runtime" && modalContext.runId) {
+          const run = runs.find((entry) => entry.id === modalContext.runId);
+          if (run && (run.status === "queued" || run.status === "running")) {
+            await handleStopRun(modalContext.runId);
+          }
+        }
+
+        await handleStartRun(modalContext.task, mergedInputs, {
+          pipelineId: modalContext.pipelineId,
+          source: modalContext.source,
+          runId: modalContext.runId,
+          skipAutosaveCheck: modalContext.pipelineId !== selectedPipelineId
+        });
+      } finally {
+        setProcessingRunInputModal(false);
+      }
+    },
+    [handleStartRun, handleStopRun, persistRunDraftInputs, runInputModal, runs, selectedPipelineId]
+  );
+
+  useEffect(() => {
+    if (!selectedPipelineId || runInputModal || processingRunInputModal) {
+      return;
+    }
+
+    const activeRun = runs.find(
+      (run) => run.pipelineId === selectedPipelineId && (run.status === "running" || run.status === "queued")
+    );
+    if (!activeRun) {
+      return;
+    }
+
+    const stepsByLatest = [...activeRun.steps].reverse();
+    for (const step of stepsByLatest) {
+      if (!step.output || step.output.trim().length === 0) {
+        continue;
+      }
+
+      const parsed = parseRunInputRequestsFromText(step.output);
+      if (!parsed || parsed.requests.length === 0) {
+        continue;
+      }
+
+      const signature = `${activeRun.id}:${step.stepId}:${Math.max(1, step.attempts)}:${parsed.requests
+        .map((entry) => entry.key)
+        .join(",")}`;
+      if (runtimeInputPromptSeenRef.current.has(signature)) {
+        continue;
+      }
+
+      runtimeInputPromptSeenRef.current.add(signature);
+      while (runtimeInputPromptSeenRef.current.size > RUNTIME_INPUT_PROMPT_CACHE_LIMIT) {
+        const oldest = runtimeInputPromptSeenRef.current.values().next().value;
+        if (!oldest) {
+          break;
+        }
+        runtimeInputPromptSeenRef.current.delete(oldest);
+      }
+
+      const seededInputs: Record<string, string> = { ...activeRun.inputs };
+      for (const request of parsed.requests) {
+        if (!hasRunInputValue(seededInputs, request.key) && request.defaultValue) {
+          seededInputs[request.key] = request.defaultValue;
+        }
+      }
+
+      setRunInputModal({
+        source: "runtime",
+        pipelineId: activeRun.pipelineId,
+        runId: activeRun.id,
+        task: activeRun.task,
+        requests: parsed.requests,
+        blockers: parsed.blockers,
+        summary: parsed.summary || `${step.stepName} requested additional inputs.`,
+        inputs: normalizeSmartRunInputs(seededInputs),
+        confirmLabel: "Apply & Restart Run"
+      });
+      setNotice(`${step.stepName}: additional input required.`);
+      break;
+    }
+  }, [processingRunInputModal, runInputModal, runs, selectedPipelineId]);
+
+  const handleLoadSmartRunPlan = useCallback(
+    async (inputs?: Record<string, string>, options?: { force?: boolean }) => {
+      if (!selectedPipelineId) {
+        setSmartRunPlan(null);
+        smartRunPlanLastSignatureRef.current = "";
+        smartRunPlanInFlightSignatureRef.current = "";
+        return;
+      }
+
+      const normalizedInputs = normalizeSmartRunInputs(inputs);
+      const signature = buildSmartRunPlanSignature(selectedPipelineId, normalizedInputs);
+      const force = options?.force === true;
+
+      if (!force) {
+        if (smartRunPlanInFlightSignatureRef.current === signature) {
+          return;
+        }
+
+        if (smartRunPlanLastSignatureRef.current === signature && smartRunPlanRef.current) {
+          return;
+        }
+
+        const cachedPlan = smartRunPlanCacheRef.current.get(signature);
+        if (cachedPlan) {
+          setSmartRunPlan(cachedPlan);
+          smartRunPlanLastSignatureRef.current = signature;
+          return;
+        }
+      }
+
+      const requestId = smartRunPlanRequestIdRef.current + 1;
+      smartRunPlanRequestIdRef.current = requestId;
+      smartRunPlanInFlightSignatureRef.current = signature;
       setLoadingSmartRunPlan(true);
       try {
-        const response = await getSmartRunPlan(selectedPipelineId, inputs);
+        const response = await getSmartRunPlan(selectedPipelineId, normalizedInputs);
+        if (requestId !== smartRunPlanRequestIdRef.current) {
+          return;
+        }
         setSmartRunPlan(response.plan);
+        smartRunPlanLastSignatureRef.current = signature;
+        setSmartRunPlanCacheEntry(smartRunPlanCacheRef.current, signature, response.plan);
       } catch (error) {
+        if (requestId !== smartRunPlanRequestIdRef.current) {
+          return;
+        }
         const message = error instanceof Error ? error.message : "Failed to build smart run plan";
         setNotice(message);
       } finally {
-        setLoadingSmartRunPlan(false);
+        if (smartRunPlanInFlightSignatureRef.current === signature) {
+          smartRunPlanInFlightSignatureRef.current = "";
+        }
+        if (requestId === smartRunPlanRequestIdRef.current) {
+          setLoadingSmartRunPlan(false);
+        }
       }
     },
     [selectedPipelineId]
@@ -924,7 +1375,21 @@ export default function App() {
     void handleLoadSmartRunPlan();
   }, [selectedPipelineId, handleLoadSmartRunPlan]);
 
+  useEffect(() => {
+    if (activePanel !== "debug" || !selectedPipelineId) {
+      return;
+    }
+
+    const draft = loadRunDraft(aiWorkflowKey);
+    void handleLoadSmartRunPlan(draft.inputs);
+  }, [activePanel, aiWorkflowKey, handleLoadSmartRunPlan, selectedPipelineId]);
+
   const handleAddStep = () => {
+    if (selectedPipelineEditLocked) {
+      setNotice("This flow is locked while running.");
+      return;
+    }
+
     applyDraftChange((current) => {
       const nextStep = createDraftStep(current.steps.length);
       const linkedSources = new Set(current.links.map((link) => link.sourceStepId));
@@ -948,6 +1413,11 @@ export default function App() {
   };
 
   const handleSpawnOrchestrator = () => {
+    if (selectedPipelineEditLocked) {
+      setNotice("This flow is locked while running.");
+      return;
+    }
+
     applyDraftChange((current) => {
       if (current.steps.some((step) => step.role === "orchestrator")) {
         return current;
@@ -1050,20 +1520,36 @@ export default function App() {
           <div className="my-1 h-px w-6 bg-ink-700/50" />
 
           {/* ── Canvas actions ── */}
-          <ToolButton label="Add step" onClick={handleAddStep}>
+          <ToolButton label="Add step" disabled={selectedPipelineEditLocked} onClick={handleAddStep}>
             <Plus className="h-4 w-4" />
           </ToolButton>
 
-          <ToolButton label={hasOrchestrator ? "Orchestrator exists" : "Spawn orchestrator"} disabled={hasOrchestrator} onClick={handleSpawnOrchestrator}>
+          <ToolButton
+            label={hasOrchestrator ? "Orchestrator exists" : "Spawn orchestrator"}
+            disabled={hasOrchestrator || selectedPipelineEditLocked}
+            onClick={handleSpawnOrchestrator}
+          >
             <Workflow className="h-4 w-4" />
           </ToolButton>
 
-          <ToolButton label="Undo (Cmd/Ctrl+Z)" disabled={!canUndo} onClick={undoDraftChange}>
+          <ToolButton label="Undo (Cmd/Ctrl+Z)" disabled={!canUndo || selectedPipelineEditLocked} onClick={undoDraftChange}>
             <Undo2 className="h-4 w-4" />
           </ToolButton>
 
-          <ToolButton label="Redo (Cmd/Ctrl+Shift+Z)" disabled={!canRedo} onClick={redoDraftChange}>
+          <ToolButton label="Redo (Cmd/Ctrl+Shift+Z)" disabled={!canRedo || selectedPipelineEditLocked} onClick={redoDraftChange}>
             <Redo2 className="h-4 w-4" />
+          </ToolButton>
+
+          <div className="mt-auto h-px w-6 bg-ink-700/50" />
+
+          <ToolButton
+            label="Debug mode"
+            active={activePanel === "debug"}
+            onClick={() => {
+              togglePanel("debug");
+            }}
+          >
+            <Bug className="h-4 w-4" />
           </ToolButton>
       </aside>
 
@@ -1080,9 +1566,12 @@ export default function App() {
       {/* ── Canvas ── */}
       <PipelineEditor
         draft={draft}
+        activeRun={activePipelineRun}
+        readOnly={selectedPipelineEditLocked}
         modelCatalog={MODEL_CATALOG}
         mcpServers={mcpServers.map((s) => ({ id: s.id, name: s.name, enabled: s.enabled }))}
-        onChange={applyDraftChange}
+        onChange={applyEditableDraftChange}
+        onCanvasDragStateChange={setCanvasDragActive}
         onStepPanelChange={handleStepPanelChange}
         stepPanelBlocked={activePanel === "run"}
         className="absolute left-[56px] top-[38px] right-0 bottom-0"
@@ -1091,7 +1580,7 @@ export default function App() {
       {/* ── Top-right run button ── */}
       <div
         className={cn(
-          "absolute top-[46px] z-50 transition-all duration-200 ease-out",
+          "absolute top-[46px] z-50 transition-[right] duration-200 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]",
           activePanel === "run"
             ? "right-[402px]"
             : stepPanelOpen
@@ -1099,11 +1588,35 @@ export default function App() {
               : "right-4"
         )}
       >
+        {selectedPipelineRunActive ? (
+          <div className="flex items-center gap-2">
+            <Tooltip content={runTooltip} side="bottom">
+              <Button variant="secondary" size="sm" onClick={() => togglePanel("run")}>
+                <Play className="h-3.5 w-3.5" />
+                Run
+              </Button>
+            </Tooltip>
+            <Tooltip content={stoppingRun ? "Stopping..." : "Stop current run"} side="bottom">
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={stoppingRun}
+                className="shrink-0 whitespace-nowrap"
+                onClick={() => {
+                  void handleStopRun(activePipelineRun?.id);
+                }}
+              >
+                {stoppingRun ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                {stoppingRun ? "Stopping" : "Stop"}
+              </Button>
+            </Tooltip>
+          </div>
+        ) : (
           <Tooltip content={runTooltip} side="bottom">
             <Button
               variant="secondary"
               size="sm"
-              disabled={runDisabled}
+              disabled={runPanelToggleDisabled}
               onClick={() => togglePanel("run")}
             >
               {startingRun ? (
@@ -1111,10 +1624,11 @@ export default function App() {
               ) : (
                 <Play className="h-3.5 w-3.5" />
               )}
-              {startingRun ? "Running" : "Run"}
+              {startingRun ? "Starting" : "Run"}
             </Button>
           </Tooltip>
-        </div>
+        )}
+      </div>
 
       <SlidePanel open={activePanel !== null && activePanel !== "run"} side="left" className="top-[38px] h-[calc(100%-38px)] w-full max-w-[390px]">
           <div className="flex h-12 items-center justify-between border-b border-ink-800 px-3">
@@ -1127,10 +1641,12 @@ export default function App() {
                     ? "Contracts & Gates"
                   : activePanel === "providers"
                     ? "Provider Auth"
-                    : activePanel === "mcp"
+                  : activePanel === "mcp"
                       ? "MCP & Storage"
                       : activePanel === "ai"
                         ? "AI Builder"
+                        : activePanel === "debug"
+                          ? "Debug"
                         : "Panel"}
             </p>
 
@@ -1149,8 +1665,9 @@ export default function App() {
               <AiBuilderPanel
                 workflowKey={aiWorkflowKey}
                 currentDraft={draft}
+                readOnly={selectedPipelineEditLocked}
                 onApplyDraft={(generatedDraft) => {
-                  applyDraftChange(generatedDraft);
+                  applyEditableDraftChange(generatedDraft);
                 }}
                 onNotice={setNotice}
               />
@@ -1161,6 +1678,7 @@ export default function App() {
                 <PipelineList
                   pipelines={pipelines}
                   selectedId={selectedPipelineId}
+                  activePipelineIds={activeRunPipelineIds}
                   onSelect={selectPipeline}
                   onCreate={handleCreatePipelineDraft}
                   onDelete={(pipelineId) => {
@@ -1171,6 +1689,13 @@ export default function App() {
 
               {activePanel === "flow" ? (
                 <div>
+                  {selectedPipelineEditLocked ? (
+                    <p className="mb-4 rounded-lg bg-amber-500/8 px-3 py-2 text-[11px] text-amber-300">
+                      This flow is running. Flow settings are locked until it finishes or is stopped.
+                    </p>
+                  ) : null}
+
+                  <fieldset disabled={selectedPipelineEditLocked} className={cn(selectedPipelineEditLocked && "opacity-70")}>
                   {/* ── Identity ── */}
                   <section className="space-y-4">
                     <div className="flex items-center gap-2 text-ink-400">
@@ -1268,6 +1793,7 @@ export default function App() {
                       />
                     </label>
                   </section>
+                  </fieldset>
 
                   <div className="my-5 h-px bg-ink-800/60" />
 
@@ -1284,7 +1810,8 @@ export default function App() {
               {activePanel === "contracts" ? (
                 <QualityGatesPanel
                   draft={draft}
-                  onChange={applyDraftChange}
+                  readOnly={selectedPipelineEditLocked}
+                  onChange={applyEditableDraftChange}
                 />
               ) : null}
 
@@ -1312,6 +1839,16 @@ export default function App() {
                 />
               ) : null}
 
+              {activePanel === "debug" ? (
+                <DebugPanel
+                  selectedPipeline={selectedPipeline}
+                  runs={runs}
+                  smartRunPlan={smartRunPlan}
+                  loadingSmartRunPlan={loadingSmartRunPlan}
+                  startingRun={startingRun}
+                />
+              ) : null}
+
             </div>
           )}
       </SlidePanel>
@@ -1331,20 +1868,43 @@ export default function App() {
           </div>
           <div className="h-[calc(100%-48px)] overflow-y-auto p-3">
           <RunPanel
+            draftStorageKey={aiWorkflowKey}
             selectedPipeline={selectedPipeline}
             runs={runs}
             smartRunPlan={smartRunPlan}
             loadingSmartRunPlan={loadingSmartRunPlan}
-            onRefreshSmartRunPlan={async (inputs) => {
-              await handleLoadSmartRunPlan(inputs);
+            onRefreshSmartRunPlan={async (inputs, options) => {
+              await handleLoadSmartRunPlan(inputs, options);
             }}
             onRun={async (task, inputs) => {
               await handleStartRun(task, inputs);
             }}
-            running={startingRun}
+            onStop={async (runId) => {
+              await handleStopRun(runId);
+            }}
+            activeRun={activePipelineRun}
+            startingRun={startingRun}
+            stoppingRun={stoppingRun}
           />
           </div>
       </SlidePanel>
+
+      <RunInputRequestModal
+        open={Boolean(runInputModal)}
+        title={runInputModal?.source === "runtime" ? "Runtime input required" : "Run startup input required"}
+        summary={runInputModal?.summary}
+        requests={runInputModal?.requests ?? []}
+        blockers={runInputModal?.blockers ?? []}
+        initialValues={runInputModal?.inputs}
+        busy={processingRunInputModal}
+        confirmLabel={runInputModal?.confirmLabel}
+        onClose={() => {
+          if (!processingRunInputModal) {
+            setRunInputModal(null);
+          }
+        }}
+        onConfirm={handleConfirmRunInputModal}
+      />
 
       <AnimatePresence>
         {notice ? (

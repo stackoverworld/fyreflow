@@ -13,13 +13,15 @@ interface SegmentedControlProps<T extends string = string> {
   value: T;
   onValueChange: (value: T) => void;
   className?: string;
+  disabled?: boolean;
 }
 
 export function SegmentedControl<T extends string = string>({
   segments,
   value,
   onValueChange,
-  className
+  className,
+  disabled
 }: SegmentedControlProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
@@ -43,11 +45,12 @@ export function SegmentedControl<T extends string = string>({
   return (
     <div
       ref={containerRef}
-      className={cn(
-        "relative flex rounded-xl bg-ink-900/80 p-1",
-        className
-      )}
-    >
+        className={cn(
+          "relative flex rounded-xl bg-ink-900/80 p-1",
+          disabled && "opacity-55",
+          className
+        )}
+      >
       <motion.div
         className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-ink-700/70 shadow-sm"
         animate={{ left: indicator.left, width: indicator.width }}
@@ -61,10 +64,16 @@ export function SegmentedControl<T extends string = string>({
             key={segment.value}
             type="button"
             data-segment
-            onClick={() => onValueChange(segment.value)}
+            disabled={disabled}
+            onClick={() => {
+              if (!disabled) {
+                onValueChange(segment.value);
+              }
+            }}
             className={cn(
               "relative z-10 flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 cursor-pointer",
-              isActive ? "text-ink-50" : "text-ink-500 hover:text-ink-300"
+              isActive ? "text-ink-50" : "text-ink-500 hover:text-ink-300",
+              disabled && "cursor-not-allowed"
             )}
           >
             {segment.icon}

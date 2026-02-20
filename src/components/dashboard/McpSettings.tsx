@@ -1,4 +1,4 @@
-import { Plus, Save, Trash2 } from "lucide-react";
+import { HardDrive, Plus, Save, Server, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { McpServerConfig, McpServerPayload, StorageConfig } from "@/lib/types";
 import { Button } from "@/components/optics/button";
@@ -97,10 +97,13 @@ export function McpSettings({
   );
 
   return (
-    <div className="space-y-6">
+    <div>
       {/* ── Storage section ── */}
-      <section className="space-y-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Shared Storage</p>
+      <section className="space-y-4">
+        <div className="flex items-center gap-2 text-ink-400">
+          <HardDrive className="h-3.5 w-3.5" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Shared Storage</span>
+        </div>
 
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -165,11 +168,14 @@ export function McpSettings({
         </Button>
       </section>
 
-      <div className="h-px bg-ink-800" />
+      <div className="my-5 h-px bg-ink-800/60" />
 
       {/* ── MCP Servers section ── */}
-      <section className="space-y-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">MCP Servers</p>
+      <section className="space-y-4">
+        <div className="flex items-center gap-2 text-ink-400">
+          <Server className="h-3.5 w-3.5" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">MCP Servers</span>
+        </div>
 
         {mcpServers.length === 0 && (
           <p className="text-sm text-ink-500">No MCP servers configured.</p>

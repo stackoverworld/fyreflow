@@ -43,6 +43,7 @@ const MANUAL_LANE_MIN_GAP = 28;
 const TIGHT_HOOK_MAX_BRIDGE = 26;
 const ROUTE_HISTORY_LIMIT = 80;
 
+
 interface FlowNode {
   id: string;
   name: string;
@@ -80,6 +81,8 @@ interface NodePositionUpdate {
 interface PipelineCanvasProps {
   nodes: FlowNode[];
   links: FlowLink[];
+  animatedNodeIds?: string[];
+  animatedLinkIds?: string[];
   selectedNodeId: string | null;
   selectedNodeIds: string[];
   selectedLinkId: string | null;
@@ -88,9 +91,11 @@ interface PipelineCanvasProps {
   onAutoLayout?: () => void;
   onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
   onMoveNodes?: (updates: NodePositionUpdate[]) => void;
+  onDragStateChange?: (active: boolean) => void;
   onConnectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   onDeleteNodes?: (nodeIds: string[]) => void;
   onDeleteLink?: (linkId: string) => void;
+  readOnly?: boolean;
   className?: string;
   showToolbar?: boolean;
   canvasHeight?: number | string;
@@ -108,6 +113,7 @@ interface PanState {
   startPointerY: number;
   startViewportX: number;
   startViewportY: number;
+  clearSelectionOnTap: boolean;
 }
 
 interface ConnectingState {
@@ -618,6 +624,7 @@ function edgeStrokeDasharray(sourceRole: AgentRole, targetRole: AgentRole): stri
 function edgeInvolvesOrchestrator(sourceRole: AgentRole, targetRole: AgentRole): boolean {
   return sourceRole === "orchestrator" || targetRole === "orchestrator";
 }
+
 
 function rectCenter(rect: Rect): Point {
   return {
@@ -1810,6 +1817,8 @@ function buildEdgeRoute(
 export function PipelineCanvas({
   nodes,
   links,
+  animatedNodeIds = [],
+  animatedLinkIds = [],
   selectedNodeId,
   selectedNodeIds,
   selectedLinkId,
@@ -1818,9 +1827,11 @@ export function PipelineCanvas({
   onAutoLayout,
   onMoveNode,
   onMoveNodes,
+  onDragStateChange,
   onConnectNodes,
   onDeleteNodes,
   onDeleteLink,
+  readOnly = false,
   className,
   showToolbar = true,
   canvasHeight = CANVAS_HEIGHT
@@ -1841,6 +1852,28 @@ export function PipelineCanvas({
   const [routeAdjustState, setRouteAdjustState] = useState<RouteAdjustState | null>(null);
   const [toolMode, setToolMode] = useState<"select" | "pan">("pan");
   const [viewport, setViewport] = useState<ViewportState>({ x: 80, y: 80, scale: 1 });
+
+  useEffect(() => {
+    if (!readOnly) {
+      return;
+    }
+
+    setDragState(null);
+    setConnectingState(null);
+    setMarqueeState(null);
+    setRouteAdjustState(null);
+  }, [readOnly]);
+
+  useEffect(() => {
+    onDragStateChange?.(dragState !== null);
+  }, [dragState, onDragStateChange]);
+
+  useEffect(
+    () => () => {
+      onDragStateChange?.(false);
+    },
+    [onDragStateChange]
+  );
 
   useEffect(() => {
     manualRoutePointsRef.current = manualRoutePoints;
@@ -1881,6 +1914,9 @@ export function PipelineCanvas({
   }, []);
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const animatedNodeSet = useMemo(() => new Set(animatedNodeIds), [animatedNodeIds]);
+  const animatedLinkSet = useMemo(() => new Set(animatedLinkIds), [animatedLinkIds]);
+  const animationEnabled = animatedNodeSet.size > 0 || animatedLinkSet.size > 0;
   const selectedNodeSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const canDeleteSelection = selectedNodeIds.length > 0 || Boolean(selectedLinkId);
 
@@ -2003,7 +2039,8 @@ export function PipelineCanvas({
     }
   }, [clearRouteHistory, links]);
 
-  const canUseSmartRoutes = dragState === null && connectingState === null && routeAdjustState === null;
+  const canUseSmartRoutes =
+    (dragState === null || !nodeDragDidMoveRef.current) && connectingState === null && routeAdjustState === null;
 
   useEffect(() => {
     let cancelled = false;
@@ -2088,11 +2125,13 @@ export function PipelineCanvas({
           if (!path || !endPoint) {
             return null;
           }
+          const pathDistance = Math.max(routeLength(route), 1);
 
           return {
             id: link.id,
             path,
             route,
+            pathDistance,
             endPoint,
             axis,
             dasharray: edgeStrokeDasharray(sourceNode.role, targetNode.role),
@@ -2107,6 +2146,7 @@ export function PipelineCanvas({
             id: string;
             path: string;
             route: Point[];
+            pathDistance: number;
             endPoint: Point;
             axis: RouteAxis | null;
             dasharray: string | null;
@@ -2173,6 +2213,10 @@ export function PipelineCanvas({
   }, [onSelectionChange]);
 
   const triggerAutoLayout = useCallback(() => {
+    if (readOnly) {
+      return;
+    }
+
     if (!onAutoLayout) {
       return;
     }
@@ -2183,9 +2227,13 @@ export function PipelineCanvas({
     setRouteAdjustState(null);
     clearRouteHistory();
     onAutoLayout();
-  }, [clearRouteHistory, onAutoLayout]);
+  }, [clearRouteHistory, onAutoLayout, readOnly]);
 
   const handleDeleteSelection = useCallback(() => {
+    if (readOnly) {
+      return;
+    }
+
     if (selectedNodeIds.length > 0) {
       onDeleteNodes?.(selectedNodeIds);
       return;
@@ -2194,7 +2242,7 @@ export function PipelineCanvas({
     if (selectedLinkId) {
       onDeleteLink?.(selectedLinkId);
     }
-  }, [onDeleteLink, onDeleteNodes, selectedLinkId, selectedNodeIds]);
+  }, [onDeleteLink, onDeleteNodes, readOnly, selectedLinkId, selectedNodeIds]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2209,6 +2257,10 @@ export function PipelineCanvas({
       }
 
       const isUndoShortcut = (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "z";
+      if (readOnly && isUndoShortcut) {
+        return;
+      }
+
       if (isUndoShortcut && selectedLinkId) {
         const handled = event.shiftKey ? redoManualRoutePlacement() : undoManualRoutePlacement();
         if (handled) {
@@ -2223,7 +2275,7 @@ export function PipelineCanvas({
         setToolMode("select");
       } else if (event.key === "h" || event.key === "H") {
         setToolMode("pan");
-      } else if ((event.key === "l" || event.key === "L") && onAutoLayout) {
+      } else if ((event.key === "l" || event.key === "L") && onAutoLayout && !readOnly) {
         event.preventDefault();
         triggerAutoLayout();
       }
@@ -2231,7 +2283,7 @@ export function PipelineCanvas({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onAutoLayout, redoManualRoutePlacement, selectedLinkId, triggerAutoLayout, undoManualRoutePlacement]);
+  }, [onAutoLayout, readOnly, redoManualRoutePlacement, selectedLinkId, triggerAutoLayout, undoManualRoutePlacement]);
 
   const marqueeFrame = useMemo(() => {
     if (!marqueeState) {
@@ -2399,6 +2451,15 @@ export function PipelineCanvas({
         }
       }
 
+      if (panState?.clearSelectionOnTap) {
+        const travelX = Math.abs(event.clientX - panState.startPointerX);
+        const travelY = Math.abs(event.clientY - panState.startPointerY);
+        const dragged = travelX > 4 || travelY > 4;
+        if (!dragged) {
+          clearSelection();
+        }
+      }
+
       if (dragState && !nodeDragDidMoveRef.current) {
         onSelectionChange({
           nodeIds: dragState.initialPositions.map((entry) => entry.nodeId),
@@ -2488,6 +2549,78 @@ export function PipelineCanvas({
     return () => canvas.removeEventListener("wheel", onWheel);
   }, []);
 
+  // ── Animate border glow on active nodes + connector shimmer ──
+  useEffect(() => {
+    if (!animationEnabled) {
+      return;
+    }
+
+    let angle = 0;
+    let elapsed = 0;
+    let lastTimestamp: number | null = null;
+    let frame: number;
+    const tick = (timestamp: number) => {
+      if (lastTimestamp === null) {
+        lastTimestamp = timestamp;
+      }
+      const deltaSeconds = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
+      lastTimestamp = timestamp;
+      elapsed += deltaSeconds;
+
+      // ── Node border glow ──
+      const speed = 54 + 21 * Math.sin(elapsed * 1.7);
+      angle = (angle - speed * deltaSeconds + 360) % 360;
+      const glowOpacity = 0.5 + 0.5 * Math.sin(elapsed * 2.3);
+      const glowNodes = canvasRef.current?.querySelectorAll<HTMLElement>(".node-border-glow");
+      if (glowNodes) {
+        for (const el of glowNodes) {
+          el.style.setProperty("--border-angle", `${angle}deg`);
+          el.style.setProperty("--glow-opacity", glowOpacity.toFixed(3));
+        }
+      }
+
+      // ── Connector shimmer (path-following via stroke-dashoffset) ──
+      const sweepDur = 2.5;
+      const pauseDur = 0.7;
+      const totalCycle = sweepDur + pauseDur;
+      const shimmerPhase = elapsed % totalCycle;
+      const shimmerRawT = Math.min(shimmerPhase / sweepDur, 1.0);
+      // ease-in-out
+      const shimmerT = shimmerRawT < 0.5
+        ? 2 * shimmerRawT * shimmerRawT
+        : 1 - Math.pow(-2 * shimmerRawT + 2, 2) / 2;
+
+      // Move dash segment along path — all layers share the same center position
+      const shimmerPaths = canvasRef.current?.querySelectorAll<SVGPathElement>(".link-shimmer-path");
+      if (shimmerPaths) {
+        const margin = 0.28;
+        const center = -margin + shimmerT * (1 + 2 * margin);
+        for (const p of shimmerPaths) {
+          const d = Number(p.dataset.dashLen ?? "0.3");
+          const offset = d / 2 - center;
+          p.style.strokeDashoffset = offset.toFixed(4);
+        }
+      }
+
+      // Fade in / fade out
+      const shimmerGroups = canvasRef.current?.querySelectorAll<SVGGElement>(".link-shimmer-group");
+      if (shimmerGroups) {
+        const fadeZone = 0.12;
+        const fadeIn = Math.min(shimmerRawT / fadeZone, 1);
+        const fadeOut = Math.min((1 - shimmerRawT) / fadeZone, 1);
+        const opacity = shimmerRawT >= 1 ? 0 : Math.min(fadeIn, fadeOut);
+        const val = opacity.toFixed(3);
+        for (const g of shimmerGroups) {
+          g.setAttribute("opacity", val);
+        }
+      }
+
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame((timestamp) => tick(timestamp));
+    return () => cancelAnimationFrame(frame);
+  }, [animationEnabled]);
+
   return (
     <div className={cn("space-y-3", className)}>
       {showToolbar ? (
@@ -2525,7 +2658,8 @@ export function PipelineCanvas({
               startPointerX: event.clientX,
               startPointerY: event.clientY,
               startViewportX: viewport.x,
-              startViewportY: viewport.y
+              startViewportY: viewport.y,
+              clearSelectionOnTap: toolMode === "pan" && event.button === 0 && !event.altKey
             });
             return;
           }
@@ -2601,16 +2735,22 @@ export function PipelineCanvas({
                 strokeLinejoin="round"
               />
             </marker>
+            <filter id="link-shimmer-soft" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="10" />
+            </filter>
+            <filter id="link-shimmer-mid" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="5" />
+            </filter>
           </defs>
 
           <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
             {renderedLinks.map((link) => {
               const isSelected = selectedLinkId === link.id;
+              const isAnimated = animatedLinkSet.has(link.id);
               const baseStrokeWidth = link.hasOrchestrator ? 2.35 : 1.95;
               const selectedStrokeWidth = link.hasOrchestrator ? 3.35 : 2.85;
               const edgeOpacity = link.hasOrchestrator ? 0.98 : 0.88;
               const selectedHaloOpacity = link.hasOrchestrator ? 0.24 : 0.18;
-
               return (
                 <g key={link.id}>
                   {isSelected ? (
@@ -2638,6 +2778,57 @@ export function PipelineCanvas({
                     opacity={edgeOpacity}
                     markerEnd={`url(#${link.visual.markerId})`}
                   />
+
+                  {/* ── Shimmer (3-layer gaussian profile, path-following) ── */}
+                  {isAnimated ? <g className="link-shimmer-group" opacity="0">
+                    {/* Outermost: wide, heavy blur, very dim */}
+                    <path
+                      className="link-shimmer-path"
+                      d={link.path}
+                      fill="none"
+                      stroke="white"
+                      strokeWidth={(isSelected ? selectedStrokeWidth : baseStrokeWidth) + 8}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      vectorEffect="non-scaling-stroke"
+                      pathLength={1}
+                      strokeDasharray="0.45 1.5"
+                      data-dash-len="0.45"
+                      filter="url(#link-shimmer-soft)"
+                      opacity={0.1}
+                    />
+                    {/* Middle: medium width, medium blur, low opacity */}
+                    <path
+                      className="link-shimmer-path"
+                      d={link.path}
+                      fill="none"
+                      stroke="white"
+                      strokeWidth={(isSelected ? selectedStrokeWidth : baseStrokeWidth) + 4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      vectorEffect="non-scaling-stroke"
+                      pathLength={1}
+                      strokeDasharray="0.26 1.5"
+                      data-dash-len="0.26"
+                      filter="url(#link-shimmer-mid)"
+                      opacity={0.2}
+                    />
+                    {/* Core: narrow, no blur, brighter */}
+                    <path
+                      className="link-shimmer-path"
+                      d={link.path}
+                      fill="none"
+                      stroke="white"
+                      strokeWidth={(isSelected ? selectedStrokeWidth : baseStrokeWidth) + 1}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      vectorEffect="non-scaling-stroke"
+                      pathLength={1}
+                      strokeDasharray="0.1 1.5"
+                      data-dash-len="0.1"
+                      opacity={0.4}
+                    />
+                  </g> : null}
                 </g>
               );
             })}
@@ -2721,6 +2912,15 @@ export function PipelineCanvas({
                     }
 
                     event.stopPropagation();
+                    if (readOnly) {
+                      onSelectionChange({
+                        nodeIds: [],
+                        primaryNodeId: null,
+                        linkId: link.id
+                      });
+                      return;
+                    }
+
                     const worldPoint = toWorldPoint(event);
                     if (selectedLinkId === link.id && worldPoint) {
                       routeAdjustStartSnapshotRef.current = cloneManualRoutePoints(manualRoutePointsRef.current);
@@ -2756,6 +2956,10 @@ export function PipelineCanvas({
                     pointerEvents="all"
                     className="pointer-events-auto cursor-grab active:cursor-grabbing"
                     onPointerDown={(event) => {
+                      if (readOnly) {
+                        return;
+                      }
+
                       if (event.button !== 0) {
                         return;
                       }
@@ -2782,6 +2986,10 @@ export function PipelineCanvas({
                       });
                     }}
                     onDoubleClick={(event) => {
+                      if (readOnly) {
+                        return;
+                      }
+
                       event.stopPropagation();
                       const previous = cloneManualRoutePoints(manualRoutePointsRef.current);
                       if (!(link.id in previous)) {
@@ -2814,6 +3022,15 @@ export function PipelineCanvas({
                     }
 
                     event.stopPropagation();
+                    if (readOnly) {
+                      onSelectionChange({
+                        nodeIds: [],
+                        primaryNodeId: null,
+                        linkId: link.id
+                      });
+                      return;
+                    }
+
                     onSelectionChange({
                       nodeIds: [],
                       primaryNodeId: null,
@@ -2838,7 +3055,8 @@ export function PipelineCanvas({
               key={node.id}
               className={cn(
                 "group pointer-events-auto absolute select-none rounded-2xl border bg-ink-900/95 p-3 shadow-lg transition-colors",
-                "cursor-grab active:cursor-grabbing",
+                animatedNodeSet.has(node.id) && "node-border-glow",
+                readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing",
                 selectedNodeSet.has(node.id)
                   ? selectedNodeId === node.id
                     ? "border-ember-500 ring-2 ring-ember-500/40"
@@ -2857,6 +3075,14 @@ export function PipelineCanvas({
                 }
 
                 event.stopPropagation();
+                if (readOnly) {
+                  onSelectionChange({
+                    nodeIds: [node.id],
+                    primaryNodeId: node.id,
+                    linkId: null
+                  });
+                  return;
+                }
 
                 const target = event.target as HTMLElement;
                 if (target.closest("[data-node-control='true']")) {
@@ -2933,6 +3159,10 @@ export function PipelineCanvas({
                 )}
                 style={{ width: PORT_HIT_SIZE, height: PORT_HIT_SIZE }}
                 onPointerUp={(event) => {
+                  if (readOnly) {
+                    return;
+                  }
+
                   event.stopPropagation();
                   if (connectingState && connectingState.sourceNodeId !== node.id) {
                     onConnectNodes(connectingState.sourceNodeId, node.id);
@@ -2954,10 +3184,16 @@ export function PipelineCanvas({
                   "absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 rounded-full border transition-opacity",
                   connectingState?.sourceNodeId === node.id
                     ? "border-ember-600/80 bg-ember-700/20 opacity-100"
-                    : "border-ember-500/40 bg-ember-700/10 opacity-0 group-hover:opacity-100"
+                    : readOnly
+                      ? "border-transparent bg-transparent opacity-0"
+                      : "border-ember-500/40 bg-ember-700/10 opacity-0 group-hover:opacity-100"
                 )}
                 style={{ width: PORT_HIT_SIZE, height: PORT_HIT_SIZE }}
                 onPointerDown={(event) => {
+                  if (readOnly) {
+                    return;
+                  }
+
                   if (event.button !== 0) {
                     return;
                   }
@@ -2995,6 +3231,10 @@ export function PipelineCanvas({
                         event.stopPropagation();
                       }}
                       onClick={(event) => {
+                        if (readOnly) {
+                          return;
+                        }
+
                         event.stopPropagation();
                         onDeleteNodes([node.id]);
                       }}

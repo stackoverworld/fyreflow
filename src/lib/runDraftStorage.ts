@@ -47,6 +47,23 @@ function emptyRunDraft(): RunDraftState {
   };
 }
 
+function normalizeDraft(raw: unknown): RunDraftState {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return emptyRunDraft();
+  }
+
+  const record = raw as Record<string, unknown>;
+  return {
+    task: typeof record.task === "string" ? record.task : "",
+    mode: record.mode === "quick" ? "quick" : "smart",
+    inputs: normalizeInputs(record.inputs)
+  };
+}
+
+function hasMeaningfulDraft(draft: RunDraftState): boolean {
+  return draft.task.trim().length > 0 || Object.keys(draft.inputs).length > 0 || draft.mode === "quick";
+}
+
 export function loadRunDraft(scopeId: string | undefined): RunDraftState {
   if (typeof window === "undefined" || !scopeId) {
     return emptyRunDraft();
@@ -59,16 +76,7 @@ export function loadRunDraft(scopeId: string | undefined): RunDraftState {
     }
 
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return emptyRunDraft();
-    }
-
-    const record = parsed as Record<string, unknown>;
-    return {
-      task: typeof record.task === "string" ? record.task : "",
-      mode: record.mode === "quick" ? "quick" : "smart",
-      inputs: normalizeInputs(record.inputs)
-    };
+    return normalizeDraft(parsed);
   } catch {
     return emptyRunDraft();
   }
@@ -90,5 +98,51 @@ export function saveRunDraft(scopeId: string | undefined, draft: RunDraftState):
     );
   } catch {
     // Ignore localStorage errors.
+  }
+}
+
+export function moveRunDraft(sourceScopeId: string | undefined, targetScopeId: string | undefined): void {
+  if (
+    typeof window === "undefined" ||
+    !sourceScopeId ||
+    !targetScopeId ||
+    sourceScopeId === targetScopeId
+  ) {
+    return;
+  }
+
+  try {
+    const sourceKey = runDraftKey(sourceScopeId);
+    const targetKey = runDraftKey(targetScopeId);
+    const sourceRaw = window.localStorage.getItem(sourceKey);
+
+    if (!sourceRaw) {
+      return;
+    }
+
+    const targetRaw = window.localStorage.getItem(targetKey);
+    if (!targetRaw) {
+      window.localStorage.setItem(targetKey, sourceRaw);
+      window.localStorage.removeItem(sourceKey);
+      return;
+    }
+
+    const sourceDraft = normalizeDraft(JSON.parse(sourceRaw) as unknown);
+    const targetDraft = normalizeDraft(JSON.parse(targetRaw) as unknown);
+    const targetHasData = hasMeaningfulDraft(targetDraft);
+
+    const merged: RunDraftState = {
+      task: targetDraft.task.trim().length > 0 ? targetDraft.task : sourceDraft.task,
+      mode: targetHasData ? targetDraft.mode : sourceDraft.mode,
+      inputs: {
+        ...sourceDraft.inputs,
+        ...targetDraft.inputs
+      }
+    };
+
+    saveRunDraft(targetScopeId, merged);
+    window.localStorage.removeItem(sourceKey);
+  } catch {
+    // Ignore migration failures so flow save still succeeds.
   }
 }

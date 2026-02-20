@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { PipelineStep, ProviderConfig, ReasoningEffort } from "./types.js";
 import { getCachedCodexAccessToken } from "./oauth.js";
+import { createAbortError, mergeAbortSignals } from "./abort.js";
 
 const OPENAI_DEFAULT_URL = "https://api.openai.com/v1";
 const CLAUDE_DEFAULT_URL = "https://api.anthropic.com/v1";
@@ -17,6 +18,7 @@ export interface ProviderExecutionInput {
   context: string;
   task: string;
   outputMode?: "markdown" | "json";
+  signal?: AbortSignal;
 }
 
 interface CommandResult {
@@ -179,7 +181,13 @@ function buildClaudeSystemPrompt(step: PipelineStep, outputMode: ProviderExecuti
   return notes.join("\n\n");
 }
 
-function runCommand(command: string, args: string[], stdinInput?: string, timeoutMs = 240000): Promise<CommandResult> {
+function runCommand(
+  command: string,
+  args: string[],
+  stdinInput?: string,
+  timeoutMs = 240000,
+  signal?: AbortSignal
+): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"]
@@ -187,11 +195,44 @@ function runCommand(command: string, args: string[], stdinInput?: string, timeou
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (signal && abortListener) {
+        signal.removeEventListener("abort", abortListener);
+      }
+      fn();
+    };
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error(`${command} timed out`));
+      finish(() => reject(new Error(`${command} timed out`)));
     }, timeoutMs);
+
+    const abortListener = signal
+      ? () => {
+          child.kill("SIGTERM");
+          finish(() => reject(createAbortError(`${command} aborted`)));
+        }
+      : null;
+
+    if (signal?.aborted) {
+      if (abortListener) {
+        abortListener();
+      } else {
+        finish(() => reject(createAbortError(`${command} aborted`)));
+      }
+      return;
+    }
+
+    if (signal && abortListener) {
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
 
     child.stdout.on("data", (chunk: Buffer | string) => {
       stdout += chunk.toString();
@@ -202,19 +243,16 @@ function runCommand(command: string, args: string[], stdinInput?: string, timeou
     });
 
     child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finish(() => reject(error));
     });
 
     child.once("close", (code) => {
-      clearTimeout(timer);
-
       if (code === 0) {
-        resolve({ stdout, stderr });
+        finish(() => resolve({ stdout, stderr }));
         return;
       }
 
-      reject(new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 520)}`));
+      finish(() => reject(new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 520)}`)));
     });
 
     if (stdinInput && stdinInput.length > 0) {
@@ -248,7 +286,8 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
         "-"
       ],
       prompt,
-      300000
+      300000,
+      input.signal
     );
 
     const output = await fs.readFile(outputPath, "utf8");
@@ -277,7 +316,7 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
 
   args.push(prompt);
 
-  const { stdout } = await runCommand("claude", args, undefined, 300000);
+  const { stdout } = await runCommand("claude", args, undefined, 300000, input.signal);
   const trimmed = stdout.trim();
   if (trimmed.length > 0) {
     return trimmed;
@@ -311,7 +350,8 @@ async function executeOpenAIWithApi(input: ProviderExecutionInput, credential: s
       reasoning: {
         effort: mapOpenAIReasoningEffort(input.step.reasoningEffort)
       }
-    })
+    }),
+    signal: input.signal
   });
 
   if (!response.ok) {
@@ -364,10 +404,12 @@ async function executeClaudeWithApi(
     };
   }
 
+  const requestSignal = mergeAbortSignals([input.signal]);
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(requestBody),
+    signal: requestSignal
   });
 
   if (!response.ok) {

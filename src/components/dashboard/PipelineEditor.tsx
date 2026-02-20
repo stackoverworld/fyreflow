@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   Bot,
   Brain,
@@ -13,7 +13,7 @@ import {
   Zap
 } from "lucide-react";
 import { getDefaultContextWindowForModel, getDefaultModelForProvider, type ModelCatalogEntry } from "@/lib/modelCatalog";
-import type { AgentRole, LinkCondition, PipelinePayload, ProviderId, ReasoningEffort } from "@/lib/types";
+import type { AgentRole, LinkCondition, PipelinePayload, PipelineRun, ProviderId, ReasoningEffort } from "@/lib/types";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Textarea } from "@/components/optics/textarea";
@@ -28,6 +28,8 @@ import { PipelineCanvas } from "@/components/dashboard/PipelineCanvas";
 
 interface PipelineEditorProps {
   draft: PipelinePayload;
+  activeRun?: PipelineRun | null;
+  readOnly?: boolean;
   modelCatalog: Record<ProviderId, ModelCatalogEntry[]>;
   mcpServers: Array<{
     id: string;
@@ -35,6 +37,7 @@ interface PipelineEditorProps {
     enabled: boolean;
   }>;
   onChange: (next: PipelinePayload) => void;
+  onCanvasDragStateChange?: (active: boolean) => void;
   onStepPanelChange?: (open: boolean) => void;
   stepPanelBlocked?: boolean;
   className?: string;
@@ -213,11 +216,38 @@ function parseLineList(raw: string, max = 40): string[] {
     .slice(0, max);
 }
 
+function parseIsoTimestamp(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function routeConditionMatchesOutcome(
+  condition: LinkCondition | undefined,
+  outcome: PipelineRun["steps"][number]["workflowOutcome"]
+): boolean {
+  if (condition === "on_pass") {
+    return outcome === "pass";
+  }
+
+  if (condition === "on_fail") {
+    return outcome === "fail";
+  }
+
+  return true;
+}
+
 export function PipelineEditor({
   draft,
+  activeRun,
+  readOnly = false,
   modelCatalog,
   mcpServers,
   onChange,
+  onCanvasDragStateChange,
   onStepPanelChange,
   stepPanelBlocked,
   className
@@ -261,7 +291,7 @@ export function PipelineEditor({
     });
   }, [draft.steps, selectedStep]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onStepPanelChange?.(!!selectedStep);
   }, [onStepPanelChange, selectedStep]);
 
@@ -321,6 +351,90 @@ export function PipelineEditor({
       });
   }, [draft.links, draft.steps]);
 
+  const animatedNodeIds = useMemo(() => {
+    if (!activeRun || activeRun.status !== "running") {
+      return [];
+    }
+
+    return activeRun.steps.filter((step) => step.status === "running").map((step) => step.stepId);
+  }, [activeRun]);
+
+  const animatedLinkIds = useMemo(() => {
+    if (!activeRun || activeRun.status !== "running") {
+      return [];
+    }
+
+    const runningSteps = activeRun.steps.filter((step) => step.status === "running");
+    if (runningSteps.length === 0) {
+      return [];
+    }
+
+    const runStepById = new Map(activeRun.steps.map((step) => [step.stepId, step]));
+    const animated = new Set<string>();
+
+    for (const targetStep of runningSteps) {
+      const targetStartedAt = parseIsoTimestamp(targetStep.startedAt);
+      const incomingCandidates = canvasLinks
+        .map((link) => {
+          if (link.targetStepId !== targetStep.stepId) {
+            return null;
+          }
+
+          const sourceStep = runStepById.get(link.sourceStepId);
+          if (!sourceStep) {
+            return null;
+          }
+
+          if (sourceStep.status !== "completed" && sourceStep.status !== "failed") {
+            return null;
+          }
+
+          if (!routeConditionMatchesOutcome(link.condition, sourceStep.workflowOutcome)) {
+            return null;
+          }
+
+          const sourceFinishedAt = parseIsoTimestamp(sourceStep.finishedAt);
+          if (
+            targetStartedAt !== null &&
+            sourceFinishedAt !== null &&
+            sourceFinishedAt > targetStartedAt + 1500
+          ) {
+            return null;
+          }
+
+          return {
+            linkId: link.id,
+            sourceFinishedAt
+          };
+        })
+        .filter((entry): entry is { linkId: string; sourceFinishedAt: number | null } => entry !== null);
+
+      if (incomingCandidates.length === 0) {
+        continue;
+      }
+
+      const timestampedCandidates = incomingCandidates.filter(
+        (entry): entry is { linkId: string; sourceFinishedAt: number } => entry.sourceFinishedAt !== null
+      );
+
+      if (timestampedCandidates.length === 0) {
+        for (const entry of incomingCandidates) {
+          animated.add(entry.linkId);
+        }
+        continue;
+      }
+
+      const latestFinishedAt = Math.max(...timestampedCandidates.map((entry) => entry.sourceFinishedAt));
+      for (const entry of timestampedCandidates) {
+        if (latestFinishedAt - entry.sourceFinishedAt <= 1500) {
+          animated.add(entry.linkId);
+        }
+      }
+    }
+
+    return [...animated];
+  }, [activeRun, canvasLinks]);
+
   const selectedModelMeta = selectedStep
     ? getModelMeta(modelCatalog, selectedStep.providerId, selectedStep.model)
     : undefined;
@@ -341,6 +455,10 @@ export function PipelineEditor({
   }, [draft.links, selectedStep]);
 
   const removeStepsByIds = useCallback((stepIds: string[]) => {
+    if (readOnly) {
+      return;
+    }
+
     const toDelete = new Set(stepIds);
     if (toDelete.size === 0) {
       return;
@@ -373,19 +491,23 @@ export function PipelineEditor({
     setSelectedStepId(null);
     setSelectedStepIds([]);
     setSelectedLinkId(null);
-  }, [draft, modelCatalog, onChange]);
+  }, [draft, modelCatalog, onChange, readOnly]);
 
   const removeStepById = useCallback((stepId: string) => {
     removeStepsByIds([stepId]);
   }, [removeStepsByIds]);
 
   const removeLinkById = useCallback((linkId: string) => {
+    if (readOnly) {
+      return;
+    }
+
     onChange({
       ...draft,
       links: draft.links.filter((link, index) => resolveCanvasLinkId(link, index) !== linkId)
     });
     setSelectedLinkId(null);
-  }, [draft, onChange]);
+  }, [draft, onChange, readOnly]);
 
   const removeSelectedStep = () => {
     if (!selectedStep) {
@@ -396,12 +518,20 @@ export function PipelineEditor({
   };
 
   const applyAutoLayout = useCallback(() => {
+    if (readOnly) {
+      return;
+    }
+
     void autoLayoutPipelineDraftSmart(draft).then((nextDraft) => {
       onChange(nextDraft);
     });
-  }, [draft, onChange]);
+  }, [draft, onChange, readOnly]);
 
   useEffect(() => {
+    if (readOnly) {
+      return;
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Delete" && event.key !== "Backspace") {
         return;
@@ -436,7 +566,7 @@ export function PipelineEditor({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [removeLinkById, removeStepById, removeStepsByIds, selectedLinkId, selectedStepId, selectedStepIds]);
+  }, [readOnly, removeLinkById, removeStepById, removeStepsByIds, selectedLinkId, selectedStepId, selectedStepIds]);
 
   return (
     <div className={cn("relative", className)}>
@@ -444,10 +574,13 @@ export function PipelineEditor({
         <PipelineCanvas
           nodes={canvasNodes}
           links={canvasLinks}
+          animatedNodeIds={animatedNodeIds}
+          animatedLinkIds={animatedLinkIds}
+          readOnly={readOnly}
           selectedNodeId={selectedStepId}
           selectedNodeIds={selectedStepIds}
           selectedLinkId={selectedLinkId}
-          onAutoLayout={applyAutoLayout}
+          onAutoLayout={readOnly ? undefined : applyAutoLayout}
           onSelectionChange={({ nodeIds, primaryNodeId, linkId, isDragStart }) => {
             setSelectedStepIds(nodeIds);
             if (!isDragStart) {
@@ -457,12 +590,20 @@ export function PipelineEditor({
           }}
           onAddNode={() => {}}
           onMoveNode={(nodeId, position) => {
+            if (readOnly) {
+              return;
+            }
+
             onChange({
               ...draft,
               steps: draft.steps.map((step) => (step.id === nodeId ? { ...step, position } : step))
             });
           }}
           onMoveNodes={(updates) => {
+            if (readOnly) {
+              return;
+            }
+
             const updatesById = new Map(updates.map((entry) => [entry.nodeId, entry.position]));
             onChange({
               ...draft,
@@ -472,14 +613,19 @@ export function PipelineEditor({
               })
             });
           }}
+          onDragStateChange={onCanvasDragStateChange}
           onConnectNodes={(sourceNodeId, targetNodeId) => {
+            if (readOnly) {
+              return;
+            }
+
             onChange({
               ...draft,
               links: connectNodes(draft.links, sourceNodeId, targetNodeId)
             });
           }}
-          onDeleteNodes={removeStepsByIds}
-          onDeleteLink={removeLinkById}
+          onDeleteNodes={readOnly ? undefined : removeStepsByIds}
+          onDeleteLink={readOnly ? undefined : removeLinkById}
           showToolbar={false}
           canvasHeight="100%"
           className="h-full"
@@ -503,6 +649,7 @@ export function PipelineEditor({
                   <button
                     type="button"
                     onClick={removeSelectedStep}
+                    disabled={readOnly}
                     className="rounded-lg p-1.5 text-ink-600 transition-colors hover:bg-red-500/10 hover:text-red-400"
                     aria-label="Remove step"
                   >
@@ -519,6 +666,13 @@ export function PipelineEditor({
                 </div>
               </div>
 
+              {readOnly ? (
+                <p className="mb-4 rounded-lg bg-amber-500/8 px-3 py-2 text-[11px] text-amber-300">
+                  This flow is running. Step edits are locked until it finishes or is stopped.
+                </p>
+              ) : null}
+
+              <fieldset disabled={readOnly} className={cn(readOnly && "opacity-70")}>
               {/* ── Identity ── */}
               <section className="space-y-4">
                 <div className="flex items-center gap-2 text-ink-400">
@@ -1013,7 +1167,7 @@ export function PipelineEditor({
                         <div key={`${link.id ?? `${link.sourceStepId}-${link.targetStepId}`}-out`} className="flex items-center gap-2 rounded-lg bg-ink-800/20 px-2 py-1.5">
                           <p className="min-w-0 flex-1 truncate text-xs text-ink-200">{targetName}</p>
                           <Select
-                            className="w-[96px]"
+                            className="w-[112px]"
                             value={link.condition ?? "always"}
                             onValueChange={(value) => {
                               if (linkIndex < 0) {
@@ -1069,6 +1223,7 @@ export function PipelineEditor({
                   <p className="py-2 text-center text-[11px] text-ink-600">No connections yet. Link steps by dragging on the canvas or using the form above.</p>
                 )}
               </section>
+              </fieldset>
             </div>
           ) : null}
         </SlidePanel>

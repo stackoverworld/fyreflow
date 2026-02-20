@@ -1,6 +1,7 @@
 import type {
   DashboardState,
   Pipeline,
+  ProviderId,
   SmartRunCheck,
   SmartRunCheckStatus,
   SmartRunField,
@@ -8,6 +9,7 @@ import type {
   SmartRunPlan
 } from "./types.js";
 import { extractInputKeysFromText, normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import { getProviderOAuthStatus } from "./oauth.js";
 
 interface MutableField {
   key: string;
@@ -233,13 +235,6 @@ function collectFieldsFromPipeline(pipeline: Pipeline): SmartRunField[] {
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
-function credentialAvailable(raw: { authMode: string; apiKey: string; oauthToken: string }): boolean {
-  if (raw.authMode === "oauth") {
-    return raw.oauthToken.trim().length > 0;
-  }
-  return raw.apiKey.trim().length > 0;
-}
-
 function makeCheck(
   id: string,
   title: string,
@@ -250,10 +245,10 @@ function makeCheck(
   return { id, title, status, message, details };
 }
 
-function collectRuntimeChecks(pipeline: Pipeline, state: DashboardState): SmartRunCheck[] {
+async function collectRuntimeChecks(pipeline: Pipeline, state: DashboardState): Promise<SmartRunCheck[]> {
   const checks: SmartRunCheck[] = [];
 
-  const providerIds = [...new Set(pipeline.steps.map((step) => step.providerId))];
+  const providerIds = [...new Set(pipeline.steps.map((step) => step.providerId))] as ProviderId[];
   for (const providerId of providerIds) {
     const provider = state.providers[providerId];
     if (!provider) {
@@ -268,16 +263,46 @@ function collectRuntimeChecks(pipeline: Pipeline, state: DashboardState): SmartR
       continue;
     }
 
-    const available = credentialAvailable(provider);
+    let available = false;
+    let message = `No credentials configured (${provider.authMode}).`;
+    let details = "Open Provider Auth and configure credentials.";
+
+    if (provider.authMode === "oauth") {
+      const hasStoredOAuthToken = provider.oauthToken.trim().length > 0;
+      if (hasStoredOAuthToken) {
+        available = true;
+        message = "Authentication configured.";
+        details = provider.defaultModel;
+      } else {
+        try {
+          const oauthStatus = await getProviderOAuthStatus(providerId);
+          if (oauthStatus.canUseCli || oauthStatus.canUseApi) {
+            available = true;
+            message = "Authentication configured via provider CLI.";
+            details = oauthStatus.message;
+          } else {
+            details = oauthStatus.message || details;
+          }
+        } catch {
+          // Fallback: keep the default fail message/details.
+        }
+      }
+    } else {
+      const hasApiKey = provider.apiKey.trim().length > 0;
+      available = hasApiKey;
+      if (available) {
+        message = "Authentication configured.";
+        details = provider.defaultModel;
+      }
+    }
+
     checks.push(
       makeCheck(
         `provider:${providerId}`,
         `Provider ${provider.label}`,
         available ? "pass" : "fail",
-        available
-          ? "Authentication configured."
-          : `No credentials configured (${provider.authMode}).`,
-        available ? provider.defaultModel : "Open Provider Auth and configure credentials."
+        message,
+        details
       )
     );
   }
@@ -374,14 +399,15 @@ function validateRequiredInputs(fields: SmartRunField[], runInputs: RunInputs): 
   return checks;
 }
 
-export function buildSmartRunPlan(
+export async function buildSmartRunPlan(
   pipeline: Pipeline,
   state: DashboardState,
   rawInputs?: unknown
-): SmartRunPlan {
+): Promise<SmartRunPlan> {
   const fields = collectFieldsFromPipeline(pipeline);
   const runInputs = normalizeRunInputs(rawInputs);
-  const checks = [...collectRuntimeChecks(pipeline, state), ...validateRequiredInputs(fields, runInputs)];
+  const runtimeChecks = await collectRuntimeChecks(pipeline, state);
+  const checks = [...runtimeChecks, ...validateRequiredInputs(fields, runInputs)];
   const canRun = checks.every((check) => check.status !== "fail");
 
   return {

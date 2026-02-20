@@ -12,6 +12,8 @@ export type QualityGateTarget = "any_step" | string;
 export type QualityGateResultStatus = "pass" | "fail";
 export type SmartRunFieldType = "text" | "multiline" | "secret" | "path" | "url";
 export type SmartRunCheckStatus = "pass" | "warn" | "fail";
+export type RunInputRequestType = SmartRunFieldType | "select";
+export type RunStartupStatus = "pass" | "needs_input" | "blocked";
 
 export interface ProviderConfig {
   id: ProviderId;
@@ -89,7 +91,7 @@ export interface Pipeline {
 }
 
 export type StepRunStatus = "pending" | "running" | "completed" | "failed";
-export type RunStatus = "queued" | "running" | "completed" | "failed";
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export interface StepQualityGateResult {
   gateId: string;
@@ -152,6 +154,40 @@ export interface SmartRunPlan {
   fields: SmartRunField[];
   checks: SmartRunCheck[];
   canRun: boolean;
+}
+
+export interface RunInputRequestOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface RunInputRequest {
+  key: string;
+  label: string;
+  type: RunInputRequestType;
+  required: boolean;
+  reason: string;
+  placeholder?: string;
+  options?: RunInputRequestOption[];
+  allowCustom?: boolean;
+  defaultValue?: string;
+}
+
+export interface RunStartupBlocker {
+  id: string;
+  title: string;
+  message: string;
+  details?: string;
+}
+
+export interface RunStartupCheck {
+  status: RunStartupStatus;
+  summary: string;
+  requests: RunInputRequest[];
+  blockers: RunStartupBlocker[];
+  source: "deterministic" | "model" | "merged";
+  notes: string[];
 }
 
 export interface McpServerConfig {

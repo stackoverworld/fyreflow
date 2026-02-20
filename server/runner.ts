@@ -19,12 +19,15 @@ import { orderPipelineSteps } from "./pipelineGraph.js";
 import { executeProviderStep } from "./providers.js";
 import { executeMcpToolCall, type McpToolCall, type McpToolResult } from "./mcp.js";
 import { formatRunInputsSummary, normalizeRunInputs, replaceInputTokens, type RunInputs } from "./runInputs.js";
+import { createAbortError, isAbortError, mergeAbortSignals } from "./abort.js";
 
 interface RunPipelineInput {
   store: LocalStore;
   runId: string;
   pipeline: Pipeline;
   task: string;
+  runInputs?: RunInputs;
+  abortSignal?: AbortSignal;
 }
 
 interface RuntimeConfig {
@@ -135,22 +138,6 @@ function routeMatchesCondition(condition: PipelineLink["condition"], outcome: Wo
   }
 
   return true;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-
-    promise
-      .then((value) => {
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
 }
 
 function safeStorageSegment(value: string): string {
@@ -847,29 +834,95 @@ function appendRunLog(store: LocalStore, runId: string, message: string): void {
 }
 
 function markRunStart(store: LocalStore, runId: string): void {
-  store.updateRun(runId, (run) => ({
-    ...run,
-    status: "running",
-    logs: [...run.logs, `Run started at ${nowIso()}`]
-  }));
+  const startedAt = nowIso();
+  store.updateRun(runId, (run) => {
+    if (run.status === "cancelled" || run.status === "failed" || run.status === "completed") {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "running",
+      logs: [...run.logs, `Run started at ${startedAt}`]
+    };
+  });
 }
 
 function markRunCompleted(store: LocalStore, runId: string): void {
-  store.updateRun(runId, (run) => ({
-    ...run,
-    status: "completed",
-    finishedAt: nowIso(),
-    logs: [...run.logs, `Run completed at ${nowIso()}`]
-  }));
+  const finishedAt = nowIso();
+  store.updateRun(runId, (run) => {
+    if (run.status === "cancelled") {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "completed",
+      finishedAt,
+      logs: [...run.logs, `Run completed at ${finishedAt}`]
+    };
+  });
 }
 
 function markRunFailed(store: LocalStore, runId: string, reason: string): void {
-  store.updateRun(runId, (run) => ({
-    ...run,
-    status: "failed",
-    finishedAt: nowIso(),
-    logs: [...run.logs, `Run failed: ${reason}`]
-  }));
+  const failedAt = nowIso();
+  store.updateRun(runId, (run) => {
+    if (run.status === "cancelled") {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "failed",
+      finishedAt: failedAt,
+      logs: [...run.logs, `Run failed: ${reason}`]
+    };
+  });
+}
+
+function markRunCancelled(store: LocalStore, runId: string, reason: string): void {
+  const cancelledAt = nowIso();
+  store.updateRun(runId, (run) => {
+    if (run.status === "cancelled") {
+      return run;
+    }
+
+    if (run.status !== "queued" && run.status !== "running") {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "cancelled",
+      finishedAt: run.finishedAt ?? cancelledAt,
+      logs: [...run.logs, `Run stopped: ${reason}`],
+      steps: run.steps.map((step) =>
+        step.status === "running"
+          ? {
+              ...step,
+              status: "failed",
+              workflowOutcome: "fail",
+              error: step.error ?? reason,
+              finishedAt: step.finishedAt ?? cancelledAt
+            }
+          : step
+      )
+    };
+  });
+}
+
+export function cancelRun(store: LocalStore, runId: string, reason = "Stopped by user"): boolean {
+  const run = store.getRun(runId);
+  if (!run) {
+    return false;
+  }
+
+  if (run.status !== "queued" && run.status !== "running") {
+    return false;
+  }
+
+  markRunCancelled(store, runId, reason);
+  return true;
 }
 
 function markStepRunning(store: LocalStore, runId: string, step: PipelineStep, context: string, attempt: number): void {
@@ -1008,7 +1061,8 @@ async function executeStep(
   task: string,
   stageTimeoutMs: number,
   mcpServersById: Map<string, McpServerConfig>,
-  runInputs: RunInputs
+  runInputs: RunInputs,
+  abortSignal?: AbortSignal
 ): Promise<string> {
   if (!provider) {
     return `Provider ${step.providerId} is not configured. Configure credentials in Provider Settings.`;
@@ -1042,22 +1096,56 @@ async function executeStep(
         ].join("\n")
       : "No MCP servers are enabled for this step.";
 
-  let workingContext = `${context}\n\n${mcpGuidance}`;
+  const inputRequestGuidance = [
+    "If execution is blocked by missing user-provided values, do NOT guess.",
+    "Return STRICT JSON so UI can request those values:",
+    "{",
+    '  "status": "needs_input",',
+    '  "summary": "short reason",',
+    '  "input_requests": [',
+    "    {",
+    '      "key": "input_key",',
+    '      "label": "Human label",',
+    '      "type": "text|multiline|secret|path|url|select",',
+    '      "required": true,',
+    '      "reason": "why needed",',
+    '      "options": [ { "value": "x", "label": "X" } ],',
+    '      "allowCustom": true',
+    "    }",
+    "  ]",
+    "}",
+    "Secret requests (type=secret) are persisted in secure per-pipeline storage for future runs.",
+    "Use input_requests only when blocked and additional user data is required."
+  ].join("\n");
+
+  let workingContext = `${context}\n\n${mcpGuidance}\n\n${inputRequestGuidance}`;
   let lastOutput = "";
   const maxToolRounds = 2;
   const maxCallsPerRound = 4;
 
   for (let round = 0; round <= maxToolRounds; round += 1) {
-    const output = await withTimeout(
-      executeProviderStep({
+    if (abortSignal?.aborted) {
+      throw createAbortError("Run stopped by user");
+    }
+
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => {
+      timeoutController.abort(createAbortError(`${step.name} (${step.role}) timed out after ${stageTimeoutMs}ms`));
+    }, stageTimeoutMs);
+    const stepSignal = mergeAbortSignals([abortSignal, timeoutController.signal]);
+
+    let output: string;
+    try {
+      output = await executeProviderStep({
         provider,
         step: executableStep,
         context: workingContext,
-        task
-      }),
-      stageTimeoutMs,
-      `${step.name} (${step.role})`
-    );
+        task,
+        signal: stepSignal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     lastOutput = output;
     const calls = parseMcpCallsFromOutput(output);
@@ -1070,6 +1158,10 @@ async function executeStep(
     const results: McpToolResult[] = [];
 
     for (const call of limitedCalls) {
+      if (abortSignal?.aborted) {
+        throw createAbortError("Run stopped by user");
+      }
+
       if (!allowedServerIds.has(call.serverId)) {
         results.push({
           serverId: call.serverId,
@@ -1080,7 +1172,7 @@ async function executeStep(
         continue;
       }
 
-      const result = await executeMcpToolCall(mcpServersById.get(call.serverId), call, stageTimeoutMs);
+      const result = await executeMcpToolCall(mcpServersById.get(call.serverId), call, stageTimeoutMs, abortSignal);
       results.push(result);
     }
 
@@ -1088,6 +1180,8 @@ async function executeStep(
       context,
       "",
       mcpGuidance,
+      "",
+      inputRequestGuidance,
       "",
       `MCP round ${round + 1} results:`,
       formatMcpToolResults(results),
@@ -1137,13 +1231,13 @@ function buildGraph(
 }
 
 export async function runPipeline(input: RunPipelineInput): Promise<void> {
-  const { store, runId, pipeline, task } = input;
+  const { store, runId, pipeline, task, abortSignal } = input;
   const runtime = normalizeRuntime(pipeline);
   const providers = store.getProviders() as Record<ProviderId, ProviderConfig>;
   const state = store.getState();
   const storageConfig = state.storage;
   const runRootPath = resolveRunRootPath(storageConfig, runId);
-  const runInputs = normalizeRunInputs(store.getRun(runId)?.inputs);
+  const runInputs = normalizeRunInputs(input.runInputs ?? store.getRun(runId)?.inputs);
   const mcpServersById = new Map(state.mcpServers.map((server) => [server.id, server]));
   const orderedSteps = orderPipelineSteps(pipeline.steps, pipeline.links);
 
@@ -1161,6 +1255,20 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
   const timeline: TimelineEntry[] = [];
   const queue: string[] = [];
   const queued = new Set<string>();
+
+  const stopIfAborted = async (reason = "Stopped by user") => {
+    if (!abortSignal?.aborted) {
+      return false;
+    }
+
+    markRunCancelled(store, runId, reason);
+    await persistRunStateSnapshot(store, runId, runRootPath);
+    return true;
+  };
+
+  if (await stopIfAborted()) {
+    return;
+  }
 
   const enqueue = (stepId: string, reason?: string) => {
     if (!stepById.has(stepId) || queued.has(stepId)) {
@@ -1194,9 +1302,17 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
   markRunStart(store, runId);
   await persistRunStateSnapshot(store, runId, runRootPath);
 
+  if (await stopIfAborted()) {
+    return;
+  }
+
   let totalExecutions = 0;
 
   while (true) {
+    if (await stopIfAborted()) {
+      return;
+    }
+
     if (totalExecutions >= runtime.maxStepExecutions) {
       markRunFailed(store, runId, `Execution cap reached (${runtime.maxStepExecutions} stages)`);
       await persistRunStateSnapshot(store, runId, runRootPath);
@@ -1229,6 +1345,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
     const incomingLinks = incomingById.get(stepId) ?? [];
     const storagePaths = resolveStepStoragePaths(step, pipeline.id, runId, storageConfig);
     await ensureStepStorage(storagePaths);
+
+    if (await stopIfAborted()) {
+      return;
+    }
+
     const context = composeContext(
       step,
       task,
@@ -1250,7 +1371,8 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
         task,
         runtime.stageTimeoutMs,
         mcpServersById,
-        runInputs
+        runInputs,
+        abortSignal
       );
       const inferredOutcome = inferWorkflowOutcome(output);
       const contractEvaluation = await evaluateStepContracts(step, output, storagePaths, runInputs);
@@ -1313,6 +1435,19 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
         enqueue(link.targetStepId, `${step.name} -> ${link.condition ?? "always"}`);
       }
     } catch (error) {
+      if (abortSignal?.aborted) {
+        markRunCancelled(store, runId, "Stopped by user");
+        await persistRunStateSnapshot(store, runId, runRootPath);
+        return;
+      }
+
+      if (isAbortError(error)) {
+        const message = error instanceof Error ? error.message : "Step aborted";
+        markStepFailed(store, runId, step, message, attempt);
+        await persistRunStateSnapshot(store, runId, runRootPath);
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Unknown step execution error";
       markStepFailed(store, runId, step, message, attempt);
       await persistRunStateSnapshot(store, runId, runRootPath);

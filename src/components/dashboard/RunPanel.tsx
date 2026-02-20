@@ -7,34 +7,40 @@ import {
   Play,
   RefreshCw,
   Rocket,
+  Square,
   ShieldCheck,
   TerminalSquare,
   TextCursorInput,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Pipeline, PipelineRun, RunStatus, SmartRunPlan, StepRunStatus } from "@/lib/types";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Textarea } from "@/components/optics/textarea";
 import { Badge } from "@/components/optics/badge";
 import { SegmentedControl } from "@/components/optics/segmented-control";
+import { loadRunDraft, saveRunDraft, type RunMode } from "@/lib/runDraftStorage";
 
 interface RunPanelProps {
+  draftStorageKey: string | undefined;
   selectedPipeline: Pipeline | undefined;
   runs: PipelineRun[];
   smartRunPlan: SmartRunPlan | null;
   loadingSmartRunPlan: boolean;
-  onRefreshSmartRunPlan: (inputs?: Record<string, string>) => Promise<void>;
+  onRefreshSmartRunPlan: (inputs?: Record<string, string>, options?: { force?: boolean }) => Promise<void>;
   onRun: (task: string, inputs?: Record<string, string>) => Promise<void>;
-  running: boolean;
+  onStop: (runId: string) => Promise<void>;
+  activeRun: PipelineRun | null;
+  startingRun: boolean;
+  stoppingRun: boolean;
 }
 
-type RunMode = "smart" | "quick";
 const runModeSegments = [
   { value: "smart" as const, label: "Smart Run" },
   { value: "quick" as const, label: "Quick Run" }
 ];
+const AUTO_PREFLIGHT_REFRESH_DEBOUNCE_MS = 900;
 
 function runBadgeVariant(status: RunStatus): "neutral" | "success" | "running" | "danger" | "warning" {
   if (status === "completed") {
@@ -42,6 +48,9 @@ function runBadgeVariant(status: RunStatus): "neutral" | "success" | "running" |
   }
   if (status === "failed") {
     return "danger";
+  }
+  if (status === "cancelled") {
+    return "warning";
   }
   if (status === "running") {
     return "running";
@@ -73,32 +82,122 @@ function preflightIcon(status: "pass" | "warn" | "fail") {
 }
 
 export function RunPanel({
+  draftStorageKey,
   selectedPipeline,
   runs,
   smartRunPlan,
   loadingSmartRunPlan,
   onRefreshSmartRunPlan,
   onRun,
-  running
+  onStop,
+  activeRun,
+  startingRun,
+  stoppingRun
 }: RunPanelProps) {
   const [task, setTask] = useState("");
   const [mode, setMode] = useState<RunMode>("smart");
   const [smartInputs, setSmartInputs] = useState<Record<string, string>>({});
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const smartInputsRef = useRef<Record<string, string>>({});
+  const onRefreshSmartRunPlanRef = useRef(onRefreshSmartRunPlan);
+
+  useEffect(() => {
+    smartInputsRef.current = smartInputs;
+  }, [smartInputs]);
+
+  useEffect(() => {
+    onRefreshSmartRunPlanRef.current = onRefreshSmartRunPlan;
+  }, [onRefreshSmartRunPlan]);
+
+  useEffect(() => {
+    setDraftHydrated(false);
+    const draft = loadRunDraft(draftStorageKey);
+    setTask(draft.task);
+    setMode(draft.mode);
+    setSmartInputs(draft.inputs);
+    setDraftHydrated(true);
+  }, [draftStorageKey]);
+
+  useEffect(() => {
+    if (!draftHydrated) {
+      return;
+    }
+
+    saveRunDraft(draftStorageKey, {
+      task,
+      mode,
+      inputs: smartInputs
+    });
+  }, [draftHydrated, draftStorageKey, mode, smartInputs, task]);
 
   useEffect(() => {
     if (!smartRunPlan) {
-      setSmartInputs({});
       return;
     }
 
     setSmartInputs((current) => {
-      const next: Record<string, string> = {};
+      const next: Record<string, string> = { ...current };
+      let changed = false;
       for (const field of smartRunPlan.fields) {
-        next[field.key] = current[field.key] ?? "";
+        if (next[field.key] === undefined) {
+          next[field.key] = "";
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [smartRunPlan]);
+
+  const autoRefreshInputSignature = useMemo(() => {
+    if (!selectedPipeline || mode !== "smart") {
+      return "";
+    }
+
+    const entries = Object.entries(smartInputs)
+      .map(([key, value]) => [key.trim(), value] as const)
+      .filter(([key]) => key.length > 0)
+      .sort(([left], [right]) => left.localeCompare(right));
+
+    return `${selectedPipeline.id}:${JSON.stringify(entries)}`;
+  }, [mode, selectedPipeline, smartInputs]);
+
+  const missingRequiredInputs = useMemo(() => {
+    if (!smartRunPlan) {
+      return [];
+    }
+
+    const failedRequiredKeys = new Set(
+      smartRunPlan.checks
+        .filter((check) => check.id.startsWith("input:") && check.status === "fail")
+        .map((check) => check.id.replace(/^input:/, "").trim().toLowerCase())
+    );
+
+    return smartRunPlan.fields.filter(
+      (field) => field.required && failedRequiredKeys.has(field.key.toLowerCase())
+    );
+  }, [smartRunPlan]);
+
+  const hasMissingRequiredInputs = missingRequiredInputs.length > 0;
+
+  useEffect(() => {
+    if (
+      !draftHydrated ||
+      autoRefreshInputSignature.length === 0 ||
+      loadingSmartRunPlan ||
+      Boolean(activeRun) ||
+      startingRun ||
+      stoppingRun ||
+      hasMissingRequiredInputs
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void onRefreshSmartRunPlanRef.current(smartInputsRef.current);
+    }, AUTO_PREFLIGHT_REFRESH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [activeRun, autoRefreshInputSignature, draftHydrated, hasMissingRequiredInputs, loadingSmartRunPlan, startingRun, stoppingRun]);
 
   const scopedRuns = useMemo(() => {
     if (!selectedPipeline) {
@@ -107,25 +206,17 @@ export function RunPanel({
     return runs.filter((run) => run.pipelineId === selectedPipeline.id).slice(0, 8);
   }, [runs, selectedPipeline]);
 
-  const missingRequiredInputs = useMemo(() => {
-    if (!smartRunPlan) {
-      return [];
-    }
-    return smartRunPlan.fields.filter(
-      (field) => field.required && (smartInputs[field.key] ?? "").trim().length === 0
-    );
-  }, [smartInputs, smartRunPlan]);
-
   const hasFailChecks = useMemo(
     () => (smartRunPlan?.checks ?? []).some((check) => check.status === "fail" && !check.id.startsWith("input:")),
     [smartRunPlan]
   );
 
-  const canQuickRun = Boolean(selectedPipeline) && task.trim().length >= 5 && !running;
+  const runActive = Boolean(activeRun);
+  const controlsLocked = runActive || startingRun || stoppingRun;
+  const canQuickRun = Boolean(selectedPipeline) && !controlsLocked;
   const canSmartRun =
     Boolean(selectedPipeline) &&
-    task.trim().length >= 5 &&
-    !running &&
+    !controlsLocked &&
     !loadingSmartRunPlan &&
     Boolean(smartRunPlan) &&
     missingRequiredInputs.length === 0 &&
@@ -136,7 +227,18 @@ export function RunPanel({
 
   return (
     <div>
-      <SegmentedControl segments={runModeSegments} value={mode} onValueChange={(value) => setMode(value as RunMode)} />
+      <SegmentedControl
+        segments={runModeSegments}
+        value={mode}
+        disabled={controlsLocked}
+        onValueChange={(value) => setMode(value as RunMode)}
+      />
+
+      {runActive ? (
+        <p className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[11px] text-amber-300">
+          This flow is running. Run inputs and pipeline edits are locked for this flow.
+        </p>
+      ) : null}
 
       <div className="my-5 h-px bg-ink-800/60" />
 
@@ -152,10 +254,11 @@ export function RunPanel({
           <Textarea
             className="min-h-[88px]"
             value={task}
+            disabled={controlsLocked}
             onChange={(event) => setTask(event.target.value)}
             placeholder="Describe the task for this run..."
           />
-          <p className="text-[11px] text-ink-600">Minimum 5 characters. Passed to the first step as {"{{task}}"}.</p>
+          <p className="text-[11px] text-ink-600">Optional. Passed to the first step as {"{{task}}"} (auto-filled if empty).</p>
         </label>
       </section>
 
@@ -178,9 +281,9 @@ export function RunPanel({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={!selectedPipeline || loadingSmartRunPlan}
+                disabled={!selectedPipeline || loadingSmartRunPlan || controlsLocked}
                 onClick={async () => {
-                  await onRefreshSmartRunPlan(smartInputs);
+                  await onRefreshSmartRunPlan(smartInputs, { force: true });
                 }}
               >
                 {loadingSmartRunPlan ? (
@@ -239,6 +342,7 @@ export function RunPanel({
                       <Textarea
                         className="min-h-[72px]"
                         value={smartInputs[field.key] ?? ""}
+                        disabled={controlsLocked}
                         onChange={(event) =>
                           setSmartInputs((current) => ({
                             ...current,
@@ -251,6 +355,7 @@ export function RunPanel({
                       <Input
                         type={field.type === "secret" ? "password" : field.type === "url" ? "url" : "text"}
                         value={smartInputs[field.key] ?? ""}
+                        disabled={controlsLocked}
                         onChange={(event) =>
                           setSmartInputs((current) => ({
                             ...current,
@@ -288,13 +393,21 @@ export function RunPanel({
 
         <Button
           className="w-full"
+          variant={runActive ? "danger" : undefined}
           onClick={async () => {
+            if (runActive) {
+              if (!activeRun || stoppingRun) {
+                return;
+              }
+              await onStop(activeRun.id);
+              return;
+            }
+
             if (mode === "smart") {
               if (!canSmartRun) {
                 return;
               }
               await onRun(task.trim(), smartInputs);
-              setTask("");
               return;
             }
 
@@ -303,12 +416,21 @@ export function RunPanel({
             }
 
             await onRun(task.trim());
-            setTask("");
           }}
-          disabled={mode === "smart" ? !canSmartRun : !canQuickRun}
+          disabled={runActive ? stoppingRun : mode === "smart" ? !canSmartRun : !canQuickRun}
         >
-          {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-          {running ? "Starting..." : mode === "smart" ? "Start smart run" : "Start quick run"}
+          {runActive ? (
+            stoppingRun ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Square className="mr-2 h-4 w-4" />
+            )
+          ) : startingRun ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Play className="mr-2 h-4 w-4" />
+          )}
+          {runActive ? "Stop run" : startingRun ? "Starting..." : mode === "smart" ? "Start smart run" : "Start quick run"}
         </Button>
       </section>
 
@@ -331,7 +453,7 @@ export function RunPanel({
         ) : (
           <div className="space-y-2">
             {scopedRuns.map((run) => (
-              <details key={run.id} className="group" open={run.status === "running"}>
+              <details key={run.id} className="group" open={run.status === "running" || run.status === "queued"}>
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5 transition-colors hover:border-ink-700/60">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <ChevronRight className="h-3 w-3 shrink-0 text-ink-600 transition-transform group-open:rotate-90" />

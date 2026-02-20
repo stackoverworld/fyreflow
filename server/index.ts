@@ -4,12 +4,23 @@ import { z, ZodError } from "zod";
 import { MODEL_CATALOG } from "./modelCatalog.js";
 import { LocalStore } from "./storage.js";
 import { getProviderOAuthStatus, startProviderOAuthLogin, syncProviderOAuthToken } from "./oauth.js";
-import { runPipeline } from "./runner.js";
+import { cancelRun, runPipeline } from "./runner.js";
 import { generateFlowDraft } from "./flowBuilder.js";
 import { buildSmartRunPlan } from "./smartRun.js";
+import { buildRunStartupCheck } from "./startupCheck.js";
+import { createAbortError } from "./abort.js";
+import { normalizeRunInputs } from "./runInputs.js";
+import {
+  getPipelineSecureInputs,
+  maskSensitiveInputs,
+  mergeRunInputsWithSecure,
+  pickSensitiveInputs,
+  upsertPipelineSecureInputs
+} from "./secureInputs.js";
 
 const app = express();
 const store = new LocalStore();
+const activeRunControllers = new Map<string, AbortController>();
 
 const defaultCorsOrigins = [
   "http://localhost:5173",
@@ -146,9 +157,8 @@ const storageUpdateSchema = z.object({
   runsFolder: z.string().min(1).max(240).optional()
 });
 
-const runInputsSchema = z
+const runInputsRecordSchema = z
   .record(z.string())
-  .optional()
   .refine((value) => !value || Object.keys(value).length <= 120, {
     message: "Too many inputs (max 120)."
   })
@@ -161,13 +171,24 @@ const runInputsSchema = z
     }
   );
 
+const runInputsSchema = runInputsRecordSchema.optional();
+
 const runRequestSchema = z.object({
-  task: z.string().min(5),
+  task: z.string().max(16000).optional().default(""),
   inputs: runInputsSchema
 });
 
 const smartRunPlanRequestSchema = z.object({
   inputs: runInputsSchema
+});
+
+const startupCheckRequestSchema = z.object({
+  task: z.string().max(16000).optional().default(""),
+  inputs: runInputsSchema
+});
+
+const secureInputsUpdateSchema = z.object({
+  inputs: runInputsRecordSchema
 });
 
 const flowBuilderMessageSchema = z.object({
@@ -401,7 +422,7 @@ app.get("/api/runs/:runId", (request: Request, response: Response) => {
   response.json({ run });
 });
 
-app.post("/api/pipelines/:pipelineId/smart-run-plan", (request: Request, response: Response) => {
+app.post("/api/pipelines/:pipelineId/smart-run-plan", async (request: Request, response: Response) => {
   try {
     const pipeline = store.getPipeline(firstParam(request.params.pipelineId));
     if (!pipeline) {
@@ -410,8 +431,53 @@ app.post("/api/pipelines/:pipelineId/smart-run-plan", (request: Request, respons
     }
 
     const input = smartRunPlanRequestSchema.parse(request.body ?? {});
-    const plan = buildSmartRunPlan(pipeline, store.getState(), input.inputs);
+    const secureInputs = await getPipelineSecureInputs(pipeline.id);
+    const mergedInputs = mergeRunInputsWithSecure(input.inputs ?? {}, secureInputs);
+    const plan = await buildSmartRunPlan(pipeline, store.getState(), mergedInputs);
     response.json({ plan });
+  } catch (error) {
+    sendZodError(error, response);
+  }
+});
+
+app.post("/api/pipelines/:pipelineId/startup-check", async (request: Request, response: Response) => {
+  try {
+    const pipeline = store.getPipeline(firstParam(request.params.pipelineId));
+    if (!pipeline) {
+      response.status(404).json({ error: "Pipeline not found" });
+      return;
+    }
+
+    const input = startupCheckRequestSchema.parse(request.body ?? {});
+    const secureInputs = await getPipelineSecureInputs(pipeline.id);
+    const mergedInputs = mergeRunInputsWithSecure(input.inputs ?? {}, secureInputs);
+    const check = await buildRunStartupCheck(pipeline, store.getState(), {
+      task: input.task,
+      inputs: mergedInputs
+    });
+    response.json({ check });
+  } catch (error) {
+    sendZodError(error, response);
+  }
+});
+
+app.post("/api/pipelines/:pipelineId/secure-inputs", async (request: Request, response: Response) => {
+  try {
+    const pipeline = store.getPipeline(firstParam(request.params.pipelineId));
+    if (!pipeline) {
+      response.status(404).json({ error: "Pipeline not found" });
+      return;
+    }
+
+    const input = secureInputsUpdateSchema.parse(request.body ?? {});
+    const normalized = normalizeRunInputs(input.inputs);
+    if (Object.keys(normalized).length === 0) {
+      response.json({ savedKeys: [] });
+      return;
+    }
+
+    await upsertPipelineSecureInputs(pipeline.id, normalized);
+    response.json({ savedKeys: Object.keys(normalized).sort() });
   } catch (error) {
     sendZodError(error, response);
   }
@@ -427,7 +493,7 @@ app.post("/api/flow-builder/generate", async (request: Request, response: Respon
   }
 });
 
-app.post("/api/pipelines/:pipelineId/runs", (request: Request, response: Response) => {
+app.post("/api/pipelines/:pipelineId/runs", async (request: Request, response: Response) => {
   try {
     const pipeline = store.getPipeline(firstParam(request.params.pipelineId));
     if (!pipeline) {
@@ -436,19 +502,67 @@ app.post("/api/pipelines/:pipelineId/runs", (request: Request, response: Respons
     }
 
     const input = runRequestSchema.parse(request.body);
-    const run = store.createRun(pipeline, input.task, input.inputs);
+    const task = input.task.trim().length > 0 ? input.task.trim() : `Run flow "${pipeline.name}"`;
+    const normalizedRunInputs = normalizeRunInputs(input.inputs);
+    const secureInputs = await getPipelineSecureInputs(pipeline.id);
+    const sensitiveUpdates = pickSensitiveInputs(normalizedRunInputs);
+    const hasSensitiveUpdates = Object.keys(sensitiveUpdates).length > 0;
+
+    if (hasSensitiveUpdates) {
+      await upsertPipelineSecureInputs(pipeline.id, sensitiveUpdates);
+    }
+
+    const runtimeSecureInputs = hasSensitiveUpdates
+      ? {
+          ...secureInputs,
+          ...sensitiveUpdates
+        }
+      : secureInputs;
+    const mergedRuntimeInputs = mergeRunInputsWithSecure(normalizedRunInputs, runtimeSecureInputs);
+    const maskedRunInputs = maskSensitiveInputs(mergedRuntimeInputs, Object.keys(runtimeSecureInputs));
+    const run = store.createRun(pipeline, task, maskedRunInputs);
+    const abortController = new AbortController();
+    activeRunControllers.set(run.id, abortController);
 
     void runPipeline({
       store,
       runId: run.id,
       pipeline,
-      task: input.task
+      task,
+      runInputs: mergedRuntimeInputs,
+      abortSignal: abortController.signal
+    }).catch((error) => {
+      console.error("[run-pipeline-error]", error);
+      cancelRun(store, run.id, "Unexpected run error");
+    }).finally(() => {
+      activeRunControllers.delete(run.id);
     });
 
     response.status(202).json({ run });
   } catch (error) {
     sendZodError(error, response);
   }
+});
+
+app.post("/api/runs/:runId/stop", (request: Request, response: Response) => {
+  const runId = firstParam(request.params.runId);
+  const run = store.getRun(runId);
+  if (!run) {
+    response.status(404).json({ error: "Run not found" });
+    return;
+  }
+
+  const controller = activeRunControllers.get(runId);
+  if (controller) {
+    controller.abort(createAbortError("Stopped by user"));
+  }
+
+  cancelRun(store, runId, "Stopped by user");
+  const updated = store.getRun(runId) ?? run;
+
+  response.json({
+    run: updated
+  });
 });
 
 app.use((_request, response) => {

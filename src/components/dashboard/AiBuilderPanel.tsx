@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Loader2, Send, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { MODEL_CATALOG, getDefaultModelForProvider } from "@/lib/modelCatalog";
@@ -64,6 +64,7 @@ interface AiBuilderPanelProps {
   currentDraft: PipelinePayload;
   onApplyDraft: (draft: PipelinePayload) => void;
   onNotice: (message: string) => void;
+  readOnly?: boolean;
 }
 
 const providerSegments = [
@@ -350,7 +351,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNotice }: AiBuilderPanelProps) {
+export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNotice, readOnly = false }: AiBuilderPanelProps) {
   const [savedSettings] = useState(loadAiBuilderSettings);
   const [providerId, setProviderId] = useState<ProviderId>(savedSettings.providerId);
   const [model, setModel] = useState(savedSettings.model);
@@ -365,6 +366,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasInitialScrollRef = useRef(false);
 
   // ── Derived model state ──
 
@@ -414,15 +416,29 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
   // ── Auto-scroll ──
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, generating]);
-
-  useEffect(() => {
+    hasInitialScrollRef.current = false;
     setMessages(loadAiChatHistory(workflowKey));
     setHydratedWorkflowKey(workflowKey);
     setPrompt("");
     setGenerating(false);
   }, [workflowKey]);
+
+  useLayoutEffect(() => {
+    if (hydratedWorkflowKey !== workflowKey) {
+      return;
+    }
+
+    const end = messagesEndRef.current;
+    if (!end) {
+      return;
+    }
+
+    end.scrollIntoView({
+      behavior: hasInitialScrollRef.current ? "smooth" : "auto",
+      block: "end",
+    });
+    hasInitialScrollRef.current = true;
+  }, [generating, hydratedWorkflowKey, messages, workflowKey]);
 
   useEffect(() => {
     if (hydratedWorkflowKey !== workflowKey) {
@@ -435,7 +451,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
 
   const handleSend = async () => {
     const trimmed = prompt.trim();
-    if (trimmed.length < MIN_PROMPT_LENGTH || generating) return;
+    if (trimmed.length < MIN_PROMPT_LENGTH || generating || readOnly) return;
 
     const userMsg: AiChatMessage = {
       id: crypto.randomUUID(),
@@ -523,8 +539,12 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
       {/* ── Settings toggle ── */}
       <button
         type="button"
+        disabled={readOnly}
         onClick={() => setSettingsOpen((v) => !v)}
-        className="flex items-center gap-2 border-b border-ink-800/60 px-3 py-2.5 text-xs font-medium text-ink-400 hover:text-ink-200 transition-colors cursor-pointer"
+        className={cn(
+          "flex items-center gap-2 border-b border-ink-800/60 px-3 py-2.5 text-xs font-medium transition-colors",
+          readOnly ? "text-ink-600 cursor-not-allowed" : "text-ink-400 hover:text-ink-200 cursor-pointer"
+        )}
       >
         {providerId === "claude" ? <AnthropicIcon className="h-3.5 w-3.5" /> : <OpenAIIcon className="h-3.5 w-3.5" />}
         <span className="flex-1 text-left truncate">
@@ -552,6 +572,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
                 <SegmentedControl
                   segments={providerSegments}
                   value={providerId}
+                  disabled={readOnly}
                   onValueChange={(v) => setProviderId(v as ProviderId)}
                 />
               </div>
@@ -560,6 +581,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
                 <span className="text-xs text-ink-500">Model</span>
                 <Select
                   value={model}
+                  disabled={readOnly}
                   onValueChange={setModel}
                   options={modelCatalog.map((entry) => ({ value: entry.id, label: entry.label }))}
                 />
@@ -569,6 +591,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
                 <span className="text-xs text-ink-500">Reasoning</span>
                 <Select
                   value={reasoningEffort}
+                  disabled={readOnly}
                   onValueChange={(v) => setReasoningEffort(v as ReasoningEffort)}
                   options={reasoningOptions.map((mode) => ({ value: mode, label: mode }))}
                 />
@@ -580,7 +603,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
                     <Switch
                       checked={fastMode}
                       onChange={setFastMode}
-                      disabled={selectedModelMeta?.supportsFastMode === false}
+                      disabled={readOnly || selectedModelMeta?.supportsFastMode === false}
                     />
                     <span className="text-xs text-ink-300">Fast mode</span>
                   </div>
@@ -588,7 +611,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
                     <Switch
                       checked={use1MContext}
                       onChange={setUse1MContext}
-                      disabled={selectedModelMeta?.supports1MContext === false}
+                      disabled={readOnly || selectedModelMeta?.supports1MContext === false}
                     />
                     <span className="text-xs text-ink-300">1M context</span>
                   </div>
@@ -617,6 +640,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
           <ChatBubble
             key={msg.id}
             message={msg}
+            readOnly={readOnly}
             onApply={msg.generatedDraft ? () => onApplyDraft(msg.generatedDraft!) : undefined}
           />
         ))}
@@ -637,6 +661,7 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
           <Textarea
             className="min-h-[80px] pr-12"
             value={prompt}
+            disabled={readOnly}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -648,11 +673,11 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
           />
           <button
             type="button"
-            disabled={generating || prompt.trim().length < MIN_PROMPT_LENGTH}
+            disabled={readOnly || generating || prompt.trim().length < MIN_PROMPT_LENGTH}
             onClick={() => void handleSend()}
             className={cn(
               "absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
-              prompt.trim().length >= MIN_PROMPT_LENGTH && !generating
+              prompt.trim().length >= MIN_PROMPT_LENGTH && !generating && !readOnly
                 ? "bg-ember-500 text-ink-950 hover:bg-ember-400 cursor-pointer"
                 : "bg-ink-800 text-ink-600 cursor-not-allowed"
             )}
@@ -674,9 +699,10 @@ export function AiBuilderPanel({ workflowKey, currentDraft, onApplyDraft, onNoti
 interface ChatBubbleProps {
   message: AiChatMessage;
   onApply?: () => void;
+  readOnly?: boolean;
 }
 
-function ChatBubble({ message, onApply }: ChatBubbleProps) {
+function ChatBubble({ message, onApply, readOnly = false }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
   const actionLabel =
@@ -721,7 +747,7 @@ function ChatBubble({ message, onApply }: ChatBubbleProps) {
           <div className="mt-2 flex items-center gap-2">
             <Badge variant="success">{message.generatedDraft.steps.length} steps</Badge>
             <Badge variant="neutral">{message.generatedDraft.links.length} links</Badge>
-            <Button size="sm" variant="ghost" onClick={onApply}>
+            <Button size="sm" variant="ghost" disabled={readOnly} onClick={onApply}>
               Re-apply
             </Button>
           </div>

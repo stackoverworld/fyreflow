@@ -190,8 +190,8 @@ export function ProviderSettings({
               </div>
 
               {showOauthTokenInput ? (
-                <label className="space-y-1">
-                  <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-ink-400">
+                <label className="block space-y-1.5">
+                  <span className="flex items-center gap-1 text-xs text-ink-400">
                     {authMode === "oauth" ? <LockKeyhole className="h-3 w-3" /> : <KeyRound className="h-3 w-3" />}
                     {authMode === "oauth" ? "OAuth token (optional)" : "API key"}
                   </span>
@@ -213,8 +213,8 @@ export function ProviderSettings({
                   />
                 </label>
               ) : (
-                <div className="space-y-1">
-                  <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-ink-400">
+                <div className="space-y-1.5">
+                  <span className="flex items-center gap-1 text-xs text-ink-400">
                     <LockKeyhole className="h-3 w-3" />
                     OAuth managed by CLI
                   </span>
@@ -316,8 +316,8 @@ export function ProviderSettings({
                 </div>
               ) : null}
 
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">Base URL</span>
+              <label className="block space-y-1.5">
+                <span className="text-xs text-ink-400">Base URL</span>
                 <Input
                   value={provider.baseUrl}
                   onChange={(event) =>
@@ -333,8 +333,8 @@ export function ProviderSettings({
                 />
               </label>
 
-              <label className="space-y-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">Default model</span>
+              <label className="block space-y-1.5">
+                <span className="text-xs text-ink-400">Default model</span>
                 <Input
                   value={provider.defaultModel}
                   onChange={(event) =>
@@ -365,7 +365,7 @@ export function ProviderSettings({
               >
                 <Save className="mr-2 h-4 w-4" /> {savingId === providerId ? "Saving..." : "Save"}
               </Button>
-            </div>
+            </section>
           </div>
         );
       })}
