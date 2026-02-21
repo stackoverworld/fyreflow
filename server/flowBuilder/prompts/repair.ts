@@ -1,0 +1,80 @@
+import { clip } from "../normalizers.js";
+
+export function buildJsonRepairContext(rawOutput: string): string {
+  const clipped = clip(rawOutput, 24000);
+  return [
+    "Repair the model output below into STRICT JSON for the workflow schema.",
+    "Return JSON only. No markdown. No explanation.",
+    "",
+    "Rules:",
+    "- Keep original intent and step ordering whenever possible.",
+    "- Ensure fields are valid for this schema.",
+    "- Roles allowed: analysis, planner, orchestrator, executor, tester, review.",
+    "- Link conditions allowed: always, on_pass, on_fail.",
+    "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- If schedule exists, keep cron/timezone values valid, preserve runMode, and preserve schedule.inputs when relevant.",
+    "- Preserve step.scenarios and step.skipIfArtifacts when present.",
+    "- Preserve per-step storage toggles: enableSharedStorage and enableIsolatedStorage.",
+    "- Preserve storage placeholders in paths ({{shared_storage_path}}, {{isolated_storage_path}}, {{run_storage_path}}).",
+    "- Preserve qualityGates. If review/tester steps exist, ensure blocking status gates are present.",
+    "- If a field is unknown, omit it instead of inventing unsupported fields.",
+    "",
+    "Expected shape:",
+    "{",
+    '  "name": "Flow name",',
+    '  "description": "One sentence",',
+    '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
+    '  "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "UTC", "task": "Scheduled run", "runMode": "smart", "inputs": {} },',
+    '  "steps": [',
+    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "outputFormat": "markdown", "scenarios": [], "skipIfArtifacts": [] }',
+    "  ],",
+    '  "links": [',
+    '    { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
+    "  ],",
+    '  "qualityGates": [',
+    '    { "name": "Required gate", "kind": "regex_must_match", "target": "any_step", "pattern": "WORKFLOW_STATUS" }',
+    "  ]",
+    "}",
+    "",
+    "Input to repair:",
+    clipped
+  ].join("\n");
+}
+
+export function buildChatRepairContext(rawOutput: string): string {
+  const clipped = clip(rawOutput, 24000);
+  return [
+    "Repair the output below into STRICT JSON for the copilot schema.",
+    "Return JSON only. No markdown. No explanation.",
+    "",
+    "Expected shape:",
+    "{",
+    '  "action": "answer | update_current_flow | replace_flow",',
+    '  "message": "assistant response",',
+    '  "questions": [',
+    '    { "id": "question_id", "question": "Clarifying question", "options": [',
+    '      { "label": "Option A", "value": "Full reply sentence for option A" }',
+    "    ] }",
+    "  ],",
+    '  "flow": { "name": "...", "description": "...", "runtime": {...}, "schedule": {...}, "steps": [...], "links": [...], "qualityGates": [...] }',
+    "}",
+    "",
+    "Rules:",
+    "- action must be one of answer, update_current_flow, replace_flow.",
+    "- Include flow only for update_current_flow or replace_flow.",
+    "- Include questions only when clarification is required.",
+    "- Keep questions to 1-3 entries. Each question needs id, question, and at least one option with label/value.",
+    "- For questions, option value must be a complete reply sentence usable as the next user message.",
+    "- Ensure flow fields match allowed roles and link conditions.",
+    "- Ensure qualityGate kinds use supported values, including manual_approval when needed.",
+    "- Preserve step.scenarios and step.skipIfArtifacts when present.",
+    "- Preserve schedule fields when present and keep them valid.",
+    "- Preserve enableSharedStorage/enableIsolatedStorage and do not disable storage unless user intent requests it.",
+    "- Preserve storage placeholders in requiredOutputFiles, skipIfArtifacts, and artifactPath fields.",
+    "- Preserve qualityGates; keep blocking status gates for review/tester steps.",
+    "- Preserve any {{input.<key>}} placeholders and do not convert them into literals.",
+    "",
+    "Input to repair:",
+    clipped
+  ].join("\n");
+}

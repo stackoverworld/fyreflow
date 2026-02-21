@@ -89,7 +89,7 @@ export function RunInputRequestModal({
       {open ? (
         <>
           <motion.div
-            className="fixed inset-0 z-[90] bg-ink-950/80 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[90] bg-[var(--surface-overlay)] backdrop-blur-[2px]"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

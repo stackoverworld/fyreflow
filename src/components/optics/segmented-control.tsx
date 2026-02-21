@@ -46,13 +46,13 @@ export function SegmentedControl<T extends string = string>({
     <div
       ref={containerRef}
         className={cn(
-          "relative flex rounded-xl bg-ink-900/80 p-1",
+          "relative flex select-none rounded-xl bg-[var(--seg-track)] p-1",
           disabled && "opacity-55",
           className
         )}
       >
       <motion.div
-        className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-ink-700/70 shadow-sm"
+        className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-[var(--seg-pill)] shadow-[var(--seg-pill-shadow)]"
         animate={{ left: indicator.left, width: indicator.width }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
       />

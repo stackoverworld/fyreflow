@@ -198,10 +198,15 @@ export async function syncProviderOAuthToken(providerId: ProviderId) {
   });
 }
 
-export async function startRun(pipelineId: string, task?: string, inputs?: Record<string, string>) {
+export async function startRun(
+  pipelineId: string,
+  task?: string,
+  inputs?: Record<string, string>,
+  scenario?: string
+) {
   return request<{ run: PipelineRun }>(`/api/pipelines/${pipelineId}/runs`, {
     method: "POST",
-    body: JSON.stringify({ task, inputs })
+    body: JSON.stringify({ task, inputs, scenario })
   });
 }
 

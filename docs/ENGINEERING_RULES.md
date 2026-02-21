@@ -12,13 +12,14 @@ These rules are mandatory for this repository. They are derived from installed s
 1. `src/App.tsx` is a composition shell only:
    - no direct `fetch` calls;
    - no business logic besides view-level orchestration.
+   - keep pipeline drafting/scheduling helpers in `src/lib/pipelineDraft.ts`, `src/lib/smartRunInputs.ts`, and `src/lib/draftHistory.ts`.
 2. API and stateful workflow logic must live in feature modules:
    - frontend target: `src/features/<domain>/...`;
-   - backend target: `server/routes`, `server/services`, `server/storage`.
+   - backend target: `server/http/routes`, `server/runtime`, and focused `server/<domain>` modules.
 3. `server/index.ts` is bootstrap-only:
-   - middleware registration;
-   - route mounting;
-   - terminal 404/error middleware.
+   - dependency wiring and runtime factory composition only;
+   - startup orchestration only (recovery + scheduler tick bootstrap);
+   - no request schema definitions or route handler business logic.
 4. New files should stay under these soft limits:
    - components/hooks/services: 300 lines;
    - route handlers: 220 lines.

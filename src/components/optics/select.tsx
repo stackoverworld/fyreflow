@@ -107,7 +107,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
           exit={{ opacity: 0, scale: 0.95, y: -4 }}
           transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
           style={dropdownStyle}
-          className="max-h-56 min-w-[140px] origin-top overflow-y-auto rounded-xl border border-ink-700/60 bg-ink-900 p-1 shadow-xl"
+          className="max-h-56 min-w-[140px] origin-top select-none overflow-y-auto rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] p-1 shadow-xl"
         >
           <div className="space-y-0.5">
             {options.map((option) => {
@@ -125,7 +125,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
                     "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors cursor-pointer",
                     isActive
                       ? "bg-ember-500/10 text-ember-300"
-                      : "text-ink-200 hover:bg-ink-800/60"
+                      : "text-ink-200 hover:bg-[var(--surface-raised)]"
                   )}
                 >
                   <Check
@@ -157,7 +157,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
           setOpen((v) => !v);
         }}
         className={cn(
-          "flex h-9 w-full items-center justify-between rounded-xl border border-ink-800 bg-ink-950/60 px-3 text-sm text-ink-50",
+          "flex h-9 w-full select-none items-center justify-between rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 text-sm text-ink-50",
           "focus:border-ember-500/60 focus:outline-none focus:ring-2 focus:ring-ember-500/20",
           "transition-colors cursor-pointer",
           open && "border-ember-500/60 ring-2 ring-ember-500/20",

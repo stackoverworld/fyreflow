@@ -55,6 +55,7 @@ const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const indexHtmlPath = path.join(__dirname, "..", "dist", "index.html");
 const MAX_NOTIFICATION_TITLE_LENGTH = 120;
 const MAX_NOTIFICATION_BODY_LENGTH = 400;
+const MAX_REVEAL_PATH_LENGTH = 2048;
 
 function normalizeNotificationPayload(raw) {
   if (!raw || typeof raw !== "object") {
@@ -73,6 +74,21 @@ function normalizeNotificationPayload(raw) {
   };
 }
 
+function normalizeRevealPathPayload(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const pathValue = typeof raw.path === "string" ? raw.path.trim() : "";
+  if (!pathValue) {
+    return null;
+  }
+
+  return {
+    path: pathValue.slice(0, MAX_REVEAL_PATH_LENGTH)
+  };
+}
+
 function createMainWindow() {
   const bgColor = nativeTheme.shouldUseDarkColors ? "#131314" : "#faf9f0";
   const windowOptions = {
@@ -84,13 +100,12 @@ function createMainWindow() {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 13 },
     webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false
     }
   };
 
-  // On macOS, rely on bundle icon metadata instead of runtime overrides.
   if (process.platform !== "darwin") {
     windowOptions.icon = path.join(__dirname, "icon.png");
   }
@@ -158,6 +173,26 @@ ipcMain.handle("desktop:notify", (event, payload) => {
 
   notification.show();
   return { ok: true };
+});
+
+ipcMain.handle("desktop:reveal-path", (event, payload) => {
+  const normalized = normalizeRevealPathPayload(payload);
+  if (!normalized) {
+    return { ok: false, reason: "invalid_payload" };
+  }
+
+  const targetWindow = BrowserWindow.fromWebContents(event.sender);
+  if (targetWindow && targetWindow.isMinimized()) {
+    targetWindow.restore();
+  }
+
+  return shell.openPath(normalized.path).then((errorMessage) => {
+    if (errorMessage && errorMessage.trim().length > 0) {
+      return { ok: false, reason: "open_failed", message: errorMessage };
+    }
+
+    return { ok: true };
+  });
 });
 
 app.whenReady().then(() => {

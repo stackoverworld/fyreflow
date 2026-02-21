@@ -10,10 +10,10 @@ const rootDir = path.join(__dirname, "..");
 function resolveElectronBinary() {
   if (process.platform === "darwin") {
     const candidates = [
-      path.join(rootDir, "node_modules", "electron", "dist", "FyreFlow.app", "Contents", "MacOS", "FyreFlow"),
-      path.join(rootDir, "node_modules", "electron", "dist", "FyreFlow.app", "Contents", "MacOS", "Electron"),
       path.join(rootDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "FyreFlow"),
-      path.join(rootDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron")
+      path.join(rootDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron"),
+      path.join(rootDir, "node_modules", "electron", "dist", "FyreFlow.app", "Contents", "MacOS", "FyreFlow"),
+      path.join(rootDir, "node_modules", "electron", "dist", "FyreFlow.app", "Contents", "MacOS", "Electron")
     ];
     return candidates.find((candidate) => existsSync(candidate)) ?? null;
   }

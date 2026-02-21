@@ -1,6 +1,6 @@
 # Skill Compliance Audit
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## Installed skills evaluated
 
@@ -20,7 +20,7 @@ Last updated: 2026-02-19
 
 ## Monolith risk checkpoints
 
-1. Frontend orchestration and state logic are still concentrated in `src/App.tsx:90`.
+1. Frontend helper logic is partially extracted from `src/App.tsx` into `src/lib/pipelineDraft.ts`, `src/lib/smartRunInputs.ts`, and `src/lib/draftHistory.ts`; remaining concentration is in orchestration/event handlers.
 2. Step-builder complexity remains concentrated in `src/components/dashboard/PipelineEditor.tsx:137`.
 3. API routing is centralized in `server/index.ts:115` even after hardening middleware.
 

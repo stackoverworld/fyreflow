@@ -49,7 +49,7 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplate[] = [
     subtitle: "Official remote MCP endpoint for repositories/issues/PRs",
     docsUrl: "https://github.com/github/github-mcp-server",
     iconSrc: githubIcon,
-    iconClassName: "brightness-0 invert",
+    iconClassName: "icon-invert-dark",
     setupHint: "Set a GitHub PAT in headers before run.",
     draft: {
       name: "GitHub MCP",

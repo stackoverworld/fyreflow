@@ -10,6 +10,16 @@ interface DesktopNotificationResult {
   reason?: "unsupported" | "invalid_payload";
 }
 
+interface DesktopRevealPathPayload {
+  path: string;
+}
+
+interface DesktopRevealPathResult {
+  ok: boolean;
+  reason?: "invalid_payload" | "open_failed";
+  message?: string;
+}
+
 interface Window {
   desktop?: {
     isElectron: boolean;
@@ -18,5 +28,6 @@ interface Window {
     maximize: () => Promise<void>;
     close: () => Promise<void>;
     notify: (payload: DesktopNotificationPayload) => Promise<DesktopNotificationResult>;
+    revealPath: (payload: DesktopRevealPathPayload) => Promise<DesktopRevealPathResult>;
   };
 }

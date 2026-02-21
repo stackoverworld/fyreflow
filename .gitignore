@@ -6,3 +6,4 @@ dist
 data/local-db.json
 /data
 .primer-ai/
+output/playwright/

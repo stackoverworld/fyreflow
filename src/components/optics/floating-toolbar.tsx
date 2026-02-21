@@ -19,7 +19,7 @@ export function FloatingToolbar({ children, className }: FloatingToolbarProps) {
         <motion.div
           layout
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="glass-panel-dense flex items-center gap-1 rounded-full border border-ink-700/50 px-1.5 py-1 shadow-panel"
+          className="glass-panel-dense flex select-none items-center gap-1 rounded-full border border-ink-700/50 p-1 shadow-panel"
         >
           {children}
         </motion.div>
@@ -67,7 +67,7 @@ export function FloatingToolbarButton({
         {active && !danger && (
           <motion.span
             layoutId={`${toolbarId}-active-pill`}
-            className="absolute inset-0 rounded-full bg-ink-700/70"
+            className="absolute inset-0 rounded-full bg-[var(--toolbar-active-pill)]"
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           />
         )}
@@ -113,7 +113,7 @@ export function Kbd({ children, className }: KbdProps) {
   return (
     <kbd
       className={cn(
-        "ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded border border-ink-600/40 bg-ink-950/70 px-1 text-[10px] font-medium leading-none text-ink-400",
+        "ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded border border-[var(--kbd-border)] bg-[var(--kbd-bg)] px-1 text-[10px] font-medium leading-none text-ink-400",
         className
       )}
     >

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies (lockfile)
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci
+
+      - name: Install npm dependencies (package.json fallback)
+        if: ${{ hashFiles('package-lock.json') == '' && hashFiles('package.json') != '' }}
+        run: npm install --no-audit --no-fund
+
+      - name: Run repository checks
+        run: |
+          node scripts/check-agent-context.mjs
+          node scripts/check-doc-freshness.mjs
+          node scripts/check-skills.mjs
+          npx tsc --noEmit
+          vitest run
+          vite build

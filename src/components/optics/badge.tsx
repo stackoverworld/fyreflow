@@ -2,10 +2,10 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/cn";
 
-const badgeVariants = cva("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem] font-medium border border-transparent", {
+const badgeVariants = cva("inline-flex select-none items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem] font-medium border border-transparent", {
   variants: {
     variant: {
-      neutral: "bg-ink-800 text-ink-300",
+      neutral: "bg-[var(--badge-neutral-bg)] text-ink-300",
       success: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
       running: "bg-ember-500/10 text-ember-300 border-ember-500/25",
       warning: "bg-amber-500/10 text-amber-400 border-amber-500/20",

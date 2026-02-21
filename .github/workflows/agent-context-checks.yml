@@ -1,0 +1,21 @@
+name: Agent Context Checks
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+jobs:
+  validate-agent-context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate AGENTS structure and budget
+        run: node scripts/check-agent-context.mjs
+      - name: Validate docs freshness
+        run: node scripts/check-doc-freshness.mjs
+      - name: Validate skill catalog
+        run: node scripts/check-skills.mjs

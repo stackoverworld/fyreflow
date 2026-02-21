@@ -2,6 +2,7 @@ import { Bug, Monitor, Moon, Settings2, ShieldCheck, Sun, X } from "lucide-react
 import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
 import { Switch } from "@/components/optics/switch";
 import { cn } from "@/lib/cn";
 import type { DesktopNotificationSettings, ThemePreference } from "@/lib/appSettingsStorage";
@@ -26,10 +27,10 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Settings2 }[] = [
   { id: "providers", label: "Provider Auth", icon: ShieldCheck }
 ];
 
-const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof Monitor }[] = [
-  { value: "system", label: "System", icon: Monitor },
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon }
+const THEME_SEGMENTS: Segment<ThemePreference>[] = [
+  { value: "system", label: "System", icon: <Monitor className="h-3.5 w-3.5" /> },
+  { value: "light", label: "Light", icon: <Sun className="h-3.5 w-3.5" /> },
+  { value: "dark", label: "Dark", icon: <Moon className="h-3.5 w-3.5" /> }
 ];
 
 export function SettingsModal({
@@ -57,7 +58,7 @@ export function SettingsModal({
       {open ? (
         <>
           <motion.div
-            className="fixed inset-0 z-[90] bg-ink-950/80 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[90] bg-[var(--surface-overlay)] backdrop-blur-[2px]"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -129,34 +130,17 @@ export function SettingsModal({
                   {activeTab === "general" && (
                     <div className="space-y-4">
                       {/* ── Appearance ── */}
-                      <div className="rounded-xl border border-ink-800 bg-ink-950/55 px-3 py-2.5">
+                      <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5">
                         <p className="text-xs text-ink-100 mb-2">Appearance</p>
-                        <div className="flex gap-1 rounded-lg bg-ink-900/60 p-1">
-                          {THEME_OPTIONS.map((option) => {
-                            const Icon = option.icon;
-                            const isActive = themePreference === option.value;
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => onThemeChange(option.value)}
-                                className={cn(
-                                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors cursor-pointer",
-                                  isActive
-                                    ? "bg-ink-800 text-ink-50 shadow-sm"
-                                    : "text-ink-500 hover:text-ink-300"
-                                )}
-                              >
-                                <Icon className="h-3 w-3" />
-                                {option.label}
-                              </button>
-                            );
-                          })}
-                        </div>
+                        <SegmentedControl
+                          segments={THEME_SEGMENTS}
+                          value={themePreference}
+                          onValueChange={onThemeChange}
+                        />
                       </div>
 
                       {/* ── Debug mode ── */}
-                      <div className="flex items-center justify-between gap-3 rounded-xl border border-ink-800 bg-ink-950/55 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5">
                         <div>
                           <p className="text-xs text-ink-100">Debug mode</p>
                           <p className="text-[11px] text-ink-500">Show debug panel with runtime trace, live logs and step timeline.</p>
@@ -165,7 +149,7 @@ export function SettingsModal({
                       </div>
 
                       {/* ── Desktop notifications ── */}
-                      <div className="rounded-xl border border-ink-800 bg-ink-950/55">
+                      <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
                         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                           <div>
                             <p className="text-xs text-ink-100">Desktop notifications</p>
@@ -181,7 +165,7 @@ export function SettingsModal({
                           />
                         </div>
 
-                        <div className="h-px bg-ink-800/60" />
+                        <div className="h-px bg-[var(--divider)]" />
 
                         <div className="space-y-0">
                           <div className="flex items-center justify-between gap-3 px-3 py-2.5">
@@ -196,7 +180,7 @@ export function SettingsModal({
                             />
                           </div>
 
-                          <div className="h-px bg-ink-800/60" />
+                          <div className="h-px bg-[var(--divider)]" />
 
                           <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                             <div>
@@ -210,7 +194,7 @@ export function SettingsModal({
                             />
                           </div>
 
-                          <div className="h-px bg-ink-800/60" />
+                          <div className="h-px bg-[var(--divider)]" />
 
                           <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                             <div>
@@ -225,6 +209,7 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
+
                     </div>
                   )}
 

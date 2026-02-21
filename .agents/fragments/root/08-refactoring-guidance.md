@@ -1,0 +1,11 @@
+## Refactoring Guidance
+- Baseline: `qa-refactoring` for safe, test-backed refactors.
+- Stack add-on: `vercel-react-best-practices` (next.js or react stacks).
+- Install command details live in `docs/skills.md`.
+- Verify each micro-step with:
+- `npx tsc --noEmit`
+- `vitest run`
+- `vite build`
+- `npm run test:e2e`
+- Use `vite build`, `vitest run`, and `npm run test:e2e` for deterministic single-pass verification.
+- Treat `react-vite-expert` as optional specialist guidance for large structural reorganizations.

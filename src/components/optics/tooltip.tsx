@@ -36,10 +36,10 @@ function computePosition(trigger: HTMLElement, tip: HTMLElement, side: Side): Co
 }
 
 const arrowStyles: Record<Side, string> = {
-  top: "top-full left-1/2 -translate-x-1/2 border-t-ink-800 border-x-transparent border-b-transparent border-[4px]",
-  bottom: "bottom-full left-1/2 -translate-x-1/2 border-b-ink-800 border-x-transparent border-t-transparent border-[4px]",
-  left: "left-full top-1/2 -translate-y-1/2 border-l-ink-800 border-y-transparent border-r-transparent border-[4px]",
-  right: "right-full top-1/2 -translate-y-1/2 border-r-ink-800 border-y-transparent border-l-transparent border-[4px]"
+  top: "top-full left-1/2 -translate-x-1/2 border-t-[var(--tooltip-bg)] border-x-transparent border-b-transparent border-[4px]",
+  bottom: "bottom-full left-1/2 -translate-x-1/2 border-b-[var(--tooltip-bg)] border-x-transparent border-t-transparent border-[4px]",
+  left: "left-full top-1/2 -translate-y-1/2 border-l-[var(--tooltip-bg)] border-y-transparent border-r-transparent border-[4px]",
+  right: "right-full top-1/2 -translate-y-1/2 border-r-[var(--tooltip-bg)] border-y-transparent border-l-transparent border-[4px]"
 };
 
 const originBySide: Record<Side, { x: number; y: number }> = {
@@ -102,7 +102,7 @@ export function Tooltip({ content, side = "right", children, className }: Toolti
               animate={{ opacity: 1, x: 0, y: 0 }}
               exit={{ opacity: 0, x: offset.x, y: offset.y }}
               transition={{ duration: 0.15, ease: "easeOut" }}
-              className="pointer-events-none fixed z-[9999] whitespace-nowrap rounded-md bg-ink-800 px-2.5 py-1.5 text-xs font-medium text-ink-100 shadow-lg"
+              className="pointer-events-none fixed z-[9999] select-none whitespace-nowrap rounded-md bg-[var(--tooltip-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--tooltip-fg)] shadow-lg"
               style={{ top: coords.top, left: coords.left }}
               role="tooltip"
             >

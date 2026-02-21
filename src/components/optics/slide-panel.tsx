@@ -37,7 +37,7 @@ export function SlidePanel({ open, side, children, className }: SlidePanelProps)
           transition={transition}
           className={cn(
             "glass-panel-dense absolute top-0 z-40 h-full overflow-hidden",
-            isLeft ? "left-[56px] border-r border-ink-700/40" : "right-0 border-l border-ink-700/40",
+            isLeft ? "left-[56px] border-r border-[var(--panel-border)]" : "right-0 border-l border-[var(--panel-border)]",
             className
           )}
         >

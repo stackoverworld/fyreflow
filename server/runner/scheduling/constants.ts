@@ -1,0 +1,4 @@
+export const DEFAULT_MAX_LOOPS = 2;
+export const DEFAULT_MAX_STEP_EXECUTIONS = 18;
+export const DEFAULT_STAGE_TIMEOUT_MS = 420_000;
+export const RUN_CONTROL_POLL_MS = 350;

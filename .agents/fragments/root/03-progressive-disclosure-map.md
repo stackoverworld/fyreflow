@@ -1,0 +1,14 @@
+## Progressive Disclosure Map
+- `docs/index.md`: source-of-truth index for project knowledge.
+- `docs/architecture.md`: bounded contexts, module boundaries, dependency direction.
+- `docs/api-contracts.md`: contracts, schemas, and compatibility policy.
+- `docs/conventions.md`: coding, testing, and collaboration standards.
+- `docs/maintenance.md`: verification pipeline, context budget, and freshness policy.
+- `docs/skills.md`: curated skill inventory and trigger discipline.
+- `docs/decisions/*.md`: ADR history.
+- `docs/runbooks/local-dev.md`: environment setup and local operation guide.
+- `skills/**/SKILL.md`: reusable task playbooks loaded only when relevant.
+- `apps/web/AGENTS.md`: Frontend delivery, UX constraints, and feature modules. (applies inside `apps/web/`).
+- `apps/api/AGENTS.md`: Backend services, contracts, and data integrity. (applies inside `apps/api/`).
+- `packages/shared/AGENTS.md`: Shared contracts and reusable building blocks. (applies inside `packages/shared/`).
+- `tests/AGENTS.md`: Cross-package integration and release checks. (applies inside `tests/`).
