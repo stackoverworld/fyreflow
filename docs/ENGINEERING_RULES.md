@@ -1,5 +1,7 @@
 # Engineering Rules
 
+- Last reviewed: 2026-02-23
+
 These rules are mandatory for this repository. They are derived from installed skills:
 
 - `security-best-practices`

@@ -15,13 +15,17 @@ This folder is the source of truth for architecture and delivery guidance.
 
 ## Document Inventory
 <!-- primer-ai:docs-index:start -->
-- `architecture.md`
+- `ENGINEERING_RULES.md`
+- `SKILL_COMPLIANCE.md`
 - `api-contracts.md`
+- `architecture.md`
+- `architecture/refactor-boundaries.md`
 - `conventions.md`
-- `maintenance.md`
-- `skills.md`
 - `decisions/0001-initial-architecture.md`
+- `maintenance.md`
+- `migration/existing-context-import.md`
 - `runbooks/local-dev.md`
+- `skills.md`
 <!-- primer-ai:docs-index:end -->
 
 ## Maintenance Loop

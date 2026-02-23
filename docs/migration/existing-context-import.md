@@ -1,5 +1,7 @@
 # Existing Context Import
 
+- Last reviewed: 2026-02-23
+
 - Source: pre-existing project files before primer-ai scaffold write.
 - Purpose: keep migration transparent and preserve useful guidance from existing agent/docs artifacts.
 
