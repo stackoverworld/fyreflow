@@ -1,7 +1,9 @@
 import type { LocalStore } from "../../storage.js";
+import { normalizeStepLabel } from "../../stepLabel.js";
 import type {
   PipelineRun,
   PipelineStep,
+  StepTriggerReason,
   StepQualityGateResult,
   StepRun,
   WorkflowOutcome
@@ -11,7 +13,7 @@ import { nowIso } from "./time.js";
 function createRunStep(step: PipelineStep): StepRun {
   return {
     stepId: step.id,
-    stepName: step.name,
+    stepName: normalizeStepLabel(step.name, step.id),
     role: step.role,
     status: "pending",
     attempts: 0,
@@ -129,12 +131,23 @@ export function markRunCancelled(store: LocalStore, runId: string, reason: strin
   });
 }
 
-export function markStepRunning(store: LocalStore, runId: string, step: PipelineStep, context: string, attempt: number): void {
+export function markStepRunning(
+  store: LocalStore,
+  runId: string,
+  step: PipelineStep,
+  context: string,
+  attempt: number,
+  triggeredByStepId?: string,
+  triggeredByReason?: StepTriggerReason
+): void {
   store.updateRun(runId, (run) => {
+    const stepLabel = normalizeStepLabel(step.name, step.id);
     const nextRun = updateRunStep(run, step, (current) => ({
       ...current,
       status: "running",
       attempts: attempt,
+      triggeredByStepId,
+      triggeredByReason,
       inputContext: context,
       error: undefined,
       qualityGateResults: [],
@@ -143,7 +156,7 @@ export function markStepRunning(store: LocalStore, runId: string, step: Pipeline
 
     return {
       ...nextRun,
-      logs: [...nextRun.logs, `${step.name} started (attempt ${attempt})`]
+      logs: [...nextRun.logs, `${stepLabel} started (attempt ${attempt})`]
     };
   });
 }
@@ -156,13 +169,18 @@ export function markStepCompleted(
   subagentNotes: string[],
   qualityGateResults: StepQualityGateResult[],
   workflowOutcome: WorkflowOutcome,
-  attempt: number
+  attempt: number,
+  triggeredByStepId?: StepRun["triggeredByStepId"],
+  triggeredByReason?: StepRun["triggeredByReason"]
 ): void {
   store.updateRun(runId, (run) => {
+    const stepLabel = normalizeStepLabel(step.name, step.id);
     const nextRun = updateRunStep(run, step, (current) => ({
       ...current,
       status: "completed",
       attempts: attempt,
+      triggeredByStepId: triggeredByStepId ?? current.triggeredByStepId,
+      triggeredByReason: triggeredByReason ?? current.triggeredByReason,
       workflowOutcome,
       output,
       subagentNotes,
@@ -172,13 +190,14 @@ export function markStepCompleted(
 
     return {
       ...nextRun,
-      logs: [...nextRun.logs, `${step.name} completed (${workflowOutcome})`]
+      logs: [...nextRun.logs, `${stepLabel} completed (${workflowOutcome})`]
     };
   });
 }
 
 export function markStepFailed(store: LocalStore, runId: string, step: PipelineStep, error: string, attempt: number): void {
   store.updateRun(runId, (run) => {
+    const stepLabel = normalizeStepLabel(step.name, step.id);
     const nextRun = updateRunStep(run, step, (current) => ({
       ...current,
       status: "failed",
@@ -192,7 +211,26 @@ export function markStepFailed(store: LocalStore, runId: string, step: PipelineS
       ...nextRun,
       status: "failed",
       finishedAt: nowIso(),
-      logs: [...nextRun.logs, `${step.name} failed: ${error}`]
+      logs: [...nextRun.logs, `${stepLabel} failed: ${error}`]
+    };
+  });
+}
+
+export function markStepPaused(store: LocalStore, runId: string, step: PipelineStep, attempt: number): void {
+  store.updateRun(runId, (run) => {
+    const stepLabel = normalizeStepLabel(step.name, step.id);
+    const nextRun = updateRunStep(run, step, (current) => ({
+      ...current,
+      status: "pending",
+      attempts: Math.max(current.attempts, attempt),
+      workflowOutcome: "neutral",
+      error: undefined,
+      finishedAt: undefined
+    }));
+
+    return {
+      ...nextRun,
+      logs: [...nextRun.logs, `${stepLabel} paused (attempt ${attempt})`]
     };
   });
 }

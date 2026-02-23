@@ -25,7 +25,7 @@ export function normalizeRuntime(runtime: Partial<FlowRuntime> | undefined): Flo
         : defaultRuntime.maxStepExecutions,
     stageTimeoutMs:
       typeof runtime?.stageTimeoutMs === "number"
-        ? Math.max(10_000, Math.min(1_200_000, Math.floor(runtime.stageTimeoutMs)))
+        ? Math.max(10_000, Math.min(18_000_000, Math.floor(runtime.stageTimeoutMs)))
         : defaultRuntime.stageTimeoutMs
   };
 }

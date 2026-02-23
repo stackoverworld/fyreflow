@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const CLAUDE_DEFAULT_URL = "https://api.anthropic.com/v1";
 export const OPENAI_DEFAULT_URL = "https://api.openai.com/v1";
-export const CLI_EXEC_TIMEOUT_MS = 1_200_000;
+export const CLI_EXEC_TIMEOUT_MS = 18_000_000;
 
 const LOCAL_BIN_DIR = path.join(os.homedir(), ".local", "bin");
 const CODEX_LOCAL_BIN_PATH = path.join(LOCAL_BIN_DIR, "codex");
@@ -18,7 +18,13 @@ export const CLAUDE_CLI_COMMAND =
 const CLAUDE_CLI_SKIP_PERMISSIONS = (process.env.CLAUDE_CLI_SKIP_PERMISSIONS ?? "1").trim() !== "0";
 const CLAUDE_CLI_STRICT_MCP = (process.env.CLAUDE_CLI_STRICT_MCP ?? "1").trim() !== "0";
 const CLAUDE_CLI_DISABLE_SLASH_COMMANDS = (process.env.CLAUDE_CLI_DISABLE_SLASH_COMMANDS ?? "1").trim() !== "0";
-const CLAUDE_CLI_SETTING_SOURCES = (process.env.CLAUDE_CLI_SETTING_SOURCES ?? "user").trim();
+const DEFAULT_CLAUDE_CLI_SETTING_SOURCES = "project,local";
+const CLAUDE_CLI_SETTING_SOURCES = (
+  process.env.CLAUDE_CLI_SETTING_SOURCES ?? DEFAULT_CLAUDE_CLI_SETTING_SOURCES
+).trim();
+const CLAUDE_CLI_VERBOSE = (process.env.CLAUDE_CLI_VERBOSE ?? "1").trim() !== "0";
+const CLAUDE_CLI_DEBUG = (process.env.CLAUDE_CLI_DEBUG ?? "0").trim() !== "0";
+const CLAUDE_CLI_DEBUG_FILTER = (process.env.CLAUDE_CLI_DEBUG_FILTER ?? "").trim();
 
 const CLAUDE_CLI_PERMISSION_MODE = (() => {
   const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "bypassPermissions").trim();
@@ -60,4 +66,18 @@ export function isUnknownClaudeOptionError(error: unknown): boolean {
     return false;
   }
   return /\bunknown\b.+\b(option|argument)\b|did you mean|unrecognized option/i.test(error.message);
+}
+
+export function applyClaudeDiagnosticFlags(args: string[]): void {
+  if (CLAUDE_CLI_VERBOSE) {
+    args.push("--verbose");
+  }
+  if (!CLAUDE_CLI_DEBUG) {
+    return;
+  }
+  if (CLAUDE_CLI_DEBUG_FILTER.length > 0) {
+    args.push("--debug", CLAUDE_CLI_DEBUG_FILTER);
+    return;
+  }
+  args.push("--debug");
 }

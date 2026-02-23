@@ -24,6 +24,7 @@ export function CanvasLayers({
   animatedNodeSet,
   animatedLinkSet,
   glowReadySet,
+  runStatus,
   toolMode,
   marqueeFrame,
   children
@@ -43,14 +44,21 @@ export function CanvasLayers({
     nodeDragDidMoveRef
   } = selectionState;
 
-  const isRunning = animatedNodeSet.size > 0 || animatedLinkSet.size > 0;
+  const isRunning =
+    runStatus === "running" ||
+    runStatus === "queued" ||
+    runStatus === "awaiting_approval" ||
+    animatedNodeSet.size > 0 ||
+    animatedLinkSet.size > 0;
+  const isPaused = runStatus === "paused";
 
   return (
     <div
       ref={canvasRef as RefObject<HTMLDivElement>}
       className={cn(
-        "relative overflow-hidden rounded-2xl rounded-bl-none rounded-tr-none border border-ink-800 bg-ink-950/50",
-        isRunning && "canvas-running-border",
+        "relative overflow-hidden rounded-2xl rounded-bl-none rounded-tr-none border border-ink-800 bg-ink-950/50 canvas-run-overlay",
+        isRunning && "is-running",
+        isPaused && "is-paused",
         panState ? "cursor-grabbing" : toolMode === "pan" ? "cursor-grab" : "cursor-crosshair"
       )}
       style={{
@@ -95,6 +103,7 @@ export function CanvasLayers({
         viewport={viewport}
         renderedLinks={renderedLinks}
         selectedLinkId={selectedLinkId}
+        selectedNodeId={selectedNodeId}
         selectedNodeIds={selectedNodeIds}
         animatedLinkSet={animatedLinkSet}
         readOnly={readOnly}

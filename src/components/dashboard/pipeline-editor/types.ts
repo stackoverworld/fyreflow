@@ -11,9 +11,13 @@ export interface PipelineEditorMcpServer {
 export interface PipelineEditorProps {
   draft: PipelinePayload;
   activeRun?: PipelineRun | null;
+  startingRun?: boolean;
+  debugPreviewDispatchRouteId?: string | null;
   readOnly?: boolean;
   modelCatalog: Record<ProviderId, ModelCatalogEntry[]>;
   mcpServers: PipelineEditorMcpServer[];
+  claudeFastModeAvailable: boolean;
+  claudeFastModeUnavailableNote?: string;
   onChange: (next: PipelinePayload) => void;
   onCanvasDragStateChange?: (active: boolean) => void;
   onStepPanelChange?: (open: boolean) => void;
@@ -92,6 +96,8 @@ export interface GeneralSectionProps {
   readOnly: boolean;
   modelCatalog: Record<ProviderId, ModelCatalogEntry[]>;
   mcpServers: PipelineEditorMcpServer[];
+  claudeFastModeAvailable: boolean;
+  claudeFastModeUnavailableNote?: string;
   selectedStep: PipelinePayload["steps"][number];
   selectedStepIndex: number;
   selectedModelMeta?: ModelCatalogEntry;

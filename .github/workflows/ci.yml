@@ -24,11 +24,8 @@ jobs:
         if: ${{ hashFiles('package-lock.json') == '' && hashFiles('package.json') != '' }}
         run: npm install --no-audit --no-fund
 
-      - name: Run repository checks
-        run: |
-          node scripts/check-agent-context.mjs
-          node scripts/check-doc-freshness.mjs
-          node scripts/check-skills.mjs
-          npx tsc --noEmit
-          vitest run
-          vite build
+      - name: Install Playwright browser dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run repository checks and tests
+        run: npm run check:full

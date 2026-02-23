@@ -11,6 +11,11 @@ export interface ArtifactExistenceCheck {
   exists: boolean;
 }
 
+export interface ArtifactStateCheck extends ArtifactExistenceCheck {
+  mtimeMs: number | null;
+  sizeBytes: number | null;
+}
+
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -46,6 +51,33 @@ export async function checkArtifactExists(
   };
 }
 
+async function statPath(filePath: string): Promise<{ mtimeMs: number; sizeBytes: number } | null> {
+  try {
+    const stat = await fs.stat(filePath);
+    return {
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function checkArtifactState(
+  template: string,
+  storagePaths: StepStoragePaths,
+  runInputs: RunInputs
+): Promise<ArtifactStateCheck> {
+  const existence = await checkArtifactExists(template, storagePaths, runInputs);
+  const stat = existence.foundPath ? await statPath(existence.foundPath) : null;
+
+  return {
+    ...existence,
+    mtimeMs: stat?.mtimeMs ?? null,
+    sizeBytes: stat?.sizeBytes ?? null
+  };
+}
+
 export async function checkArtifactsExist(
   templates: string[],
   storagePaths: StepStoragePaths,
@@ -54,6 +86,18 @@ export async function checkArtifactsExist(
   const checks: ArtifactExistenceCheck[] = [];
   for (const template of templates) {
     checks.push(await checkArtifactExists(template, storagePaths, runInputs));
+  }
+  return checks;
+}
+
+export async function checkArtifactsState(
+  templates: string[],
+  storagePaths: StepStoragePaths,
+  runInputs: RunInputs
+): Promise<ArtifactStateCheck[]> {
+  const checks: ArtifactStateCheck[] = [];
+  for (const template of templates) {
+    checks.push(await checkArtifactState(template, storagePaths, runInputs));
   }
   return checks;
 }

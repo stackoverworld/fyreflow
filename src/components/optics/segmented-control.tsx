@@ -14,6 +14,7 @@ interface SegmentedControlProps<T extends string = string> {
   onValueChange: (value: T) => void;
   className?: string;
   disabled?: boolean;
+  size?: "default" | "sm";
 }
 
 export function SegmentedControl<T extends string = string>({
@@ -21,8 +22,10 @@ export function SegmentedControl<T extends string = string>({
   value,
   onValueChange,
   className,
-  disabled
+  disabled,
+  size = "default"
 }: SegmentedControlProps<T>) {
+  const sm = size === "sm";
   const containerRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
 
@@ -46,13 +49,17 @@ export function SegmentedControl<T extends string = string>({
     <div
       ref={containerRef}
         className={cn(
-          "relative flex select-none rounded-xl bg-[var(--seg-track)] p-1",
+          "relative flex select-none bg-[var(--seg-track)]",
+          sm ? "rounded-lg p-0.5" : "rounded-xl p-1",
           disabled && "opacity-55",
           className
         )}
       >
       <motion.div
-        className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-[var(--seg-pill)] shadow-[var(--seg-pill-shadow)]"
+        className={cn(
+          "absolute rounded-lg bg-[var(--seg-pill)] shadow-[var(--seg-pill-shadow)]",
+          sm ? "top-0.5 h-[calc(100%-4px)]" : "top-1 h-[calc(100%-8px)]"
+        )}
         animate={{ left: indicator.left, width: indicator.width }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
       />
@@ -71,7 +78,8 @@ export function SegmentedControl<T extends string = string>({
               }
             }}
             className={cn(
-              "relative z-10 flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 cursor-pointer",
+              "relative z-10 flex flex-1 items-center justify-center rounded-lg font-medium transition-colors duration-150 cursor-pointer",
+              sm ? "gap-1.5 px-2.5 py-1 text-[11px]" : "gap-2 px-3 py-2 text-[13px]",
               isActive ? "text-ink-50" : "text-ink-500 hover:text-ink-300",
               disabled && "cursor-not-allowed"
             )}

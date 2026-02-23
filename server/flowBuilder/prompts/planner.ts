@@ -1,7 +1,12 @@
 import { clip } from "../normalizers.js";
+import {
+  formatProviderRuntimeContext,
+  type FlowBuilderProviderRuntimeContext
+} from "./providerRuntime.js";
 
 interface PlannerRequest {
   prompt: string;
+  providerRuntime?: FlowBuilderProviderRuntimeContext;
   availableMcpServers?: Array<{
     id: string;
     name: string;
@@ -35,6 +40,10 @@ function summarizeAvailableMcpServers(servers: PlannerRequest["availableMcpServe
 }
 
 export function buildPlannerContext(request: PlannerRequest): string {
+  const providerRuntime = request.providerRuntime
+    ? formatProviderRuntimeContext(request.providerRuntime)
+    : "Provider runtime profile is unavailable.";
+
   return [
     "Generate a workflow graph for the request below.",
     "",
@@ -48,8 +57,8 @@ export function buildPlannerContext(request: PlannerRequest): string {
     '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
     '  "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "America/New_York", "task": "Run morning sync checks", "runMode": "smart", "inputs": { "source_pdf_path": "/tmp/source.pdf" } },',
     '  "steps": [',
-    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown" },',
-    '    { "name": "Builder", "role": "executor", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nIncoming:\\n{{incoming_outputs}}", "enableIsolatedStorage": true, "enableSharedStorage": true, "enabledMcpServerIds": ["figma-mcp-id"], "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"], "requiredOutputFiles": ["{{shared_storage_path}}/artifacts.html"], "scenarios": ["full"], "skipIfArtifacts": ["{{shared_storage_path}}/investor-deck.html"] }',
+    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown", "policyProfileIds": [], "cacheBypassInputKeys": [], "cacheBypassOrchestratorPromptPatterns": [] },',
+    '    { "name": "Builder", "role": "executor", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nIncoming:\\n{{incoming_outputs}}", "enableIsolatedStorage": true, "enableSharedStorage": true, "enabledMcpServerIds": ["design-mcp-id"], "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"], "requiredOutputFiles": ["{{shared_storage_path}}/artifacts.html"], "scenarios": ["default"], "skipIfArtifacts": ["{{shared_storage_path}}/artifacts.html"], "policyProfileIds": ["design_deck_assets"], "cacheBypassInputKeys": ["force_refresh_design_assets"], "cacheBypassOrchestratorPromptPatterns": ["pdf content extraction.*runs always"] }',
     "  ],",
     '  "links": [',
     '    { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
@@ -81,9 +90,14 @@ export function buildPlannerContext(request: PlannerRequest): string {
     "- Only set schedule.enabled=true when user explicitly asks for automatic scheduled runs.",
     "- Platform supports per-step MCP access via enabledMcpServerIds and per-step isolated/shared storage.",
     "- Parameterize runtime-specific values via placeholders like {{input.source_pdf_path}} instead of hardcoding secrets/paths.",
-    "- Keep run-input keys canonical and reusable (for example: figma_links, figma_token, source_pdf_path, output_dir).",
+    "- Keep run-input keys canonical and reusable (for example: source_links, source_api_token, source_pdf_path, output_dir).",
     "- Mirror artifact locations in requiredOutputFiles/quality-gate artifactPath placeholders (prefer {{shared_storage_path}}/file.json for intermediate files).",
     "- For network-heavy or multi-artifact pipelines, prefer stageTimeoutMs >= 420000.",
+    "- Use step.policyProfileIds to enable reusable backend policies (for example design_deck_assets for frame-map/assets-manifest contracts).",
+    "- Use step.cacheBypassInputKeys when a step must bypass skip-cache on explicit run inputs.",
+    "- Use step.cacheBypassOrchestratorPromptPatterns when orchestrator instructions should force a step refresh.",
+    "",
+    providerRuntime,
     "",
     "Configured MCP servers (use exact ids in enabledMcpServerIds when needed):",
     summarizeAvailableMcpServers(request.availableMcpServers),

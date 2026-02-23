@@ -1,6 +1,11 @@
 import { nanoid } from "nanoid";
 import { executeProviderStep } from "./providers.js";
 import {
+  getClaudeFastModeAvailabilityNote,
+  hasActiveClaudeApiKey,
+  isClaudeFastModeEnabledForInput
+} from "./providerCapabilities.js";
+import {
   parseFlowDecision,
   parseGeneratedFlow
 } from "./flowBuilder/schema.js";
@@ -33,6 +38,7 @@ import type {
   FlowBuilderRequest,
   FlowBuilderResponse
 } from "./flowBuilder/contracts.js";
+import type { FlowBuilderProviderRuntimeContext } from "./flowBuilder/prompts/providerRuntime.js";
 import type {
   ProviderConfig,
   ProviderId
@@ -45,9 +51,54 @@ export type {
   FlowChatMessage
 } from "./flowBuilder/contracts.js";
 
-async function generateDraftOnly(
+interface PreparedFlowBuilderRequest {
+  request: FlowBuilderRequest;
+  providerRuntime: FlowBuilderProviderRuntimeContext;
+  capabilityNotes: string[];
+}
+
+function prepareFlowBuilderRequest(
   request: FlowBuilderRequest,
   provider: ProviderConfig
+): PreparedFlowBuilderRequest {
+  const fastModeRequested = request.providerId === "claude" && request.fastMode === true;
+  const fastModeEffective =
+    request.providerId === "claude"
+      ? isClaudeFastModeEnabledForInput(provider, request.fastMode)
+      : false;
+  const providerRuntime: FlowBuilderProviderRuntimeContext = {
+    providerId: request.providerId,
+    authMode: provider.authMode,
+    claudeFastModeAvailable: hasActiveClaudeApiKey(provider),
+    fastModeRequested,
+    fastModeEffective,
+    fastModeNote: getClaudeFastModeAvailabilityNote(provider, request.fastMode)
+  };
+
+  return {
+    request:
+      request.providerId === "claude"
+        ? {
+            ...request,
+            fastMode: fastModeEffective
+          }
+        : {
+            ...request,
+            fastMode: false
+          },
+    providerRuntime,
+    capabilityNotes:
+      fastModeRequested && !fastModeEffective
+        ? ["Fast mode was requested but disabled because Claude API key auth is not active in Provider Auth."]
+        : []
+  };
+}
+
+async function generateDraftOnly(
+  request: FlowBuilderRequest,
+  provider: ProviderConfig,
+  providerRuntime: FlowBuilderProviderRuntimeContext,
+  capabilityNotes: string[]
 ): Promise<DraftOnlyResult> {
   const generatorStep = createGeneratorStep(
     request,
@@ -59,7 +110,10 @@ async function generateDraftOnly(
     provider,
     step: generatorStep,
     task: "Generate an agent workflow graph",
-    context: buildPlannerContext(request),
+    context: buildPlannerContext({
+      ...request,
+      providerRuntime
+    }),
     outputMode: "json"
   });
 
@@ -72,7 +126,7 @@ async function generateDraftOnly(
     return {
       draft: buildFlowDraft(parsed, request),
       source: "model",
-      notes: ["Generated from selected AI model."]
+      notes: ["Generated from selected AI model.", ...capabilityNotes]
     };
   }
 
@@ -102,7 +156,11 @@ async function generateDraftOnly(
       return {
         draft: buildFlowDraft(repaired, request),
         source: "model",
-        notes: ["Generated from selected AI model.", "Applied JSON repair pass before building the flow."]
+        notes: [
+          "Generated from selected AI model.",
+          "Applied JSON repair pass before building the flow.",
+          ...capabilityNotes
+        ]
       };
     }
   } catch {
@@ -119,7 +177,14 @@ async function generateDraftOnly(
         prompt: "Generate strict workflow JSON from scratch. Return exactly one valid JSON object and nothing else."
       },
       task: "Regenerate workflow JSON",
-      context: buildPlannerRegenerationContext(request, rawOutput, repairedOutput),
+      context: buildPlannerRegenerationContext(
+        {
+          ...request,
+          providerRuntime
+        },
+        rawOutput,
+        repairedOutput
+      ),
       outputMode: "json"
     });
 
@@ -134,7 +199,8 @@ async function generateDraftOnly(
         source: "model",
         notes: [
           "Generated from selected AI model.",
-          "Applied JSON regeneration pass after repair to recover valid workflow JSON."
+          "Applied JSON regeneration pass after repair to recover valid workflow JSON.",
+          ...capabilityNotes
         ]
       };
     }
@@ -146,14 +212,19 @@ async function generateDraftOnly(
   return {
     draft: buildFlowDraft(fallback, request),
     source: "fallback",
-    notes: ["Model output was not valid JSON after repair/regeneration. Applied deterministic fallback flow."],
+    notes: [
+      "Model output was not valid JSON after repair/regeneration. Applied deterministic fallback flow.",
+      ...capabilityNotes
+    ],
     rawOutput: mergeRawOutputs(rawOutput, repairedOutput, regeneratedOutput)
   };
 }
 
 async function generateConversationResponse(
   request: FlowBuilderRequest,
-  provider: ProviderConfig
+  provider: ProviderConfig,
+  providerRuntime: FlowBuilderProviderRuntimeContext,
+  capabilityNotes: string[]
 ): Promise<FlowBuilderResponse> {
   const copilotStep = createGeneratorStep(
     request,
@@ -165,7 +236,10 @@ async function generateConversationResponse(
     provider,
     step: copilotStep,
     task: "Respond to user and decide flow action",
-    context: buildChatPlannerContext(request),
+    context: buildChatPlannerContext({
+      ...request,
+      providerRuntime
+    }),
     outputMode: "json"
   });
 
@@ -186,7 +260,7 @@ async function generateConversationResponse(
         draft: next.draft,
         questions: parsedDecision.questions,
         source: "model",
-        notes: ["Generated from selected AI model.", ...next.notes]
+        notes: ["Generated from selected AI model.", ...capabilityNotes, ...next.notes]
       };
     }
   }
@@ -224,7 +298,12 @@ async function generateConversationResponse(
           draft: next.draft,
           questions: repairedDecision.questions,
           source: "model",
-          notes: ["Generated from selected AI model.", "Applied JSON repair pass before finalizing response.", ...next.notes]
+          notes: [
+            "Generated from selected AI model.",
+            "Applied JSON repair pass before finalizing response.",
+            ...capabilityNotes,
+            ...next.notes
+          ]
         };
       }
     }
@@ -242,7 +321,14 @@ async function generateConversationResponse(
         prompt: "Regenerate strict copilot JSON from scratch. Return exactly one valid JSON object and nothing else."
       },
       task: "Regenerate copilot JSON",
-      context: buildChatRegenerationContext(request, rawOutput, repairedOutput),
+      context: buildChatRegenerationContext(
+        {
+          ...request,
+          providerRuntime
+        },
+        rawOutput,
+        repairedOutput
+      ),
       outputMode: "json"
     });
 
@@ -269,6 +355,7 @@ async function generateConversationResponse(
           notes: [
             "Generated from selected AI model.",
             "Applied JSON regeneration pass after repair to recover copilot response.",
+            ...capabilityNotes,
             ...next.notes
           ]
         };
@@ -289,7 +376,11 @@ async function generateConversationResponse(
       message: defaultMessageForAction(next.action, next.draft),
       draft: next.draft,
       source: "fallback",
-      notes: ["Model output missed copilot action wrapper. Recovered flow JSON and inferred action.", ...next.notes],
+      notes: [
+        "Model output missed copilot action wrapper. Recovered flow JSON and inferred action.",
+        ...capabilityNotes,
+        ...next.notes
+      ],
       rawOutput: mergeRawOutputs(rawOutput, repairedOutput, regeneratedOutput)
     };
   }
@@ -299,7 +390,7 @@ async function generateConversationResponse(
       action: "answer",
       message: clip(rawOutput, 2000) || "I could not parse a structured response, but no flow changes were requested.",
       source: "fallback",
-      notes: ["Model output was not valid copilot JSON. Returned textual answer fallback."],
+      notes: ["Model output was not valid copilot JSON. Returned textual answer fallback.", ...capabilityNotes],
       rawOutput: mergeRawOutputs(rawOutput, repairedOutput, regeneratedOutput)
     };
   }
@@ -314,7 +405,11 @@ async function generateConversationResponse(
     message: defaultMessageForAction(next.action, next.draft),
     draft: next.draft,
     source: "fallback",
-    notes: ["Model output was not valid copilot JSON after repair/regeneration. Applied deterministic fallback response.", ...next.notes],
+    notes: [
+      "Model output was not valid copilot JSON after repair/regeneration. Applied deterministic fallback response.",
+      ...capabilityNotes,
+      ...next.notes
+    ],
     rawOutput: mergeRawOutputs(rawOutput, repairedOutput, regeneratedOutput)
   };
 }
@@ -327,13 +422,25 @@ export async function generateFlowDraft(
   if (!provider) {
     throw new Error(`Provider ${request.providerId} is unavailable`);
   }
+  const prepared = prepareFlowBuilderRequest(request, provider);
 
-  const hasConversationContext = Boolean(request.currentDraft) || (request.history?.length ?? 0) > 0;
+  const hasConversationContext =
+    Boolean(prepared.request.currentDraft) || (prepared.request.history?.length ?? 0) > 0;
   if (hasConversationContext) {
-    return generateConversationResponse(request, provider);
+    return generateConversationResponse(
+      prepared.request,
+      provider,
+      prepared.providerRuntime,
+      prepared.capabilityNotes
+    );
   }
 
-  const generated = await generateDraftOnly(request, provider);
+  const generated = await generateDraftOnly(
+    prepared.request,
+    provider,
+    prepared.providerRuntime,
+    prepared.capabilityNotes
+  );
   return {
     action: "replace_flow",
     message:

@@ -7,6 +7,8 @@ interface ExecutionFieldsProps {
   draft: GeneralSectionProps["draft"];
   modelCatalog: GeneralSectionProps["modelCatalog"];
   mcpServers: GeneralSectionProps["mcpServers"];
+  claudeFastModeAvailable: GeneralSectionProps["claudeFastModeAvailable"];
+  claudeFastModeUnavailableNote?: GeneralSectionProps["claudeFastModeUnavailableNote"];
   selectedStep: GeneralSectionProps["selectedStep"];
   selectedModelMeta: GeneralSectionProps["selectedModelMeta"];
   reasoningModes: GeneralSectionProps["reasoningModes"];
@@ -17,6 +19,8 @@ interface ExecutionFieldsProps {
 export function ExecutionFields({
   modelCatalog,
   mcpServers,
+  claudeFastModeAvailable,
+  claudeFastModeUnavailableNote,
   selectedStep,
   selectedModelMeta,
   reasoningModes,
@@ -40,6 +44,8 @@ export function ExecutionFields({
         mcpServers={mcpServers}
         selectedStep={selectedStep}
         selectedModelMeta={selectedModelMeta}
+        claudeFastModeAvailable={claudeFastModeAvailable}
+        claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
         onPatchSelectedStep={onPatchSelectedStep}
       />
 

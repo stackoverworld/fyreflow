@@ -7,6 +7,8 @@ export function GeneralSection({
   draft,
   modelCatalog,
   mcpServers,
+  claudeFastModeAvailable,
+  claudeFastModeUnavailableNote,
   selectedStep,
   selectedStepIndex,
   selectedModelMeta,
@@ -38,6 +40,8 @@ export function GeneralSection({
         draft={draft}
         modelCatalog={modelCatalog}
         mcpServers={mcpServers}
+        claudeFastModeAvailable={claudeFastModeAvailable}
+        claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
         selectedStep={selectedStep}
         selectedModelMeta={selectedModelMeta}
         reasoningModes={reasoningModes}

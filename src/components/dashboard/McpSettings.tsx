@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { McpServerConfig, McpServerPayload, StorageConfig } from "@/lib/types";
 import { McpSettingsForm, createNewServerDraft, toServerDraft, type McpDraft } from "@/components/dashboard/panels/mcp/McpSettingsForm";
+import { usePersistedJsonState } from "@/components/dashboard/usePersistedJsonState";
 
 interface McpSettingsProps {
   mcpServers: McpServerConfig[];
@@ -9,6 +10,14 @@ interface McpSettingsProps {
   onUpdateServer: (serverId: string, payload: Partial<McpServerPayload>) => Promise<void>;
   onDeleteServer: (serverId: string) => Promise<void>;
   onSaveStorage: (payload: Partial<StorageConfig>) => Promise<void>;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return typeof value === "string" || value === null;
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
 }
 
 export function McpSettings({
@@ -25,8 +34,16 @@ export function McpSettings({
   const [busyServerId, setBusyServerId] = useState<string | null>(null);
   const [savingStorage, setSavingStorage] = useState(false);
   const [creatingServer, setCreatingServer] = useState(false);
-  const [expandedServerId, setExpandedServerId] = useState<string | null>(null);
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [expandedServerId, setExpandedServerId] = usePersistedJsonState<string | null>(
+    "fyreflow:mcp-expanded-server-id",
+    null,
+    isNullableString
+  );
+  const [showAddForm, setShowAddForm] = usePersistedJsonState<boolean>(
+    "fyreflow:mcp-show-add-form",
+    false,
+    isBoolean
+  );
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +61,17 @@ export function McpSettings({
       return next;
     });
   }, [mcpServers]);
+
+  useEffect(() => {
+    if (!expandedServerId) {
+      return;
+    }
+
+    const stillExists = mcpServers.some((server) => server.id === expandedServerId);
+    if (!stillExists) {
+      setExpandedServerId(null);
+    }
+  }, [expandedServerId, mcpServers, setExpandedServerId]);
 
   const storageChanged = useMemo(
     () => JSON.stringify(storageDraft) !== JSON.stringify(storage),

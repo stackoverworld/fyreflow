@@ -14,6 +14,8 @@ const TOKEN_CANONICAL_EQUIVALENTS: Record<string, string> = {
   folders: "dirs"
 };
 const LOCATION_SUFFIXES = new Set(["path", "dir", "file"]);
+const SECRET_SUFFIXES = ["token", "key", "secret"] as const;
+const SECRET_QUALIFIERS = new Set(["api", "personal", "access", "private", "auth", "pat"]);
 
 function normalizeForMatch(raw: string): string {
   return raw
@@ -46,6 +48,20 @@ function buildRunInputKeyVariants(raw: string): Set<string> {
     variants.add(tokens.slice(0, -1).join("_"));
   } else {
     variants.add([...tokens, "path"].join("_"));
+  }
+
+  if (SECRET_SUFFIXES.includes(last as (typeof SECRET_SUFFIXES)[number])) {
+    const compactTokens = tokens.filter(
+      (token, index) => index === tokens.length - 1 || !SECRET_QUALIFIERS.has(token)
+    );
+    if (compactTokens.length >= 2) {
+      variants.add(compactTokens.join("_"));
+
+      const stem = compactTokens.slice(0, -1);
+      for (const suffix of SECRET_SUFFIXES) {
+        variants.add([...stem, suffix].join("_"));
+      }
+    }
   }
 
   return variants;

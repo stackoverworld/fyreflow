@@ -4,8 +4,17 @@ import {
   normalizeRuntime,
   normalizeSchedule
 } from "../normalizers.js";
-import { maxHistoryCharsPerMessage, maxHistoryMessages } from "../constants.js";
+import {
+  maxHistoryCharsPerMessage,
+  maxHistoryCompactionChars,
+  maxHistoryContextChars,
+  maxHistorySummaryLineChars
+} from "../constants.js";
 import type { PipelineInput } from "../../types.js";
+import {
+  formatProviderRuntimeContext,
+  type FlowBuilderProviderRuntimeContext
+} from "./providerRuntime.js";
 
 interface PromptHistoryMessage {
   role: "user" | "assistant";
@@ -14,6 +23,7 @@ interface PromptHistoryMessage {
 
 interface PlannerRequest {
   prompt: string;
+  providerRuntime?: FlowBuilderProviderRuntimeContext;
   availableMcpServers?: Array<{
     id: string;
     name: string;
@@ -52,7 +62,10 @@ function summarizeCurrentDraft(currentDraft: PipelineInput | undefined): string 
       requiredOutputFields: step.requiredOutputFields,
       requiredOutputFiles: step.requiredOutputFiles,
       scenarios: step.scenarios,
-      skipIfArtifacts: step.skipIfArtifacts
+      skipIfArtifacts: step.skipIfArtifacts,
+      policyProfileIds: step.policyProfileIds,
+      cacheBypassInputKeys: step.cacheBypassInputKeys,
+      cacheBypassOrchestratorPromptPatterns: step.cacheBypassOrchestratorPromptPatterns
     })),
     links: (currentDraft.links ?? []).map((link) => ({
       source: nameById.get(link.sourceStepId) ?? link.sourceStepId,
@@ -114,7 +127,73 @@ function normalizeHistory(history: PromptHistoryMessage[] | undefined, prompt: s
     sanitized.push({ role: "user", content: latestPrompt });
   }
 
-  return sanitized.slice(-maxHistoryMessages);
+  return compactHistoryByContextBudget(sanitized);
+}
+
+function countHistoryChars(history: PromptHistoryMessage[]): number {
+  return history.reduce((sum, message) => sum + message.content.length + 16, 0);
+}
+
+function compactHistoryByContextBudget(history: PromptHistoryMessage[]): PromptHistoryMessage[] {
+  if (history.length <= 1) {
+    return history;
+  }
+  if (countHistoryChars(history) <= maxHistoryContextChars) {
+    return history;
+  }
+
+  const summaryReserveChars = Math.min(maxHistoryCompactionChars, Math.floor(maxHistoryContextChars * 0.4));
+  const maxRecentChars = Math.max(4_000, maxHistoryContextChars - summaryReserveChars);
+  const recent: PromptHistoryMessage[] = [];
+  let recentChars = 0;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (!message) {
+      continue;
+    }
+    const nextChars = recentChars + message.content.length + 16;
+    if (recent.length > 0 && nextChars > maxRecentChars) {
+      break;
+    }
+    recent.push(message);
+    recentChars = nextChars;
+  }
+  recent.reverse();
+
+  const compactedCount = Math.max(0, history.length - recent.length);
+  if (compactedCount === 0) {
+    return recent;
+  }
+
+  const compactedPrefix = history.slice(0, compactedCount);
+  const compactedDetail = clip(
+    compactedPrefix
+      .map(
+        (message, index) =>
+          `${index + 1}. ${message.role.toUpperCase()}: ${clip(message.content, maxHistorySummaryLineChars)}`
+      )
+      .join("\n"),
+    maxHistoryCompactionChars
+  );
+  const summaryMessage: PromptHistoryMessage = {
+    role: "assistant",
+    content: `Earlier conversation was compacted (${compactedCount} message(s)).\n${compactedDetail}`
+  };
+  const merged = [summaryMessage, ...recent];
+
+  while (merged.length > 1 && countHistoryChars(merged) > maxHistoryContextChars) {
+    merged.splice(1, 1);
+  }
+
+  if (countHistoryChars(merged) > maxHistoryContextChars) {
+    const hardMaxSummaryChars = Math.max(1200, maxHistoryContextChars - 200);
+    merged[0] = {
+      ...summaryMessage,
+      content: clip(summaryMessage.content, hardMaxSummaryChars)
+    };
+  }
+
+  return merged;
 }
 
 function formatHistoryForContext(history: PromptHistoryMessage[]): string {
@@ -127,6 +206,9 @@ function formatHistoryForContext(history: PromptHistoryMessage[]): string {
 
 export function buildChatPlannerContext(request: ChatRequest): string {
   const normalizedHistory = normalizeHistory(request.history, request.prompt);
+  const providerRuntime = request.providerRuntime
+    ? formatProviderRuntimeContext(request.providerRuntime)
+    : "Provider runtime profile is unavailable.";
 
   return [
     "You are an AI copilot inside a visual multi-agent flow editor.",
@@ -160,8 +242,8 @@ export function buildChatPlannerContext(request: ChatRequest): string {
     '    "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
     '    "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "America/New_York", "task": "Run morning sync checks", "runMode": "smart", "inputs": {} },',
     '    "steps": [',
-    '      { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown", "scenarios": [], "skipIfArtifacts": [] },',
-    '      { "name": "Builder", "role": "executor", "prompt": "...", "enableSharedStorage": true, "enableIsolatedStorage": true, "outputFormat": "json", "requiredOutputFiles": ["{{shared_storage_path}}/result.json"], "scenarios": ["full"], "skipIfArtifacts": ["{{shared_storage_path}}/result.json"] }',
+    '      { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableSharedStorage": true, "outputFormat": "markdown", "scenarios": [], "skipIfArtifacts": [], "policyProfileIds": [], "cacheBypassInputKeys": [], "cacheBypassOrchestratorPromptPatterns": [] },',
+    '      { "name": "Builder", "role": "executor", "prompt": "...", "enableSharedStorage": true, "enableIsolatedStorage": true, "outputFormat": "json", "requiredOutputFiles": ["{{shared_storage_path}}/result.json"], "scenarios": ["default"], "skipIfArtifacts": ["{{shared_storage_path}}/result.json"], "policyProfileIds": ["design_deck_assets"], "cacheBypassInputKeys": ["force_refresh_design_assets"], "cacheBypassOrchestratorPromptPatterns": ["pdf content extraction.*runs always"] }',
     "    ],",
     '    "links": [',
     '      { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
@@ -199,10 +281,15 @@ export function buildChatPlannerContext(request: ChatRequest): string {
     "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
     "- Only set schedule.enabled=true when user explicitly asks for scheduled execution.",
     "- Platform supports per-step MCP access via enabledMcpServerIds and isolated/shared storage toggles.",
-    "- Parameterize runtime-specific values via placeholders like {{input.output_dir}} and {{input.figma_links}}.",
-    "- Keep run-input keys canonical and reusable (for example: figma_links, figma_token, source_pdf_path, output_dir).",
+    "- Parameterize runtime-specific values via placeholders like {{input.output_dir}} and {{input.source_links}}.",
+    "- Keep run-input keys canonical and reusable (for example: source_links, source_api_token, source_pdf_path, output_dir).",
     "- Align requiredOutputFiles/quality-gate artifactPath with the same directory used in prompts (prefer {{shared_storage_path}}/artifact.json for internal artifacts).",
     "- For network-heavy or multi-artifact pipelines, prefer stageTimeoutMs >= 420000.",
+    "- Use step.policyProfileIds to attach reusable backend policies (for example design_deck_assets for frame-map/assets-manifest contracts).",
+    "- Use step.cacheBypassInputKeys for input-driven cache bypass controls.",
+    "- Use step.cacheBypassOrchestratorPromptPatterns when orchestrator instructions should force a refresh.",
+    "",
+    providerRuntime,
     "",
     "Configured MCP servers (use exact ids in enabledMcpServerIds when needed):",
     summarizeAvailableMcpServers(request.availableMcpServers),

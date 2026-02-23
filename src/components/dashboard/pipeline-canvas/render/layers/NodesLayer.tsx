@@ -33,6 +33,7 @@ export function NodesLayer({
   glowReadySet
 }: NodesLayerProps) {
   const selectedNodeSet = new Set(selectedNodeIds);
+  const runningModeActive = readOnly || animatedNodeSet.size > 0;
 
   return (
     <div
@@ -50,9 +51,9 @@ export function NodesLayer({
         return (<div
           key={node.id}
             className={cn(
-              "group pointer-events-auto absolute select-none rounded-2xl border bg-[var(--card-surface)] p-3 shadow-lg transition-colors ring-2 ring-transparent ring-offset-0",
+              "group pointer-events-auto absolute select-none rounded-2xl border bg-[var(--card-surface)] p-3 shadow-lg transition-[colors,background-color] ring-2 ring-transparent ring-offset-0 pipeline-node-surface",
               glowReadySet.has(node.id) && "node-border-glow",
-              animatedNodeSet.has(node.id) && "glow-active",
+              animatedNodeSet.has(node.id) && "glow-active node-running-tint",
               readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing",
               selectedNodeSet.has(node.id)
                 ? selectedNodeId === node.id
@@ -246,7 +247,13 @@ export function NodesLayer({
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               ) : null}
-              {!readOnly && <Move className="h-4 w-4 text-ink-500" />}
+              <Move
+                className={cn(
+                  "h-4 w-4 text-ink-500 transition-opacity duration-300 ease-out",
+                  runningModeActive ? "opacity-0" : "opacity-100"
+                )}
+                aria-hidden={runningModeActive}
+              />
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-ink-400">
@@ -281,7 +288,7 @@ export function NodesLayer({
 
               {/* Frosted glass sub-card */}
               <div
-                className="pointer-events-auto absolute left-0 rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] px-3 py-2.5 shadow-sm"
+                className="pointer-events-auto absolute left-0 rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] px-3 py-2.5 shadow-sm pipeline-node-surface"
                 style={{
                   top: NODE_HEIGHT + DELEGATION_SPINE_HEIGHT,
                   width: NODE_WIDTH,

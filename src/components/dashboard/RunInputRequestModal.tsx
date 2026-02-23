@@ -268,7 +268,7 @@ export function RunInputRequestModal({
                 )}
 
                 {missingRequired.length > 0 ? (
-                  <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     Missing required: {missingRequired.map((entry) => entry.label).join(", ")}
                   </div>

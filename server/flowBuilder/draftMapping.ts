@@ -6,7 +6,7 @@ import {
   orchestratorClaudeModel,
   orchestratorContextWindowCap
 } from "./constants.js";
-import type { PipelineInput, PipelineStep } from "../types.js";
+import type { PipelineInput, PipelineLink, PipelineQualityGate, PipelineStep } from "../types.js";
 import {
   normalizeRef,
   normalizeRuntime,
@@ -138,6 +138,175 @@ function resolveIsolatedStorageEnabled(input: StorageResolutionInput): boolean {
   return false;
 }
 
+function shouldDisableSkipArtifactsForStrictRuns(prompt: string): boolean {
+  if (prompt.trim().length === 0) {
+    return false;
+  }
+
+  const normalized = prompt.toLowerCase();
+  const requestsCacheBypass =
+    /\bno\s+cache\b/.test(normalized) ||
+    /\bdisable\s+cache\b/.test(normalized) ||
+    /\bignore\s+cache\b/.test(normalized) ||
+    /\bfresh\s+run\b/.test(normalized) ||
+    /\bforce\s+rebuild\b/.test(normalized) ||
+    /\bfrom\s+scratch\b/.test(normalized);
+  if (!requestsCacheBypass) {
+    return false;
+  }
+
+  return (
+    /\ball\s+steps\b/.test(normalized) ||
+    /\bentire\s+pipeline\b/.test(normalized) ||
+    /\bwhole\s+pipeline\b/.test(normalized) ||
+    /\bglobal(?:ly)?\b/.test(normalized) ||
+    /\bfull\s+rebuild\b/.test(normalized)
+  );
+}
+
+function includesDeliveryToken(value: string): boolean {
+  return /\bdeliver(y|ed|ing)?\b/i.test(value);
+}
+
+function isDeliveryCompletionGate(gate: PipelineQualityGate): boolean {
+  if (gate.kind !== "regex_must_match") {
+    return false;
+  }
+
+  const patternLooksComplete = /\bworkflow_status\b/i.test(gate.pattern) && /\bcomplete\b/i.test(gate.pattern);
+  const nameLooksComplete = /\bcomplete\b/i.test(gate.name);
+  return patternLooksComplete || (includesDeliveryToken(gate.name) && nameLooksComplete);
+}
+
+function findPreferredDeliverySourceStep(
+  steps: PipelineStep[],
+  links: PipelineLink[],
+  deliveryStepId: string
+): PipelineStep | null {
+  const candidates = steps.filter((step) => step.id !== deliveryStepId);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const reviewLike = [...candidates].reverse().find((step) => step.role === "review" || step.role === "tester");
+  if (reviewLike) {
+    return reviewLike;
+  }
+
+  const terminalIds = new Set(
+    candidates
+      .map((step) => step.id)
+      .filter((id) => !links.some((link) => link.sourceStepId === id && link.targetStepId !== deliveryStepId))
+  );
+  const terminalNonOrchestrator = [...candidates]
+    .reverse()
+    .find((step) => terminalIds.has(step.id) && step.role !== "orchestrator");
+  if (terminalNonOrchestrator) {
+    return terminalNonOrchestrator;
+  }
+
+  const nonOrchestrator = [...candidates].reverse().find((step) => step.role !== "orchestrator");
+  if (nonOrchestrator) {
+    return nonOrchestrator;
+  }
+
+  return candidates[candidates.length - 1] ?? null;
+}
+
+function ensureDeliveryStageForCompletionGates(draft: PipelineInput): PipelineInput {
+  if (!Array.isArray(draft.qualityGates) || draft.qualityGates.length === 0) {
+    return draft;
+  }
+
+  const completionGateIndexes = draft.qualityGates
+    .map((gate, index) => ({ gate, index }))
+    .filter((entry) => isDeliveryCompletionGate(entry.gate))
+    .map((entry) => entry.index);
+
+  if (completionGateIndexes.length === 0) {
+    return draft;
+  }
+
+  const steps = [...draft.steps];
+  const links = [...draft.links];
+  let deliveryStep = steps.find((step) => includesDeliveryToken(step.name));
+
+  if (!deliveryStep) {
+    const source = findPreferredDeliverySourceStep(steps, links, "__none__");
+    if (!source) {
+      return draft;
+    }
+
+    const maxX = Math.max(...steps.map((step) => step.position.x), 80);
+    deliveryStep = {
+      id: nanoid(),
+      name: "Delivery",
+      role: "executor",
+      prompt: [
+        "Finalize delivery artifacts.",
+        "1) Ensure investor-deck.html and investor-deck.pdf are available.",
+        "2) If artifacts exist in {{shared_storage_path}}, copy them into {{input.output_dir}}.",
+        "3) Write qa-report.md to {{input.output_dir}} with final artifact paths and validation summary.",
+        "4) End with exactly: WORKFLOW_STATUS: COMPLETE"
+      ].join("\n"),
+      providerId: source.providerId,
+      model: source.model,
+      reasoningEffort: source.reasoningEffort,
+      fastMode: source.fastMode,
+      use1MContext: source.use1MContext,
+      contextWindowTokens: source.contextWindowTokens,
+      position: { x: maxX + 320, y: source.position.y },
+      contextTemplate: defaultContextTemplate,
+      enableDelegation: false,
+      delegationCount: 1,
+      enableIsolatedStorage: true,
+      enableSharedStorage: true,
+      enabledMcpServerIds: [],
+      outputFormat: "markdown",
+      requiredOutputFields: [],
+      requiredOutputFiles: [
+        "{{input.output_dir}}/investor-deck.html",
+        "{{input.output_dir}}/investor-deck.pdf"
+      ],
+      scenarios: [],
+      skipIfArtifacts: [],
+      policyProfileIds: [],
+      cacheBypassInputKeys: [],
+      cacheBypassOrchestratorPromptPatterns: []
+    };
+    steps.push(deliveryStep);
+  }
+
+  const sourceStep = findPreferredDeliverySourceStep(steps, links, deliveryStep.id);
+  if (sourceStep) {
+    const hasIncoming = links.some((link) => link.targetStepId === deliveryStep!.id);
+    if (!hasIncoming) {
+      links.push({
+        id: nanoid(),
+        sourceStepId: sourceStep.id,
+        targetStepId: deliveryStep.id,
+        condition: "on_pass"
+      });
+    }
+  }
+
+  const qualityGates = draft.qualityGates.map((gate, index) =>
+    completionGateIndexes.includes(index)
+      ? {
+          ...gate,
+          targetStepId: deliveryStep!.id
+        }
+      : gate
+  );
+
+  return {
+    ...draft,
+    steps,
+    links,
+    qualityGates
+  };
+}
+
 export function buildFlowDraft(
   spec: GeneratedFlowSpec,
   request: DraftBuildRequest
@@ -147,6 +316,7 @@ export function buildFlowDraft(
   const use1MContext = request.providerId === "claude" && request.use1MContext === true;
   const contextWindowTokens = use1MContext ? Math.max(baseContext, 1_000_000) : baseContext;
   const fastMode = request.providerId === "claude" ? request.fastMode === true : false;
+  const disableSkipArtifacts = shouldDisableSkipArtifactsForStrictRuns(request.prompt);
   const runtime = normalizeRuntime(spec.runtime);
   const schedule = normalizeSchedule(spec.schedule);
 
@@ -166,7 +336,12 @@ export function buildFlowDraft(
     const requiredOutputFields = normalizeStringArray(step.requiredOutputFields, 40) ?? [];
     const requiredOutputFiles = normalizeStringArray(step.requiredOutputFiles, 40) ?? [];
     const scenarios = normalizeStringArray(step.scenarios, 20) ?? [];
-    const skipIfArtifacts = normalizeStringArray(step.skipIfArtifacts, 40) ?? [];
+    const policyProfileIds = normalizeStringArray(step.policyProfileIds, 20) ?? [];
+    const cacheBypassInputKeys = normalizeStringArray(step.cacheBypassInputKeys, 20) ?? [];
+    const cacheBypassOrchestratorPromptPatterns =
+      normalizeStringArray(step.cacheBypassOrchestratorPromptPatterns, 20) ?? [];
+    const configuredSkipIfArtifacts = normalizeStringArray(step.skipIfArtifacts, 40) ?? [];
+    const skipIfArtifacts = disableSkipArtifacts && role !== "orchestrator" ? [] : configuredSkipIfArtifacts;
     const enableSharedStorage = resolveSharedStorageEnabled({
       role,
       explicit: typeof step.enableSharedStorage === "boolean" ? step.enableSharedStorage : undefined,
@@ -214,11 +389,14 @@ export function buildFlowDraft(
       requiredOutputFields,
       requiredOutputFiles,
       scenarios,
-      skipIfArtifacts
+      skipIfArtifacts,
+      policyProfileIds,
+      cacheBypassInputKeys,
+      cacheBypassOrchestratorPromptPatterns
     } satisfies PipelineStep;
   });
 
-  return {
+  const draft: PipelineInput = {
     name: spec.name?.trim() || "Generated Agent Flow",
     description: spec.description?.trim() || "AI-generated workflow graph.",
     steps: stepRecords,
@@ -227,6 +405,8 @@ export function buildFlowDraft(
     runtime,
     schedule
   };
+
+  return ensureDeliveryStageForCompletionGates(draft);
 }
 
 export function buildFlowDraftFromExisting(
@@ -234,6 +414,7 @@ export function buildFlowDraftFromExisting(
   request: DraftBuildRequest,
   currentDraft: PipelineInput
 ): PipelineInput {
+  const disableSkipArtifacts = shouldDisableSkipArtifactsForStrictRuns(request.prompt);
   const existingByName = new Map<string, PipelineInput["steps"][number]>();
   for (const step of currentDraft.steps) {
     const key = normalizeRef(step.name);
@@ -327,9 +508,22 @@ export function buildFlowDraftFromExisting(
     const scenarios =
       normalizeStringArray(step.scenarios, 20) ??
       (Array.isArray(existing?.scenarios) ? existing.scenarios.slice(0, 20) : []);
-    const skipIfArtifacts =
+    const policyProfileIds =
+      normalizeStringArray(step.policyProfileIds, 20) ??
+      (Array.isArray(existing?.policyProfileIds) ? existing.policyProfileIds.slice(0, 20) : []);
+    const cacheBypassInputKeys =
+      normalizeStringArray(step.cacheBypassInputKeys, 20) ??
+      (Array.isArray(existing?.cacheBypassInputKeys) ? existing.cacheBypassInputKeys.slice(0, 20) : []);
+    const cacheBypassOrchestratorPromptPatterns =
+      normalizeStringArray(step.cacheBypassOrchestratorPromptPatterns, 20) ??
+      (Array.isArray(existing?.cacheBypassOrchestratorPromptPatterns)
+        ? existing.cacheBypassOrchestratorPromptPatterns.slice(0, 20)
+        : []);
+    const inheritedSkipIfArtifacts =
       normalizeStringArray(step.skipIfArtifacts, 40) ??
       (Array.isArray(existing?.skipIfArtifacts) ? existing.skipIfArtifacts.slice(0, 40) : []);
+    const skipIfArtifacts =
+      disableSkipArtifacts && role !== "orchestrator" ? [] : inheritedSkipIfArtifacts;
     const enableSharedStorage = resolveSharedStorageEnabled({
       role,
       explicit: typeof step.enableSharedStorage === "boolean" ? step.enableSharedStorage : undefined,
@@ -394,11 +588,14 @@ export function buildFlowDraftFromExisting(
       requiredOutputFields,
       requiredOutputFiles,
       scenarios,
-      skipIfArtifacts
+      skipIfArtifacts,
+      policyProfileIds,
+      cacheBypassInputKeys,
+      cacheBypassOrchestratorPromptPatterns
     } satisfies PipelineStep;
   });
 
-  return {
+  const draft: PipelineInput = {
     name: spec.name?.trim() || currentDraft.name || "Generated Agent Flow",
     description: spec.description?.trim() || currentDraft.description || "AI-generated workflow graph.",
     steps: stepRecords,
@@ -416,4 +613,6 @@ export function buildFlowDraftFromExisting(
     runtime: normalizeRuntime(spec.runtime ?? currentDraft.runtime),
     schedule: normalizeSchedule(spec.schedule ?? currentDraft.schedule)
   };
+
+  return ensureDeliveryStageForCompletionGates(draft);
 }

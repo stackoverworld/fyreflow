@@ -31,6 +31,7 @@ export interface CanvasLayersProps {
   animatedNodeSet: Set<string>;
   animatedLinkSet: Set<string>;
   glowReadySet: Set<string>;
+  runStatus?: "running" | "paused" | "queued" | "awaiting_approval" | null;
   toolMode: "select" | "pan";
   marqueeFrame: {
     left: number;
@@ -57,6 +58,7 @@ export interface OverlayLayerProps {
 export interface EdgesLayerProps {
   renderedLinks: RenderedLink[];
   selectedLinkId: string | null;
+  selectedNodeId: string | null;
   selectedNodeIds: string[];
   animatedLinkSet: Set<string>;
   viewport: ViewportState;

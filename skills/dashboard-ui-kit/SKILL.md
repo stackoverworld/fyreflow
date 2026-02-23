@@ -43,10 +43,13 @@ Use this skill when a request adds or updates dashboard UI in this repository, e
    - Standard card: `rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5`.
    - Empty state: centered text in a bordered card.
    - Warning/error: tinted banner with icon and compact copy.
-6. Keep hierarchy clean:
-   - Prefer section + divider rhythm over nested card stacks.
-   - Avoid "border in border in border" unless hierarchy truly requires it.
-   - Header action buttons must stay single-line with `whitespace-nowrap shrink-0`.
+6. Keep hierarchy clean (see UIKIT.md §16–§20 for full rules and examples):
+   - **No nested borders**: one `border` level max. Inside a bordered card use `border-t` dividers, never sub-cards with their own border + rounded + bg.
+   - **ink-only colors**: never use raw Tailwind semantic colors (red-400, sky-400, amber-400, violet-400) for borders/backgrounds. Use `ink-*` shades. Semantic colors only inside `<Badge>` variants.
+   - **Icon alignment**: `items-start` + `shrink-0` + `mt-px` on icons next to wrapping text. Never `items-center` for multi-line content.
+   - **Badges/labels**: always `shrink-0 whitespace-nowrap` to prevent wrapping.
+   - **Auxiliary buttons**: use `variant="ghost"` for copy/open/refresh actions inside cards, not `variant="secondary"`.
+   - **Timelines/event lists**: `border-l-2 border-l-ink-700 pl-3` left-accent per item — not bordered cards per item.
 7. Run a consistency self-check before finalizing:
    - Typography and color tokens match `UIKIT.md`.
    - Spacing follows divider rhythm and section spacing.

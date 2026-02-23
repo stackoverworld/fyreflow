@@ -1,4 +1,8 @@
 import { getDefaultModelForProvider, type ModelCatalogEntry } from "@/lib/modelCatalog";
+import {
+  buildPotentialDispatchRouteId,
+  parsePotentialDispatchRouteId
+} from "@/components/dashboard/pipeline-canvas/potentialDispatchRouteId";
 import type { PipelinePayload, PipelineRun, ReasoningEffort } from "@/lib/types";
 import type { PipelineEditorCanvasLink, PipelineEditorCanvasNode } from "../types";
 import { getModelMeta, makeStepName, parseIsoTimestamp, resolveCanvasLinkId, routeConditionMatchesOutcome } from "./editorActions";
@@ -68,6 +72,33 @@ export function getAnimatedNodeIds(activeRun: PipelineRun | null | undefined): s
   return activeRun.steps.filter((step) => step.status === "running").map((step) => step.stepId);
 }
 
+export function getOptimisticStartingNodeId(
+  draft: PipelinePayload,
+  activeRun: PipelineRun | null | undefined,
+  startingRun: boolean
+): string | null {
+  const startupPhaseActive = activeRun ? activeRun.status === "queued" : startingRun;
+  if (!startupPhaseActive) {
+    return null;
+  }
+
+  const orchestratorRunStep = activeRun?.steps.find((step) => step.role === "orchestrator");
+  if (orchestratorRunStep) {
+    return orchestratorRunStep.stepId;
+  }
+
+  const orchestratorDraftStep = draft.steps.find((step) => step.role === "orchestrator");
+  if (orchestratorDraftStep) {
+    return orchestratorDraftStep.id;
+  }
+
+  if (activeRun?.steps[0]?.stepId) {
+    return activeRun.steps[0].stepId;
+  }
+
+  return draft.steps[0]?.id ?? null;
+}
+
 export function getAnimatedLinkIds(
   activeRun: PipelineRun | null | undefined,
   canvasLinks: PipelineEditorCanvasLink[]
@@ -83,63 +114,189 @@ export function getAnimatedLinkIds(
 
   const runStepById = new Map(activeRun.steps.map((step) => [step.stepId, step]));
   const animated = new Set<string>();
+  const FALLBACK_HANDOFF_WINDOW_MS = 5_000;
 
   for (const targetStep of runningSteps) {
-    const incomingCandidates = canvasLinks
-      .map((link) => {
-        if (link.targetStepId !== targetStep.stepId) {
-          return null;
-        }
-
-        const sourceStep = runStepById.get(link.sourceStepId);
-        if (!sourceStep) {
-          return null;
-        }
-
-        if (sourceStep.status !== "completed" && sourceStep.status !== "failed") {
-          return null;
-        }
-
-        const sourceFinishedAt = parseIsoTimestamp(sourceStep.finishedAt);
-
-        return {
-          linkId: link.id,
-          sourceFinishedAt,
-          conditionMatched: routeConditionMatchesOutcome(link.condition, sourceStep.workflowOutcome)
-        };
-      })
-      .filter(
-        (entry): entry is { linkId: string; sourceFinishedAt: number | null; conditionMatched: boolean } =>
-          entry !== null
+    if (targetStep.triggeredByStepId && targetStep.triggeredByStepId.length > 0) {
+      const visualTriggerSourceStepId = resolveVisualTriggerSourceStepId(
+        targetStep.triggeredByStepId,
+        runStepById
       );
+      if (targetStep.triggeredByReason === "disconnected_fallback") {
+        const fallbackSourceStep = runStepById.get(visualTriggerSourceStepId);
+        if (fallbackSourceStep?.role === "orchestrator") {
+          animated.add(buildPotentialDispatchRouteId(visualTriggerSourceStepId, targetStep.stepId));
+          continue;
+        }
+      }
 
-    if (incomingCandidates.length === 0) {
+      const triggeredLinks = canvasLinks.filter(
+        (link) =>
+          link.sourceStepId === visualTriggerSourceStepId &&
+          link.targetStepId === targetStep.stepId
+      );
+      if (triggeredLinks.length > 0) {
+        for (const link of triggeredLinks) {
+          animated.add(link.id);
+        }
+      } else {
+        const triggeringStep = runStepById.get(visualTriggerSourceStepId);
+        if (triggeringStep?.role === "orchestrator") {
+          const targetStartedAt = parseIsoTimestamp(targetStep.startedAt);
+          const recentIncomingFallbackLinks =
+            targetStartedAt === null
+              ? []
+              : selectAnimatedIncomingLinkIds(
+                  getIncomingLinkCandidates(targetStep.stepId, canvasLinks, runStepById).filter(
+                    (entry) =>
+                      !entry.sourceWasSkipped &&
+                      entry.sourceFinishedAt !== null &&
+                      targetStartedAt >= entry.sourceFinishedAt &&
+                      targetStartedAt - entry.sourceFinishedAt <= FALLBACK_HANDOFF_WINDOW_MS
+                  )
+                );
+
+          if (recentIncomingFallbackLinks.length > 0) {
+            for (const linkId of recentIncomingFallbackLinks) {
+              animated.add(linkId);
+            }
+          } else {
+            animated.add(buildPotentialDispatchRouteId(visualTriggerSourceStepId, targetStep.stepId));
+          }
+        }
+      }
       continue;
     }
 
-    const matchedCandidates = incomingCandidates.filter((entry) => entry.conditionMatched);
-    const effectiveCandidates = matchedCandidates.length > 0 ? matchedCandidates : incomingCandidates;
-    const timestampedCandidates = effectiveCandidates.filter(
-      (entry): entry is { linkId: string; sourceFinishedAt: number; conditionMatched: boolean } =>
-        entry.sourceFinishedAt !== null
+    const incomingAnimatedLinkIds = selectAnimatedIncomingLinkIds(
+      getIncomingLinkCandidates(targetStep.stepId, canvasLinks, runStepById)
     );
-
-    if (timestampedCandidates.length === 0) {
-      for (const entry of effectiveCandidates) {
-        animated.add(entry.linkId);
-      }
-      continue;
-    }
-
-    const latestFinishedAt = Math.max(...timestampedCandidates.map((entry) => entry.sourceFinishedAt));
-    for (const entry of timestampedCandidates) {
-      if (latestFinishedAt - entry.sourceFinishedAt <= 1500) {
-        animated.add(entry.linkId);
-      }
+    for (const linkId of incomingAnimatedLinkIds) {
+      animated.add(linkId);
     }
   }
 
   return [...animated];
+}
+
+interface IncomingLinkCandidate {
+  linkId: string;
+  sourceFinishedAt: number | null;
+  conditionMatched: boolean;
+  sourceWasSkipped: boolean;
+}
+
+function getIncomingLinkCandidates(
+  targetStepId: string,
+  canvasLinks: PipelineEditorCanvasLink[],
+  runStepById: Map<string, PipelineRun["steps"][number]>
+): IncomingLinkCandidate[] {
+  return canvasLinks
+    .map((link) => {
+      if (link.targetStepId !== targetStepId) {
+        return null;
+      }
+
+      const sourceStep = runStepById.get(link.sourceStepId);
+      if (!sourceStep) {
+        return null;
+      }
+
+      if (sourceStep.status !== "completed" && sourceStep.status !== "failed") {
+        return null;
+      }
+
+      return {
+        linkId: link.id,
+        sourceFinishedAt: parseIsoTimestamp(sourceStep.finishedAt),
+        conditionMatched: routeConditionMatchesOutcome(link.condition, sourceStep.workflowOutcome),
+        sourceWasSkipped: isStepRunSkipped(sourceStep)
+      };
+    })
+    .filter((entry): entry is IncomingLinkCandidate => entry !== null);
+}
+
+function selectAnimatedIncomingLinkIds(candidates: IncomingLinkCandidate[]): string[] {
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const matchedCandidates = candidates.filter((entry) => entry.conditionMatched);
+  const effectiveCandidates = matchedCandidates.length > 0 ? matchedCandidates : candidates;
+  const timestampedCandidates = effectiveCandidates.filter(
+    (entry): entry is IncomingLinkCandidate & { sourceFinishedAt: number } => entry.sourceFinishedAt !== null
+  );
+
+  if (timestampedCandidates.length === 0) {
+    return effectiveCandidates.map((entry) => entry.linkId);
+  }
+
+  const latestFinishedAt = Math.max(...timestampedCandidates.map((entry) => entry.sourceFinishedAt));
+  return timestampedCandidates
+    .filter((entry) => latestFinishedAt - entry.sourceFinishedAt <= 1_500)
+    .map((entry) => entry.linkId);
+}
+
+function isStepRunSkipped(step: PipelineRun["steps"][number]): boolean {
+  if (!step.output) {
+    return false;
+  }
+
+  return /(^|\n)STEP_STATUS:\s*SKIPPED\b/i.test(step.output);
+}
+
+function resolveVisualTriggerSourceStepId(
+  triggeredByStepId: string,
+  runStepById: Map<string, PipelineRun["steps"][number]>
+): string {
+  const visited = new Set<string>();
+  let currentSourceStepId = triggeredByStepId;
+
+  while (currentSourceStepId.length > 0 && !visited.has(currentSourceStepId)) {
+    visited.add(currentSourceStepId);
+    const sourceStep = runStepById.get(currentSourceStepId);
+    if (!sourceStep || !isStepRunSkipped(sourceStep) || !sourceStep.triggeredByStepId) {
+      return currentSourceStepId;
+    }
+    currentSourceStepId = sourceStep.triggeredByStepId;
+  }
+
+  return triggeredByStepId;
+}
+
+export interface DebugPreviewDispatchAnimation {
+  routeId: string | null;
+  nodeIds: string[];
+}
+
+export function getDebugPreviewDispatchAnimation(
+  debugPreviewDispatchRouteId: string | null | undefined,
+  canvasNodes: PipelineEditorCanvasNode[]
+): DebugPreviewDispatchAnimation {
+  if (!debugPreviewDispatchRouteId) {
+    return { routeId: null, nodeIds: [] };
+  }
+
+  const parsed = parsePotentialDispatchRouteId(debugPreviewDispatchRouteId);
+  if (!parsed) {
+    return { routeId: null, nodeIds: [] };
+  }
+
+  const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
+  const orchestratorNode = nodeById.get(parsed.orchestratorId);
+  const targetNode = nodeById.get(parsed.targetNodeId);
+  if (!orchestratorNode || orchestratorNode.role !== "orchestrator") {
+    return { routeId: null, nodeIds: [] };
+  }
+
+  if (!targetNode || targetNode.role === "orchestrator" || targetNode.id === orchestratorNode.id) {
+    return { routeId: null, nodeIds: [] };
+  }
+
+  return {
+    routeId: buildPotentialDispatchRouteId(orchestratorNode.id, targetNode.id),
+    nodeIds: [orchestratorNode.id, targetNode.id]
+  };
 }
 
 export function getSelectedModelMeta(

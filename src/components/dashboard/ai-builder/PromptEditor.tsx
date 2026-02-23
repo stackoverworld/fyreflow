@@ -1,31 +1,59 @@
-import { Send } from "lucide-react";
+import { Bot, MessageCircle, Send } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 import { Textarea } from "@/components/optics/textarea";
+import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
 import { MIN_PROMPT_LENGTH } from "@/components/dashboard/ai-builder/useAiBuilderSession";
+import type { AiBuilderMode } from "@/components/dashboard/ai-builder/mode";
+
+const MODE_SEGMENTS: Segment<AiBuilderMode>[] = [
+  { value: "agent", label: "Agent", icon: <Bot className="h-3 w-3" /> },
+  { value: "ask", label: "Ask", icon: <MessageCircle className="h-3 w-3" /> }
+];
 
 interface PromptEditorProps {
   prompt: string;
-  readOnly: boolean;
+  composerDisabled: boolean;
   generating: boolean;
+  mode: AiBuilderMode;
+  modeLocked: boolean;
   onPromptChange: (value: string) => void;
+  onModeChange: (value: AiBuilderMode) => void;
   onSend: () => Promise<void> | void;
 }
 
 export function PromptEditor({
   prompt,
-  readOnly,
+  composerDisabled,
   generating,
+  mode,
+  modeLocked,
   onPromptChange,
+  onModeChange,
   onSend,
 }: PromptEditorProps) {
   return (
     <div className="border-t border-ink-800/60 p-3">
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">Mode</span>
+          <span className="text-[11px] text-ink-500">
+            {mode === "agent" ? "Can update flow" : "Read-only answers"}
+          </span>
+        </div>
+        <SegmentedControl
+          size="sm"
+          segments={MODE_SEGMENTS}
+          value={mode}
+          onValueChange={onModeChange}
+          disabled={composerDisabled || generating || modeLocked}
+        />
+      </div>
       <div className="relative">
         <Textarea
           className="min-h-[80px] pr-12"
           value={prompt}
-          disabled={readOnly}
+          disabled={composerDisabled}
           onChange={(e: ChangeEvent<HTMLTextAreaElement>) => onPromptChange(e.target.value)}
           onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -33,15 +61,15 @@ export function PromptEditor({
               void onSend();
             }
           }}
-          placeholder="Ask about the current flow or request updates/rebuild..."
+          placeholder={mode === "agent" ? "Describe changes to apply to the flow..." : "Ask a question about the current flow..."}
         />
         <button
           type="button"
-          disabled={readOnly || generating || prompt.trim().length < MIN_PROMPT_LENGTH}
+          disabled={composerDisabled || generating || prompt.trim().length < MIN_PROMPT_LENGTH}
           onClick={() => void onSend()}
           className={cn(
             "absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
-            prompt.trim().length >= MIN_PROMPT_LENGTH && !generating && !readOnly
+            prompt.trim().length >= MIN_PROMPT_LENGTH && !generating && !composerDisabled
               ? "bg-ember-500 text-ink-950 hover:bg-ember-400 cursor-pointer"
               : "bg-ink-800 text-ink-600 cursor-not-allowed"
           )}
@@ -50,7 +78,10 @@ export function PromptEditor({
           <Send className="h-3.5 w-3.5" />
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] text-ink-600">Shift+Enter for new line &middot; min 2 characters</p>
+      <p className="mt-1.5 text-[11px] text-ink-600">
+        Shift+Enter for new line &middot; min 2 characters
+        {modeLocked ? " · Active run locks Agent mode." : ""}
+      </p>
     </div>
   );
 }

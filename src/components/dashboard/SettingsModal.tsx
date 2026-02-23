@@ -1,11 +1,11 @@
 import { Bug, Monitor, Moon, Settings2, ShieldCheck, Sun, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
-import { useState } from "react";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
 import { Switch } from "@/components/optics/switch";
 import { cn } from "@/lib/cn";
 import type { DesktopNotificationSettings, ThemePreference } from "@/lib/appSettingsStorage";
+import { usePersistedTab } from "@/components/dashboard/usePersistedTab";
 
 interface SettingsModalProps {
   open: boolean;
@@ -21,6 +21,8 @@ interface SettingsModalProps {
 }
 
 type SettingsTab = "general" | "providers";
+
+const SETTINGS_TABS = ["general", "providers"] as const;
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Settings2 }[] = [
   { id: "general", label: "General", icon: Bug },
@@ -45,7 +47,7 @@ export function SettingsModal({
   onThemeChange,
   providerSettingsSlot
 }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] = usePersistedTab<SettingsTab>("fyreflow:settings-tab", "general", SETTINGS_TABS);
   const updateDesktopNotifications = (patch: Partial<DesktopNotificationSettings>) => {
     onDesktopNotificationsChange({
       ...desktopNotifications,

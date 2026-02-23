@@ -7,12 +7,14 @@ import { registerPipelinePlanningRoutes } from "./pipelines/registerPipelinePlan
 import { registerPipelineRunRoutes } from "./pipelines/registerPipelineRunRoutes.js";
 import { registerProviderRoutes } from "./pipelines/registerProviderRoutes.js";
 import { registerStorageRoutes } from "./pipelines/registerStorageRoutes.js";
+import { registerFileManagerRoutes } from "./pipelines/registerFileManagerRoutes.js";
 
 export function registerPipelineRoutes(app: Express, deps: PipelineRouteContext): void {
   registerPipelineCrudRoutes(app, deps);
   registerProviderRoutes(app, deps);
   registerMcpRoutes(app, deps);
   registerStorageRoutes(app, deps);
+  registerFileManagerRoutes(app, deps);
   registerPipelinePlanningRoutes(app, deps);
   registerFlowBuilderRoutes(app, deps);
   registerPipelineRunRoutes(app, deps);

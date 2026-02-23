@@ -65,6 +65,9 @@ export interface PipelineStep {
   requiredOutputFiles: string[];
   scenarios: string[];
   skipIfArtifacts: string[];
+  policyProfileIds: string[];
+  cacheBypassInputKeys: string[];
+  cacheBypassOrchestratorPromptPatterns: string[];
 }
 
 export interface PipelineLink {

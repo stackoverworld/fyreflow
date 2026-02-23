@@ -16,7 +16,10 @@ export const CLAUDE_CLI_COMMAND =
 export const CLAUDE_CLI_SKIP_PERMISSIONS = (process.env.CLAUDE_CLI_SKIP_PERMISSIONS ?? "1").trim() !== "0";
 export const CLAUDE_CLI_STRICT_MCP = (process.env.CLAUDE_CLI_STRICT_MCP ?? "1").trim() !== "0";
 export const CLAUDE_CLI_DISABLE_SLASH_COMMANDS = (process.env.CLAUDE_CLI_DISABLE_SLASH_COMMANDS ?? "1").trim() !== "0";
-export const CLAUDE_CLI_SETTING_SOURCES = (process.env.CLAUDE_CLI_SETTING_SOURCES ?? "user").trim();
+const DEFAULT_CLAUDE_CLI_SETTING_SOURCES = "project,local";
+export const CLAUDE_CLI_SETTING_SOURCES = (
+  process.env.CLAUDE_CLI_SETTING_SOURCES ?? DEFAULT_CLAUDE_CLI_SETTING_SOURCES
+).trim();
 export const CLAUDE_CLI_PERMISSION_MODE = (() => {
   const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "bypassPermissions").trim();
   const allowed = new Set(["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"]);

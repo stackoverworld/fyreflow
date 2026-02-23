@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { normalizeRunInputs, type RunInputs } from "../runInputs.js";
 import { orderPipelineSteps } from "../pipelineGraph.js";
 import { filterPipelineForScenario, normalizeScenario, resolveRunScenario } from "../scenarios.js";
+import { normalizeStepLabel } from "../stepLabel.js";
 import type {
   Pipeline,
   PipelineRun,
@@ -59,7 +60,7 @@ export function normalizeRunApprovals(raw: unknown): RunApproval[] {
         gateId,
         gateName: typeof item.gateName === "string" && item.gateName.trim().length > 0 ? item.gateName.trim() : "Manual approval",
         stepId,
-        stepName: typeof item.stepName === "string" ? item.stepName : stepId,
+        stepName: normalizeStepLabel(item.stepName, stepId),
         status,
         blocking: item.blocking !== false,
         message: typeof item.message === "string" ? item.message : "",
@@ -132,16 +133,23 @@ export function normalizeRuns(rawRuns: unknown): PipelineRun[] {
       logs: Array.isArray((run as { logs?: unknown }).logs) ? (run as { logs: string[] }).logs : [],
       approvals: normalizeRunApprovals((run as { approvals?: unknown }).approvals),
       steps: Array.isArray((run as { steps?: unknown }).steps)
-        ? ((run as { steps: Array<{ [key: string]: unknown }> }).steps.map((step) => ({
-            ...(step as object),
-            attempts: typeof step.attempts === "number" ? step.attempts : 0,
-            workflowOutcome:
-              step.workflowOutcome === "pass" || step.workflowOutcome === "fail" || step.workflowOutcome === "neutral"
-                ? step.workflowOutcome
-                : "neutral",
-            subagentNotes: Array.isArray(step.subagentNotes) ? step.subagentNotes : [],
-            qualityGateResults: normalizeStepQualityGateResults(step.qualityGateResults)
-          })))
+        ? ((run as { steps: Array<{ [key: string]: unknown }> }).steps.map((step) => {
+            const stepId = normalizeStepLabel(step.stepId, "unknown-step");
+            return {
+              ...(step as object),
+              stepId,
+              stepName: normalizeStepLabel(step.stepName, stepId),
+              triggeredByStepId: typeof step.triggeredByStepId === "string" ? step.triggeredByStepId : undefined,
+              triggeredByReason: typeof step.triggeredByReason === "string" ? step.triggeredByReason : undefined,
+              attempts: typeof step.attempts === "number" ? step.attempts : 0,
+              workflowOutcome:
+                step.workflowOutcome === "pass" || step.workflowOutcome === "fail" || step.workflowOutcome === "neutral"
+                  ? step.workflowOutcome
+                  : "neutral",
+              subagentNotes: Array.isArray(step.subagentNotes) ? step.subagentNotes : [],
+              qualityGateResults: normalizeStepQualityGateResults(step.qualityGateResults)
+            };
+          }))
         : []
     }))
     .slice(0, 80);
@@ -171,7 +179,7 @@ export function createRun(
     approvals: [],
     steps: orderedSteps.map<StepRun>((step) => ({
       stepId: step.id,
-      stepName: step.name,
+      stepName: normalizeStepLabel(step.name, step.id),
       role: step.role,
       status: "pending",
       attempts: 0,

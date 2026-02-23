@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
@@ -15,6 +15,11 @@ import {
   buildOutputFilesPatch,
   buildOutputFormatPatch,
   buildOutputFieldsPatch,
+  buildSkipIfArtifactsPatch,
+  buildScenariosPatch,
+  buildPolicyProfileIdsPatch,
+  buildCacheBypassInputKeysPatch,
+  buildCacheBypassOrchestratorPromptPatternsPatch,
   build1MContextPatch,
   outputFormats
 } from "./executionFieldAdapters";
@@ -23,6 +28,8 @@ interface RetryPolicyFieldProps {
   mcpServers: GeneralSectionProps["mcpServers"];
   selectedStep: GeneralSectionProps["selectedStep"];
   selectedModelMeta: GeneralSectionProps["selectedModelMeta"];
+  claudeFastModeAvailable: GeneralSectionProps["claudeFastModeAvailable"];
+  claudeFastModeUnavailableNote?: GeneralSectionProps["claudeFastModeUnavailableNote"];
   onPatchSelectedStep: GeneralSectionProps["onPatchSelectedStep"];
 }
 
@@ -30,6 +37,8 @@ export function RetryPolicyField({
   mcpServers,
   selectedStep,
   selectedModelMeta,
+  claudeFastModeAvailable,
+  claudeFastModeUnavailableNote,
   onPatchSelectedStep
 }: RetryPolicyFieldProps) {
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
@@ -74,6 +83,16 @@ export function RetryPolicyField({
 
   const showFastModeWarning = selectedStep.fastMode && !dismissedWarnings.has("fastMode");
   const show1MContextWarning = selectedStep.use1MContext && !dismissedWarnings.has("1mContext");
+  const fastModeUnavailable =
+    selectedStep.providerId === "claude" && !claudeFastModeAvailable;
+
+  useEffect(() => {
+    if (!fastModeUnavailable || !selectedStep.fastMode) {
+      return;
+    }
+
+    onPatchSelectedStep(buildFastModePatch(false));
+  }, [fastModeUnavailable, onPatchSelectedStep, selectedStep.fastMode]);
 
   return (
     <div className="space-y-3">
@@ -82,12 +101,17 @@ export function RetryPolicyField({
           <div className="flex items-center gap-2.5">
             <Switch
               checked={selectedStep.fastMode}
-              disabled={selectedStep.providerId !== "claude"}
+              disabled={selectedStep.providerId !== "claude" || fastModeUnavailable}
               onChange={handleFastModeChange}
             />
             <div>
               <p className="text-[13px] text-ink-100">Fast mode</p>
               <p className="text-[11px] text-ink-500">Prioritized processing for Claude models.</p>
+              {fastModeUnavailable ? (
+                <p className="text-[11px] text-amber-400">
+                  {claudeFastModeUnavailableNote ?? "Fast mode requires an active Claude API key in Provider Auth."}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -273,8 +297,61 @@ export function RetryPolicyField({
             />
           </label>
 
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Skip-if artifacts (one path per line)</span>
+            <Textarea
+              className="min-h-[84px]"
+              value={selectedStep.skipIfArtifacts.join("\n")}
+              onChange={(event) => onPatchSelectedStep(buildSkipIfArtifactsPatch(event.target.value))}
+              placeholder={"{{shared_storage_path}}/assets-manifest.json\n{{shared_storage_path}}/frame-map.json"}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Scenario tags (one tag per line)</span>
+            <Textarea
+              className="min-h-[70px]"
+              value={selectedStep.scenarios.join("\n")}
+              onChange={(event) => onPatchSelectedStep(buildScenariosPatch(event.target.value))}
+              placeholder={"default\ndesign_deck"}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Policy profiles (one id per line)</span>
+            <Textarea
+              className="min-h-[70px]"
+              value={selectedStep.policyProfileIds.join("\n")}
+              onChange={(event) => onPatchSelectedStep(buildPolicyProfileIdsPatch(event.target.value))}
+              placeholder={"design_deck_assets"}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Cache bypass input keys (one key per line)</span>
+            <Textarea
+              className="min-h-[70px]"
+              value={selectedStep.cacheBypassInputKeys.join("\n")}
+              onChange={(event) => onPatchSelectedStep(buildCacheBypassInputKeysPatch(event.target.value))}
+              placeholder={"force_refresh_design_assets\nforce_refresh_source_content"}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">Orchestrator cache-bypass patterns (regex per line)</span>
+            <Textarea
+              className="min-h-[84px]"
+              value={selectedStep.cacheBypassOrchestratorPromptPatterns.join("\n")}
+              onChange={(event) =>
+                onPatchSelectedStep(buildCacheBypassOrchestratorPromptPatternsPatch(event.target.value))
+              }
+              placeholder={"source\\s+content\\s+extract(?:ion|or).*(runs?\\s+always|always\\s+regardless)"}
+            />
+          </label>
+
           <p className="text-[11px] text-ink-500">
-            Blocking contracts fail the step automatically and trigger fail routes when configured.
+            Blocking contracts fail the step automatically and trigger fail routes when configured. Policy profiles
+            and cache-bypass controls are fully pipeline-configurable.
           </p>
         </div>
       </div>

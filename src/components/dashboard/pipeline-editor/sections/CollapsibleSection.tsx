@@ -10,10 +10,11 @@ interface CollapsibleSectionProps {
   onToggle: () => void;
   children: ReactNode;
   badge?: ReactNode;
+  disableContent?: boolean;
 }
 
 export function CollapsibleSection({
-  icon, label, collapsed, onToggle, children, badge
+  icon, label, collapsed, onToggle, children, badge, disableContent = false
 }: CollapsibleSectionProps) {
   return (
     <div className="border-b border-[var(--divider)]">
@@ -44,7 +45,11 @@ export function CollapsibleSection({
             className="overflow-hidden"
           >
             <div className="px-4 pb-4 pt-1">
-              {children}
+              {disableContent ? (
+                <fieldset disabled className="m-0 min-w-0 border-0 p-0">
+                  {children}
+                </fieldset>
+              ) : children}
             </div>
           </motion.div>
         )}

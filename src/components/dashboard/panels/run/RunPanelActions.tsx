@@ -3,7 +3,6 @@ import type { Dispatch, SetStateAction } from "react";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import type { PipelineRun, SmartRunPlan } from "@/lib/types";
-import { RunHistoryList } from "@/components/dashboard/run-panel/RunHistoryList";
 import type { RunMode } from "@/lib/runDraftStorage";
 
 interface ManualApproval {
@@ -34,7 +33,6 @@ interface RunPanelActionsProps {
   setApprovalNotes: Dispatch<SetStateAction<Record<string, string>>>;
   resolvingApprovalId?: string | null;
   pendingApprovals: ManualApproval[];
-  scopedRuns: PipelineRun[];
   onRun: (task: string, inputs?: Record<string, string>) => Promise<void>;
   onStop: (runId: string) => Promise<void>;
   onPause?: (runId: string) => Promise<void>;
@@ -68,7 +66,6 @@ export function RunPanelActions({
   setApprovalNotes,
   resolvingApprovalId = null,
   pendingApprovals,
-  scopedRuns,
   onRun,
   onStop,
   onPause,
@@ -203,7 +200,7 @@ export function RunPanelActions({
 
         {runActive && pendingApprovals.length > 0 ? (
           <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5">
-            <p className="text-[11px] font-medium text-amber-200">Manual approvals required</p>
+            <p className="text-[11px] font-medium text-amber-500">Manual approvals required</p>
 
             {pendingApprovals.map((approval) => {
               const busy = resolvingApprovalId === approval.id;
@@ -274,10 +271,6 @@ export function RunPanelActions({
           </div>
         ) : null}
       </section>
-
-      <div className="my-5 h-px bg-[var(--divider)]" />
-
-      <RunHistoryList scopedRuns={scopedRuns} />
     </>
   );
 }

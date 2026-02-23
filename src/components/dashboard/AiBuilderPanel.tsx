@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { McpServerConfig, PipelinePayload } from "@/lib/types";
@@ -10,11 +10,14 @@ import { cn } from "@/lib/cn";
 import { PlanPreview } from "@/components/dashboard/ai-builder/PlanPreview";
 import { PromptEditor } from "@/components/dashboard/ai-builder/PromptEditor";
 import { useAiBuilderSession } from "@/components/dashboard/ai-builder/useAiBuilderSession";
+import { usePersistedCollapsed } from "@/components/dashboard/usePersistedCollapsed";
 
 interface AiBuilderPanelProps {
   workflowKey: string;
   currentDraft: PipelinePayload;
   mcpServers: McpServerConfig[];
+  claudeFastModeAvailable: boolean;
+  claudeFastModeUnavailableNote?: string;
   onApplyDraft: (draft: PipelinePayload) => void;
   onNotice: (message: string) => void;
   readOnly?: boolean;
@@ -31,11 +34,13 @@ export function AiBuilderPanel({
   workflowKey,
   currentDraft,
   mcpServers,
+  claudeFastModeAvailable,
+  claudeFastModeUnavailableNote,
   onApplyDraft,
   onNotice,
   readOnly = false
 }: AiBuilderPanelProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = usePersistedCollapsed("fyreflow:ai-builder-settings-open", false);
 
   const {
     providerId,
@@ -47,10 +52,14 @@ export function AiBuilderPanel({
     selectedModelMeta,
     reasoningOptions,
     messages,
+    hasOlderMessages,
+    loadingOlderMessages,
     hydratedWorkflowKey,
     prompt,
+    effectiveMode,
     generating,
     setPrompt,
+    setMode,
     setProviderId,
     setModel,
     setReasoningEffort,
@@ -58,17 +67,20 @@ export function AiBuilderPanel({
     setUse1MContext,
     handleSend,
     handleQuickReply,
+    loadOlderMessages,
   } = useAiBuilderSession({
     workflowKey,
     currentDraft,
     mcpServers,
+    claudeFastModeAvailable,
     onApplyDraft,
     onNotice,
-    readOnly,
+    mutationLocked: readOnly,
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasInitialScrollRef = useRef(false);
+  const latestMessageId = messages[messages.length - 1]?.id ?? "";
 
   useLayoutEffect(() => {
     if (hydratedWorkflowKey !== workflowKey) {
@@ -85,7 +97,7 @@ export function AiBuilderPanel({
       block: "end",
     });
     hasInitialScrollRef.current = true;
-  }, [generating, hydratedWorkflowKey, messages, workflowKey]);
+  }, [generating, hydratedWorkflowKey, latestMessageId, workflowKey]);
 
   return (
     <div className="flex h-full flex-col">
@@ -154,7 +166,11 @@ export function AiBuilderPanel({
                     <Switch
                       checked={fastMode}
                       onChange={setFastMode}
-                      disabled={readOnly || selectedModelMeta?.supportsFastMode === false}
+                      disabled={
+                        readOnly ||
+                        selectedModelMeta?.supportsFastMode === false ||
+                        !claudeFastModeAvailable
+                      }
                     />
                     <span className="text-xs text-ink-300">Fast mode</span>
                   </div>
@@ -168,6 +184,12 @@ export function AiBuilderPanel({
                   </div>
                 </div>
               )}
+
+              {providerId === "claude" && !claudeFastModeAvailable ? (
+                <p className="text-[11px] text-amber-400">
+                  {claudeFastModeUnavailableNote ?? "Fast mode requires an active Claude API key in Provider Auth."}
+                </p>
+              ) : null}
             </div>
           </motion.div>
         )}
@@ -176,17 +198,23 @@ export function AiBuilderPanel({
       <PlanPreview
         messages={messages}
         generating={generating}
+        hasOlderMessages={hasOlderMessages}
+        loadingOlderMessages={loadingOlderMessages}
         readOnly={readOnly}
         messagesEndRef={messagesEndRef}
         onApplyDraft={onApplyDraft}
         onQuickReply={handleQuickReply}
+        onLoadOlderMessages={loadOlderMessages}
       />
 
       <PromptEditor
         prompt={prompt}
-        readOnly={readOnly}
+        composerDisabled={false}
         generating={generating}
+        mode={effectiveMode}
+        modeLocked={readOnly}
         onPromptChange={setPrompt}
+        onModeChange={setMode}
         onSend={handleSend}
       />
     </div>

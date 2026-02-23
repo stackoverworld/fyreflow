@@ -48,6 +48,9 @@ export interface PipelineStep {
   requiredOutputFiles: string[];
   scenarios: string[];
   skipIfArtifacts: string[];
+  policyProfileIds: string[];
+  cacheBypassInputKeys: string[];
+  cacheBypassOrchestratorPromptPatterns: string[];
 }
 
 export interface PipelineLink {
@@ -127,6 +130,9 @@ export interface PipelinePayload {
     requiredOutputFiles: string[];
     scenarios: string[];
     skipIfArtifacts: string[];
+    policyProfileIds: string[];
+    cacheBypassInputKeys: string[];
+    cacheBypassOrchestratorPromptPatterns: string[];
   }>;
   links: Array<{
     id?: string;

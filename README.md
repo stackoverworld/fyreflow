@@ -56,7 +56,7 @@ A local-first dashboard panel for creating AI workflows/pipelines, configuring s
 - Use run input placeholders in step prompts/templates:
   - `{{input.source_pdf_path}}`
   - `{{input.output_dir}}`
-  - `{{input.figma_links}}`
+  - `{{input.source_links}}`
 
 ## Stack
 

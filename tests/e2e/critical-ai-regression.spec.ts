@@ -1,6 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { mockDashboardApi } from "./support/mockDashboardApi";
+
+function runToolbarPrimaryButton(page: Page) {
+  return page.getByRole("button", { name: /Smart Run|Quick Run|Run/ }).first();
+}
 
 test.describe("Critical AI Regression Flows", () => {
   test("AI builder can update the active flow draft", async ({ page }) => {
@@ -9,12 +13,15 @@ test.describe("Critical AI Regression Flows", () => {
     });
 
     await page.goto("/");
-    await expect(page.getByRole("button", { name: "Run" })).toBeVisible();
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
 
     await page.getByRole("button", { name: "AI builder" }).click();
-    await page.getByPlaceholder("Ask about the current flow or request updates/rebuild...").fill(
+    await page.getByRole("button", { name: "Agent" }).click();
+    await page
+      .getByPlaceholder(/Describe changes to apply to the flow|Ask a question about the current flow/)
+      .fill(
       "Upgrade this flow for robust AI regression checks."
-    );
+      );
     await page.getByRole("button", { name: "Send" }).click();
 
     await expect(page.getByText("Updated the flow with deterministic AI regression coverage.")).toBeVisible();
@@ -25,21 +32,58 @@ test.describe("Critical AI Regression Flows", () => {
   });
 
   test("run panel starts a smart run and shows run history", async ({ page }) => {
-    await mockDashboardApi(page);
+    await mockDashboardApi(page, {
+      defaultStepIsolatedStorage: true,
+      defaultStepSharedStorage: true
+    });
 
     await page.goto("/");
-    await expect(page.getByRole("button", { name: "Run" })).toBeVisible();
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
 
-    await page.getByRole("button", { name: "Run" }).click();
-    await expect(page.getByText("Recent runs")).toBeVisible();
+    await page.locator("button:has(svg.lucide-chevron-down)").first().click();
+    await page.getByRole("button", { name: "Configure Run..." }).click();
+    await expect(page.getByPlaceholder("Describe the task for this run...")).toBeVisible();
 
     await page.getByPlaceholder("Describe the task for this run...").fill("Validate AI regression harness");
-    await page.getByRole("button", { name: "Start smart run" }).click();
+    await page.getByRole("button", { name: /^Start smart run$/i }).click();
 
     await expect(page.getByText("Flow run started.")).toBeVisible();
-    const historySection = page.locator("section", { hasText: "Recent runs" });
+    await expect(page.getByText("Current session")).toBeVisible();
+    await expect(page.getByText("run-1", { exact: true })).toBeVisible();
+    await expect(page.getByText("Shared storage", { exact: true })).toBeVisible();
+    await expect(page.locator('[title="/tmp/fyreflow-e2e/shared/pipeline-default"]')).toBeVisible();
+    await expect(page.getByText("Isolated storage", { exact: true })).toBeVisible();
+    await expect(page.locator('[title="/tmp/fyreflow-e2e/isolated/pipeline-default"]')).toBeVisible();
+    const currentSession = page.locator("section", { hasText: "Current session" }).first();
+    await currentSession.locator("summary", { hasText: "Per-step folders (1)" }).click();
+    await expect(currentSession.getByText("1. Analysis Bot", { exact: true })).toBeVisible();
+    await expect(currentSession.locator('[title="/tmp/fyreflow-e2e/isolated/pipeline-default/step-1"]')).toBeVisible();
+    await expect(page.getByText("Run folder", { exact: true })).toBeVisible();
+    await expect(page.locator('[title="/tmp/fyreflow-e2e/runs/run-1"]')).toBeVisible();
+    await page.getByRole("button", { name: "History" }).click();
+    const historySection = page.locator("section", { hasText: "Active" }).first();
     await expect(historySection.getByText("Validate AI regression harness")).toBeVisible();
     await expect(historySection.getByText("queued")).toBeVisible();
+  });
+
+  test("run panel hides isolated storage section when no step has isolation enabled", async ({ page }) => {
+    await mockDashboardApi(page, {
+      defaultStepIsolatedStorage: false,
+      defaultStepSharedStorage: true
+    });
+
+    await page.goto("/");
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+
+    await page.locator("button:has(svg.lucide-chevron-down)").first().click();
+    await page.getByRole("button", { name: "Configure Run..." }).click();
+    await expect(page.getByPlaceholder("Describe the task for this run...")).toBeVisible();
+
+    await page.getByPlaceholder("Describe the task for this run...").fill("Run without isolated storage");
+    await page.getByRole("button", { name: /^Start smart run$/i }).click();
+
+    const currentSession = page.locator("section", { hasText: "Current session" }).first();
+    await expect(currentSession.getByText("Isolated storage", { exact: true })).toHaveCount(0);
   });
 
   test("provider auth settings can be saved from Settings modal", async ({ page }) => {

@@ -6,6 +6,7 @@ import {
   DEFAULT_MAX_STEP_EXECUTIONS,
   DEFAULT_STAGE_TIMEOUT_MS
 } from "./contracts.js";
+import { normalizeStepLabel } from "../../stepLabel.js";
 import type {
   PipelineInput,
   PipelineQualityGate,
@@ -31,7 +32,7 @@ export function normalizeRuntimeConfig(raw: Partial<PipelineRuntimeConfig> | und
         : DEFAULT_MAX_STEP_EXECUTIONS,
     stageTimeoutMs:
       typeof raw?.stageTimeoutMs === "number" && Number.isFinite(raw.stageTimeoutMs)
-        ? Math.max(10_000, Math.min(1_200_000, Math.floor(raw.stageTimeoutMs)))
+        ? Math.max(10_000, Math.min(18_000_000, Math.floor(raw.stageTimeoutMs)))
         : DEFAULT_STAGE_TIMEOUT_MS
   };
 }
@@ -59,6 +60,8 @@ export function normalizeStep(
   step: Partial<PipelineStep> & Pick<PipelineStep, "name" | "role" | "prompt">,
   fallbackIndex: number
 ): PipelineStep {
+  const stepId = typeof step.id === "string" && step.id.trim().length > 0 ? step.id.trim() : nanoid();
+  const stepName = normalizeStepLabel(step.name, stepId);
   const providerId: ProviderId = step.providerId === "claude" ? "claude" : "openai";
   const model = step.model && step.model.length > 0 ? step.model : resolveDefaultModel(providerId);
   const use1MContext = step.use1MContext === true;
@@ -74,8 +77,8 @@ export function normalizeStep(
   }
 
   return {
-    id: step.id && step.id.length > 0 ? step.id : nanoid(),
-    name: step.name,
+    id: stepId,
+    name: stepName,
     role: step.role,
     prompt: step.prompt,
     providerId,
@@ -112,7 +115,10 @@ export function normalizeStep(
     requiredOutputFields: normalizeStringList(step.requiredOutputFields),
     requiredOutputFiles: normalizeStringList(step.requiredOutputFiles),
     scenarios: normalizeStringList(step.scenarios, 20),
-    skipIfArtifacts: normalizeStringList(step.skipIfArtifacts)
+    skipIfArtifacts: normalizeStringList(step.skipIfArtifacts),
+    policyProfileIds: normalizeStringList(step.policyProfileIds, 20),
+    cacheBypassInputKeys: normalizeStringList(step.cacheBypassInputKeys, 20),
+    cacheBypassOrchestratorPromptPatterns: normalizeStringList(step.cacheBypassOrchestratorPromptPatterns, 20)
   };
 }
 

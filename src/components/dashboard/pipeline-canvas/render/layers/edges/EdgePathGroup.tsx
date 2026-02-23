@@ -3,9 +3,12 @@ import type { EdgeRenderData } from "./useEdgeRenderData";
 
 export interface EdgePathGroupProps {
   data: EdgeRenderData;
+  opacityMultiplier?: number;
 }
 
-export function EdgePathGroup({ data }: EdgePathGroupProps) {
+const EDGE_OPACITY_TRANSITION = "opacity 240ms cubic-bezier(0.16, 1, 0.3, 1)";
+
+export function EdgePathGroup({ data, opacityMultiplier = 1 }: EdgePathGroupProps) {
   const {
     isSelected,
     isAnimated,
@@ -16,6 +19,7 @@ export function EdgePathGroup({ data }: EdgePathGroupProps) {
     selectedStrokeWidth
   } = data;
   const strokeWidth = isSelected ? selectedStrokeWidth : baseStrokeWidth;
+  const effectiveOpacityMultiplier = Math.max(0, Math.min(1, opacityMultiplier));
 
   return (
     <g>
@@ -29,7 +33,8 @@ export function EdgePathGroup({ data }: EdgePathGroupProps) {
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"
           strokeDasharray={link.dasharray ?? undefined}
-          opacity={selectedHaloOpacity}
+          opacity={selectedHaloOpacity * effectiveOpacityMultiplier}
+          style={{ transition: EDGE_OPACITY_TRANSITION }}
         />
       ) : null}
       <path
@@ -41,8 +46,9 @@ export function EdgePathGroup({ data }: EdgePathGroupProps) {
         strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
         strokeDasharray={link.dasharray ?? undefined}
-        opacity={edgeOpacity}
+        opacity={edgeOpacity * effectiveOpacityMultiplier}
         markerEnd={`url(#${link.visual.markerId})`}
+        style={{ transition: EDGE_OPACITY_TRANSITION }}
       />
 
       {isAnimated ? (

@@ -54,13 +54,13 @@ export function AppShellRoutes({
 
   return (
     <>
-      <LeftPanelRouteWrapper open={hasLeftPanel} title={leftPanelTitle} compact={activePanel === "ai"} onClose={() => {
+      <LeftPanelRouteWrapper open={hasLeftPanel} title={leftPanelTitle} compact={activePanel === "ai" || activePanel === "debug" || activePanel === "contracts" || activePanel === "schedules"} onClose={() => {
         setActivePanel(null);
       }}>
         {leftPanelRoute?.render({ state, actions })}
       </LeftPanelRouteWrapper>
 
-      <RightPanelRouteWrapper open={activePanel === "run"} onClose={() => {
+      <RightPanelRouteWrapper open={activePanel === "run"} compact onClose={() => {
         setActivePanel(null);
       }}>
         {runPanelRoute?.render({ state, actions })}

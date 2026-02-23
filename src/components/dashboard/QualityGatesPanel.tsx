@@ -1,12 +1,22 @@
+import { ListChecks, ShieldCheck } from "lucide-react";
 import type { PipelinePayload, QualityGateKind } from "@/lib/types";
+import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
+import { usePersistedTab } from "@/components/dashboard/usePersistedTab";
 import { QualityGateControls } from "@/components/dashboard/quality-gates/QualityGateControls";
 import { QualityGateList } from "@/components/dashboard/quality-gates/QualityGateList";
 
-interface QualityGatesPanelProps {
-  draft: PipelinePayload;
-  onChange: (next: PipelinePayload) => void;
-  readOnly?: boolean;
-}
+/* ── Tab config ── */
+
+type ContractsTab = "contracts" | "gates";
+
+const CONTRACTS_TABS = ["contracts", "gates"] as const;
+
+const TAB_SEGMENTS: Segment<ContractsTab>[] = [
+  { value: "contracts", label: "Contracts", icon: <ListChecks className="h-3.5 w-3.5" /> },
+  { value: "gates", label: "Gates", icon: <ShieldCheck className="h-3.5 w-3.5" /> }
+];
+
+/* ── Gate helpers ── */
 
 const kindOptions: Array<{ value: QualityGateKind; label: string; hint: string }> = [
   {
@@ -61,7 +71,17 @@ function ensureGateDefaults(
   };
 }
 
+/* ── Panel ── */
+
+interface QualityGatesPanelProps {
+  draft: PipelinePayload;
+  onChange: (next: PipelinePayload) => void;
+  readOnly?: boolean;
+}
+
 export function QualityGatesPanel({ draft, onChange, readOnly = false }: QualityGatesPanelProps) {
+  const [activeTab, handleTabChange] = usePersistedTab<ContractsTab>("fyreflow:contracts-tab", "contracts", CONTRACTS_TABS);
+
   const gates = (draft.qualityGates ?? []).map(ensureGateDefaults);
   const setGates = (nextGates: PipelinePayload["qualityGates"]) => {
     onChange({ ...draft, qualityGates: nextGates });
@@ -95,22 +115,33 @@ export function QualityGatesPanel({ draft, onChange, readOnly = false }: Quality
   };
 
   return (
-    <div>
-      <QualityGateControls readOnly={readOnly} draft={draft} onAdd={addGate} />
+    <div className="flex h-full flex-col">
+      {/* ── Sticky tab bar ── */}
+      <div className="sticky top-0 z-10 border-b border-[var(--divider)] bg-[var(--surface-base)] px-3 py-2">
+        <SegmentedControl segments={TAB_SEGMENTS} value={activeTab} onValueChange={handleTabChange} />
+      </div>
 
-      <div className="my-5 h-px bg-[var(--divider)]" />
+      {/* ── Scrollable tab content ── */}
+      <div className="flex-1 overflow-y-auto p-3">
+        {activeTab === "contracts" && (
+          <QualityGateControls readOnly={readOnly} draft={draft} />
+        )}
 
-      <QualityGateList
-        gates={gates}
-        onDeleteGate={(index) => {
-          const next = gates.filter((_, gateIndex) => gateIndex !== index);
-          setGates(next);
-        }}
-        onUpdateGate={updateGate}
-        kindOptions={kindOptions}
-        readOnly={readOnly}
-        steps={draft.steps}
-      />
+        {activeTab === "gates" && (
+          <QualityGateList
+            gates={gates}
+            onDeleteGate={(index) => {
+              const next = gates.filter((_, gateIndex) => gateIndex !== index);
+              setGates(next);
+            }}
+            onUpdateGate={updateGate}
+            kindOptions={kindOptions}
+            readOnly={readOnly}
+            steps={draft.steps}
+            onAdd={addGate}
+          />
+        )}
+      </div>
     </div>
   );
 }

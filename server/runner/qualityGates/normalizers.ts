@@ -1,5 +1,131 @@
 import type { WorkflowOutcome } from "../../types.js";
 
+const STATUS_WITH_MARKUP_PATTERN =
+  /(WORKFLOW_STATUS|HTML_REVIEW_STATUS|PDF_REVIEW_STATUS)\s*:\s*[*_`~\s]*?(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)[*_`~\s]*/gi;
+const WORKFLOW_STATUS_PATTERN = /WORKFLOW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
+const HTML_REVIEW_STATUS_PATTERN = /HTML_REVIEW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
+const PDF_REVIEW_STATUS_PATTERN = /PDF_REVIEW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
+
+export type GateResultStatus = "PASS" | "FAIL" | "NEUTRAL" | "COMPLETE" | "NEEDS_INPUT";
+export type GateNextAction = "continue" | "retry_step" | "retry_stage" | "escalate" | "stop";
+
+export interface GateResultReason {
+  code: string;
+  message: string;
+  severity?: "critical" | "high" | "medium" | "low";
+}
+
+export interface GateResultContract {
+  workflowStatus: GateResultStatus;
+  nextAction: GateNextAction;
+  reasons: GateResultReason[];
+  summary?: string;
+  stage?: string;
+  stepRole?: string;
+  gateTarget?: string;
+}
+
+function normalizeGateStatus(value: unknown): GateResultStatus | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (
+    normalized === "PASS" ||
+    normalized === "FAIL" ||
+    normalized === "NEUTRAL" ||
+    normalized === "COMPLETE" ||
+    normalized === "NEEDS_INPUT"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeGateNextAction(value: unknown): GateNextAction | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (
+    normalized === "continue" ||
+    normalized === "retry_step" ||
+    normalized === "retry_stage" ||
+    normalized === "escalate" ||
+    normalized === "stop"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function extractStructuredReasons(value: unknown): GateResultReason[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const reasons: GateResultReason[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) {
+      return null;
+    }
+
+    const raw = entry as Record<string, unknown>;
+    const code = typeof raw.code === "string" ? raw.code.trim() : "";
+    const message = typeof raw.message === "string" ? raw.message.trim() : "";
+    if (code.length === 0 || message.length === 0) {
+      return null;
+    }
+
+    const severity =
+      raw.severity === "critical" || raw.severity === "high" || raw.severity === "medium" || raw.severity === "low"
+        ? raw.severity
+        : undefined;
+    reasons.push({ code, message, severity });
+  }
+
+  return reasons;
+}
+
+function extractFieldCaseInsensitive(payload: Record<string, unknown>, key: string): unknown {
+  if (key in payload) {
+    return payload[key];
+  }
+
+  const normalized = key.toLowerCase();
+  for (const [entryKey, value] of Object.entries(payload)) {
+    if (entryKey.toLowerCase() === normalized) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readStatusFromPayload(payload: Record<string, unknown>): GateResultStatus | null {
+  const direct =
+    normalizeGateStatus(extractFieldCaseInsensitive(payload, "workflow_status")) ??
+    normalizeGateStatus(extractFieldCaseInsensitive(payload, "workflowStatus"));
+  if (direct) {
+    return direct;
+  }
+
+  return normalizeGateStatus(extractFieldCaseInsensitive(payload, "status"));
+}
+
+export function normalizeStatusMarkers(output: string): string {
+  if (output.length === 0) {
+    return output;
+  }
+
+  return output.replace(STATUS_WITH_MARKUP_PATTERN, (_full, label: string, statusRaw: string) => {
+    const normalizedStatus = statusRaw.toUpperCase().replace(/[\s-]+/g, "_");
+    return `${label}: ${normalizedStatus}`;
+  });
+}
+
 function extractFirstJsonObject(text: string): string | null {
   const start = text.indexOf("{");
   if (start === -1) {
@@ -58,6 +184,121 @@ export function normalizeStepStatus(value: unknown): "pass" | "fail" | "neutral"
   return null;
 }
 
+function statusFromMarkerPattern(pattern: RegExp, output: string): GateResultStatus | null {
+  const match = output.match(pattern)?.[1];
+  if (!match) {
+    return null;
+  }
+  return normalizeGateStatus(match);
+}
+
+export function extractStatusSignals(
+  output: string,
+  parsedJson?: Record<string, unknown> | null
+): {
+  workflowStatus: GateResultStatus | null;
+  htmlReviewStatus: GateResultStatus | null;
+  pdfReviewStatus: GateResultStatus | null;
+} {
+  const normalizedOutput = normalizeStatusMarkers(output);
+  const payload = parsedJson ?? parseJsonOutput(output);
+  const workflowFromJson = payload ? readStatusFromPayload(payload) : null;
+  const htmlFromJson = payload
+    ? normalizeGateStatus(
+        extractFieldCaseInsensitive(payload, "html_review_status") ?? extractFieldCaseInsensitive(payload, "htmlReviewStatus")
+      )
+    : null;
+  const pdfFromJson = payload
+    ? normalizeGateStatus(
+        extractFieldCaseInsensitive(payload, "pdf_review_status") ?? extractFieldCaseInsensitive(payload, "pdfReviewStatus")
+      )
+    : null;
+
+  return {
+    workflowStatus: workflowFromJson ?? statusFromMarkerPattern(WORKFLOW_STATUS_PATTERN, normalizedOutput),
+    htmlReviewStatus: htmlFromJson ?? statusFromMarkerPattern(HTML_REVIEW_STATUS_PATTERN, normalizedOutput),
+    pdfReviewStatus: pdfFromJson ?? statusFromMarkerPattern(PDF_REVIEW_STATUS_PATTERN, normalizedOutput)
+  };
+}
+
+export function buildStatusSignalOutput(
+  output: string,
+  parsedJson?: Record<string, unknown> | null
+): string {
+  const signals = extractStatusSignals(output, parsedJson);
+  const lines: string[] = [];
+  if (signals.workflowStatus) {
+    lines.push(`WORKFLOW_STATUS: ${signals.workflowStatus}`);
+  }
+  if (signals.htmlReviewStatus) {
+    lines.push(`HTML_REVIEW_STATUS: ${signals.htmlReviewStatus}`);
+  }
+  if (signals.pdfReviewStatus) {
+    lines.push(`PDF_REVIEW_STATUS: ${signals.pdfReviewStatus}`);
+  }
+  return lines.join("\n");
+}
+
+export function parseGateResultContract(
+  output: string,
+  parsedJson?: Record<string, unknown> | null
+): { contract: GateResultContract | null; source: "json" | "legacy_text" | "none" } {
+  const payload = parsedJson ?? parseJsonOutput(output);
+  if (payload) {
+    const workflowStatus = readStatusFromPayload(payload);
+    const nextAction = normalizeGateNextAction(
+      extractFieldCaseInsensitive(payload, "next_action") ?? extractFieldCaseInsensitive(payload, "nextAction")
+    );
+    const reasons = extractStructuredReasons(extractFieldCaseInsensitive(payload, "reasons"));
+    const summaryRaw = extractFieldCaseInsensitive(payload, "summary");
+    const summary = typeof summaryRaw === "string" && summaryRaw.trim().length > 0 ? summaryRaw.trim() : undefined;
+    const stageRaw = extractFieldCaseInsensitive(payload, "stage");
+    const stage = typeof stageRaw === "string" && stageRaw.trim().length > 0 ? stageRaw.trim() : undefined;
+    const stepRoleRaw =
+      extractFieldCaseInsensitive(payload, "step_role") ?? extractFieldCaseInsensitive(payload, "stepRole");
+    const stepRole =
+      typeof stepRoleRaw === "string" && stepRoleRaw.trim().length > 0 ? stepRoleRaw.trim() : undefined;
+    const gateTargetRaw =
+      extractFieldCaseInsensitive(payload, "gate_target") ?? extractFieldCaseInsensitive(payload, "gateTarget");
+    const gateTarget =
+      typeof gateTargetRaw === "string" && gateTargetRaw.trim().length > 0 ? gateTargetRaw.trim() : undefined;
+
+    if (workflowStatus && nextAction && reasons) {
+      return {
+        contract: {
+          workflowStatus,
+          nextAction,
+          reasons,
+          summary,
+          stage,
+          stepRole,
+          gateTarget
+        },
+        source: "json"
+      };
+    }
+  }
+
+  const markers = extractStatusSignals(output, payload);
+  if (markers.workflowStatus) {
+    return {
+      contract: {
+        workflowStatus: markers.workflowStatus,
+        nextAction: markers.workflowStatus === "FAIL" ? "retry_step" : "continue",
+        reasons: [
+          {
+            code: "legacy_text_status",
+            message: "Legacy text status markers were parsed; emit strict GateResult JSON for deterministic behavior."
+          }
+        ]
+      },
+      source: "legacy_text"
+    };
+  }
+
+  return { contract: null, source: "none" };
+}
+
 export function parseJsonOutput(output: string): Record<string, unknown> | null {
   const candidates = new Set<string>();
   const trimmed = output.trim();
@@ -96,8 +337,8 @@ export function extractInputRequestSignal(
   output: string,
   parsedJson?: Record<string, unknown> | null
 ): { needsInput: boolean; summary?: string } {
-  const explicit = output.match(/WORKFLOW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|NEEDS[_\s-]?INPUT)/i)?.[1];
-  const explicitStatus = normalizeStepStatus(explicit);
+  const signals = extractStatusSignals(output, parsedJson);
+  const explicitStatus = normalizeStepStatus(signals.workflowStatus);
   if (explicitStatus === "needs_input") {
     return { needsInput: true };
   }
@@ -121,9 +362,16 @@ export function extractInputRequestSignal(
 }
 
 export function inferWorkflowOutcome(output: string): WorkflowOutcome {
-  const explicit = output.match(/WORKFLOW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL)/i)?.[1]?.toLowerCase();
+  const signals = extractStatusSignals(output);
+  const explicit =
+    signals.workflowStatus === "PASS" || signals.workflowStatus === "FAIL" || signals.workflowStatus === "NEUTRAL"
+      ? signals.workflowStatus.toLowerCase()
+      : signals.workflowStatus;
   if (explicit === "pass" || explicit === "fail" || explicit === "neutral") {
     return explicit;
+  }
+  if (explicit === "COMPLETE") {
+    return "pass";
   }
 
   const jsonBlocks = [...output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
@@ -139,6 +387,9 @@ export function inferWorkflowOutcome(output: string): WorkflowOutcome {
         const status = parsed.status.toLowerCase();
         if (status === "pass" || status === "fail" || status === "neutral") {
           return status;
+        }
+        if (status === "complete") {
+          return "pass";
         }
       }
     } catch {

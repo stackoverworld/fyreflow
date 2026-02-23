@@ -30,7 +30,10 @@ const stepSchema = z.object({
   requiredOutputFields: z.array(z.string().min(1)).max(40).default([]),
   requiredOutputFiles: z.array(z.string().min(1)).max(40).default([]),
   scenarios: z.array(z.string().min(1).max(80)).max(20).default([]),
-  skipIfArtifacts: z.array(z.string().min(1).max(4000)).max(40).default([])
+  skipIfArtifacts: z.array(z.string().min(1).max(4000)).max(40).default([]),
+  policyProfileIds: z.array(z.string().min(1).max(120)).max(20).default([]),
+  cacheBypassInputKeys: z.array(z.string().min(1).max(160)).max(20).default([]),
+  cacheBypassOrchestratorPromptPatterns: z.array(z.string().min(1).max(800)).max(20).default([])
 });
 
 const qualityGateSchema = z.object({
@@ -124,7 +127,7 @@ export const pipelineSchema = z.object({
     .object({
       maxLoops: z.number().int().min(0).max(12).default(2),
       maxStepExecutions: z.number().int().min(4).max(120).default(18),
-      stageTimeoutMs: z.number().int().min(10000).max(1200000).default(420000)
+      stageTimeoutMs: z.number().int().min(10000).max(18000000).default(420000)
     })
     .partial()
     .default({}),
@@ -164,6 +167,58 @@ export const storageUpdateSchema = z.object({
   isolatedFolder: z.string().min(1).max(240).optional(),
   runsFolder: z.string().min(1).max(240).optional()
 });
+
+export const filesScopeSchema = z.enum(["shared", "isolated", "runs"]);
+
+const baseFilesSchema = z.object({
+  pipelineId: z.string().min(1).max(240),
+  scope: filesScopeSchema,
+  runId: z.string().min(1).max(240).optional()
+});
+
+export const filesListQuerySchema = baseFilesSchema
+  .extend({
+    path: z.string().max(4000).optional().default("")
+  })
+  .superRefine((value, context) => {
+    if (value.scope === "runs" && (!value.runId || value.runId.trim().length === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required when scope is runs."
+      });
+    }
+  });
+
+export const filesContentQuerySchema = baseFilesSchema
+  .extend({
+    path: z.string().min(1).max(4000),
+    maxBytes: z.coerce.number().int().min(1).max(1024 * 1024).optional().default(256 * 1024)
+  })
+  .superRefine((value, context) => {
+    if (value.scope === "runs" && (!value.runId || value.runId.trim().length === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required when scope is runs."
+      });
+    }
+  });
+
+export const filesDeleteSchema = baseFilesSchema
+  .extend({
+    path: z.string().min(1).max(4000),
+    recursive: z.boolean().optional().default(false)
+  })
+  .superRefine((value, context) => {
+    if (value.scope === "runs" && (!value.runId || value.runId.trim().length === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required when scope is runs."
+      });
+    }
+  });
 
 const runInputsRecordSchema = z
   .record(z.string())
@@ -227,7 +282,7 @@ const flowBuilderDraftSchema = z.object({
     .object({
       maxLoops: z.number().int().min(0).max(12).default(2),
       maxStepExecutions: z.number().int().min(4).max(120).default(18),
-      stageTimeoutMs: z.number().int().min(10000).max(1000000).default(420000)
+      stageTimeoutMs: z.number().int().min(10000).max(18000000).default(420000)
     })
     .partial()
     .optional(),
@@ -242,7 +297,7 @@ export const flowBuilderRequestSchema = z.object({
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
   fastMode: z.boolean().optional(),
   use1MContext: z.boolean().optional(),
-  history: z.array(flowBuilderMessageSchema).max(40).optional(),
+  history: z.array(flowBuilderMessageSchema).max(240).optional(),
   currentDraft: flowBuilderDraftSchema.optional(),
   availableMcpServers: z
     .array(

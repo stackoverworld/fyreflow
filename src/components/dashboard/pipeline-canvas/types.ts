@@ -45,6 +45,7 @@ export interface PipelineCanvasProps {
   links: FlowLink[];
   animatedNodeIds?: string[];
   animatedLinkIds?: string[];
+  runStatus?: "running" | "paused" | "queued" | "awaiting_approval" | null;
   selectedNodeId: string | null;
   selectedNodeIds: string[];
   selectedLinkId: string | null;

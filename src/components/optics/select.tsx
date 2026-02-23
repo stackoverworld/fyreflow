@@ -33,6 +33,8 @@ export function Select({ value, onValueChange, options, placeholder, className, 
     }
   }, [disabled, open]);
 
+  const [openAbove, setOpenAbove] = useState(false);
+
   // Position the dropdown relative to the trigger using fixed positioning
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -41,16 +43,36 @@ export function Select({ value, onValueChange, options, placeholder, className, 
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
 
-      setDropdownStyle({
-        position: "fixed",
-        top: rect.bottom + 6,
-        left: rect.left,
-        width: rect.width,
-        zIndex: 9999
-      });
+      const listHeight = listRef.current?.offsetHeight ?? 224;
+      const gap = 6;
+      const spaceBelow = window.innerHeight - rect.bottom - gap;
+      const spaceAbove = rect.top - gap;
+      const shouldOpenAbove = spaceBelow < listHeight && spaceAbove > spaceBelow;
+
+      setOpenAbove(shouldOpenAbove);
+
+      if (shouldOpenAbove) {
+        setDropdownStyle({
+          position: "fixed",
+          bottom: window.innerHeight - rect.top + gap,
+          left: rect.left,
+          width: rect.width,
+          zIndex: 9999
+        });
+      } else {
+        setDropdownStyle({
+          position: "fixed",
+          top: rect.bottom + gap,
+          left: rect.left,
+          width: rect.width,
+          zIndex: 9999
+        });
+      }
     };
 
     updatePosition();
+    // Recalculate after the dropdown renders and we know its height
+    requestAnimationFrame(updatePosition);
 
     // Reposition on scroll/resize so it follows the trigger
     window.addEventListener("scroll", updatePosition, true);
@@ -102,12 +124,15 @@ export function Select({ value, onValueChange, options, placeholder, className, 
       {open && !disabled && (
         <motion.div
           ref={listRef}
-          initial={{ opacity: 0, scale: 0.95, y: -4 }}
+          initial={{ opacity: 0, scale: 0.95, y: openAbove ? 4 : -4 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: -4 }}
+          exit={{ opacity: 0, scale: 0.95, y: openAbove ? 4 : -4 }}
           transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
           style={dropdownStyle}
-          className="max-h-56 min-w-[140px] origin-top select-none overflow-y-auto rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] p-1 shadow-xl"
+          className={cn(
+            "max-h-56 min-w-[140px] select-none overflow-y-auto rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] p-1 shadow-xl",
+            openAbove ? "origin-bottom" : "origin-top"
+          )}
         >
           <div className="space-y-0.5">
             {options.map((option) => {

@@ -188,6 +188,36 @@ export function buildOutputFilesPatch(value: string) {
   };
 }
 
+export function buildSkipIfArtifactsPatch(value: string) {
+  return {
+    skipIfArtifacts: parseLineList(value)
+  };
+}
+
+export function buildScenariosPatch(value: string) {
+  return {
+    scenarios: parseLineList(value)
+  };
+}
+
+export function buildPolicyProfileIdsPatch(value: string) {
+  return {
+    policyProfileIds: parseLineList(value)
+  };
+}
+
+export function buildCacheBypassInputKeysPatch(value: string) {
+  return {
+    cacheBypassInputKeys: parseLineList(value)
+  };
+}
+
+export function buildCacheBypassOrchestratorPromptPatternsPatch(value: string) {
+  return {
+    cacheBypassOrchestratorPromptPatterns: parseLineList(value)
+  };
+}
+
 export function buildPromptPatch(prompt: string) {
   return { prompt };
 }

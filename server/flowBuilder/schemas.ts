@@ -7,7 +7,7 @@ export const generatedFlowSchema = z.object({
     .object({
       maxLoops: z.number().int().min(0).max(12).optional(),
       maxStepExecutions: z.number().int().min(4).max(120).optional(),
-      stageTimeoutMs: z.number().int().min(10000).max(1200000).optional()
+      stageTimeoutMs: z.number().int().min(10000).max(18000000).optional()
     })
     .partial()
     .optional(),
@@ -42,7 +42,10 @@ export const generatedFlowSchema = z.object({
         requiredOutputFields: z.array(z.string().min(1)).max(40).optional(),
         requiredOutputFiles: z.array(z.string().min(1)).max(40).optional(),
         scenarios: z.array(z.string().min(1).max(80)).max(20).optional(),
-        skipIfArtifacts: z.array(z.string().min(1).max(4000)).max(40).optional()
+        skipIfArtifacts: z.array(z.string().min(1).max(4000)).max(40).optional(),
+        policyProfileIds: z.array(z.string().min(1).max(120)).max(20).optional(),
+        cacheBypassInputKeys: z.array(z.string().min(1).max(160)).max(20).optional(),
+        cacheBypassOrchestratorPromptPatterns: z.array(z.string().min(1).max(800)).max(20).optional()
       })
     )
     .min(1)

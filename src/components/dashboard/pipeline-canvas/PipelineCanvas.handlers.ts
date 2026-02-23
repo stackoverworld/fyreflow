@@ -27,6 +27,9 @@ const ROUTE_OVERLAP_PENALTY_PER_PIXEL = 180;
 const ROUTE_LANE_SEPARATION_STEP = 20;
 const ROUTE_LANE_SEPARATION_LEVELS = 6;
 const ROUTE_LANE_SEPARATION_TRIGGER = 12;
+const ROUTE_LANE_SEPARATION_MIN_BRIDGE = 27;
+const ROUTE_LANE_SEPARATION_MIN_LEG = 12;
+const ROUTE_LANE_SEPARATION_MAX_LEG = 20;
 const ROUTE_EDGE_INDEX_VARIANTS = [0, 1, 2, 3, 4, 5] as const;
 
 function pointDistanceToNodePerimeter(point: Point, node: FlowNode): number {
@@ -181,25 +184,46 @@ function routeKey(route: Point[]): string {
   return route.map((point) => `${point.x},${point.y}`).join("|");
 }
 
-function ensureEndpointOrthogonality(route: Point[], axis: RouteAxis): Point[] {
+function segmentAxis(start: Point | undefined, end: Point | undefined): RouteAxis | null {
+  if (!start || !end) {
+    return null;
+  }
+  if (start.y === end.y && start.x !== end.x) {
+    return "horizontal";
+  }
+  if (start.x === end.x && start.y !== end.y) {
+    return "vertical";
+  }
+  return null;
+}
+
+function ensureEndpointOrthogonality(route: Point[], axis: RouteAxis, baselineRoute: Point[] = route): Point[] {
   if (route.length < 2) {
     return route;
   }
+
+  const baselineStartAxis = segmentAxis(baselineRoute[0], baselineRoute[1]);
+  const baselineEndAxis = segmentAxis(
+    baselineRoute[baselineRoute.length - 2],
+    baselineRoute[baselineRoute.length - 1]
+  );
 
   const adjusted = [...route];
   const start = adjusted[0];
   const first = adjusted[1];
   if (start && first && start.x !== first.x && start.y !== first.y) {
-    adjusted.splice(1, 0, axis === "horizontal" ? { x: start.x, y: first.y } : { x: first.x, y: start.y });
+    const startAxis = baselineStartAxis ?? (axis === "horizontal" ? "vertical" : "horizontal");
+    adjusted.splice(1, 0, startAxis === "horizontal" ? { x: first.x, y: start.y } : { x: start.x, y: first.y });
   }
 
   const end = adjusted[adjusted.length - 1];
   const beforeEnd = adjusted[adjusted.length - 2];
   if (end && beforeEnd && end.x !== beforeEnd.x && end.y !== beforeEnd.y) {
+    const endAxis = baselineEndAxis ?? (axis === "horizontal" ? "vertical" : "horizontal");
     adjusted.splice(
       adjusted.length - 1,
       0,
-      axis === "horizontal" ? { x: end.x, y: beforeEnd.y } : { x: beforeEnd.x, y: end.y }
+      endAxis === "horizontal" ? { x: beforeEnd.x, y: end.y } : { x: end.x, y: beforeEnd.y }
     );
   }
 
@@ -214,24 +238,38 @@ function buildSeparatedDirectRoute(route: Point[], axis: RouteAxis, offset: numb
   }
 
   if (axis === "horizontal") {
-    const midX = Math.round((start.x + end.x) / 2);
+    const direction = end.x >= start.x ? 1 : -1;
+    const distance = Math.abs(end.x - start.x);
+    const maxLegByBridge = Math.floor((distance - ROUTE_LANE_SEPARATION_MIN_BRIDGE) / 2);
+    const leg = Math.min(ROUTE_LANE_SEPARATION_MAX_LEG, maxLegByBridge);
+    if (leg < ROUTE_LANE_SEPARATION_MIN_LEG) {
+      return route;
+    }
     const laneY = Math.round((start.y + end.y) / 2 + offset);
     return normalizeRoute([
       start,
-      { x: midX, y: start.y },
-      { x: midX, y: laneY },
-      { x: end.x, y: laneY },
+      { x: start.x + direction * leg, y: start.y },
+      { x: start.x + direction * leg, y: laneY },
+      { x: end.x - direction * leg, y: laneY },
+      { x: end.x - direction * leg, y: end.y },
       end
     ]);
   }
 
-  const midY = Math.round((start.y + end.y) / 2);
+  const direction = end.y >= start.y ? 1 : -1;
+  const distance = Math.abs(end.y - start.y);
+  const maxLegByBridge = Math.floor((distance - ROUTE_LANE_SEPARATION_MIN_BRIDGE) / 2);
+  const leg = Math.min(ROUTE_LANE_SEPARATION_MAX_LEG, maxLegByBridge);
+  if (leg < ROUTE_LANE_SEPARATION_MIN_LEG) {
+    return route;
+  }
   const laneX = Math.round((start.x + end.x) / 2 + offset);
   return normalizeRoute([
     start,
-    { x: start.x, y: midY },
-    { x: laneX, y: midY },
-    { x: laneX, y: end.y },
+    { x: start.x, y: start.y + direction * leg },
+    { x: laneX, y: start.y + direction * leg },
+    { x: laneX, y: end.y - direction * leg },
+    { x: end.x, y: end.y - direction * leg },
     end
   ]);
 }
@@ -254,7 +292,7 @@ function offsetRoutePerpendicular(route: Point[], axis: RouteAxis, offset: numbe
       : { x: Math.round(point.x + offset), y: point.y };
   });
 
-  return normalizeRoute(ensureEndpointOrthogonality(shifted, axis));
+  return normalizeRoute(ensureEndpointOrthogonality(shifted, axis, route));
 }
 
 function laneSeparationOffsets(): number[] {

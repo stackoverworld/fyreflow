@@ -1,5 +1,6 @@
 import type { LocalStore } from "../storage.js";
-import type { PipelineStep } from "../types.js";
+import { normalizeStepLabel } from "../stepLabel.js";
+import type { PipelineStep, StepRun } from "../types.js";
 import type { TimelineEntry } from "./types.js";
 import { formatOutputWithQualityFailures } from "./resultFormatting.js";
 import { markStepCompleted } from "./scheduling.js";
@@ -15,9 +16,12 @@ export interface StepResultMappingInput {
   stepExecution: StepExecutionOutput;
   latestOutputByStepId: Map<string, string>;
   timeline: TimelineEntry[];
+  triggeredByStepId?: StepRun["triggeredByStepId"];
+  triggeredByReason?: StepRun["triggeredByReason"];
 }
 
 export function mapStepExecutionResult(input: StepResultMappingInput): string {
+  const stepLabel = normalizeStepLabel(input.step.name, input.step.id);
   const outputWithQuality = formatOutputWithQualityFailures(
     input.stepExecution.output,
     input.stepExecution.qualityGateResults,
@@ -28,7 +32,7 @@ export function mapStepExecutionResult(input: StepResultMappingInput): string {
   input.latestOutputByStepId.set(input.step.id, outputWithQuality);
   input.timeline.push({
     stepId: input.step.id,
-    stepName: input.step.name,
+    stepName: stepLabel,
     output: outputWithQuality
   });
 
@@ -40,7 +44,9 @@ export function mapStepExecutionResult(input: StepResultMappingInput): string {
     input.stepExecution.subagentNotes,
     input.stepExecution.qualityGateResults,
     input.stepExecution.workflowOutcome,
-    input.attempt
+    input.attempt,
+    input.triggeredByStepId,
+    input.triggeredByReason
   );
 
   return outputWithQuality;

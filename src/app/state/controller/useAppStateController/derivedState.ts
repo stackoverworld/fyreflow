@@ -103,6 +103,7 @@ export function useAppStateControllerDerivedState(args: UseAppStateControllerDer
   const pausingRun = Boolean(selectedPipelineId && pausingRunPipelineId === selectedPipelineId);
   const resumingRun = Boolean(selectedPipelineId && resumingRunPipelineId === selectedPipelineId);
   const selectedPipelineRunActive = Boolean(activePipelineRun);
+  const selectedPipelineRealRunActive = Boolean(realActivePipelineRun);
 
   const { canPauseActiveRun, canResumeActiveRun } = selectRunStateFlags(
     selectedPipelineRunActive,
@@ -141,6 +142,7 @@ export function useAppStateControllerDerivedState(args: UseAppStateControllerDer
     pausingRun,
     resumingRun,
     selectedPipelineRunActive,
+    selectedPipelineRealRunActive,
     canPauseActiveRun,
     canResumeActiveRun,
     selectedPipelineEditLocked,

@@ -1,13 +1,16 @@
 import { isAbortError } from "../abort.js";
+import { hasActiveClaudeApiKey } from "../providerCapabilities.js";
 import type { PipelineStep } from "../types.js";
 import type { ProviderExecutionInput } from "./types.js";
 
+const MAX_STAGE_TIMEOUT_MS = 18_000_000; // 5h hard ceiling
+
 const CLAUDE_CLI_BASE_TIMEOUT_MS = (() => {
-  const raw = Number.parseInt(process.env.CLAUDE_CLI_BASE_TIMEOUT_MS ?? "300000", 10);
+  const raw = Number.parseInt(process.env.CLAUDE_CLI_BASE_TIMEOUT_MS ?? "360000", 10);
   if (!Number.isFinite(raw)) {
-    return 300_000;
+    return 360_000;
   }
-  return Math.max(60_000, Math.min(1_200_000, raw));
+  return Math.max(60_000, Math.min(MAX_STAGE_TIMEOUT_MS, raw));
 })();
 
 const CLAUDE_CLI_HEAVY_TIMEOUT_MS = (() => {
@@ -15,7 +18,7 @@ const CLAUDE_CLI_HEAVY_TIMEOUT_MS = (() => {
   if (!Number.isFinite(raw)) {
     return 420_000;
   }
-  return Math.max(120_000, Math.min(1_200_000, raw));
+  return Math.max(120_000, Math.min(MAX_STAGE_TIMEOUT_MS, raw));
 })();
 
 const CLAUDE_CLI_ORCHESTRATOR_TIMEOUT_MS = (() => {
@@ -23,7 +26,23 @@ const CLAUDE_CLI_ORCHESTRATOR_TIMEOUT_MS = (() => {
   if (!Number.isFinite(raw)) {
     return 180_000;
   }
-  return Math.max(60_000, Math.min(900_000, raw));
+  return Math.max(60_000, Math.min(MAX_STAGE_TIMEOUT_MS, raw));
+})();
+
+const CLAUDE_CLI_STAGE_TIMEOUT_RESERVE_MS = (() => {
+  const raw = Number.parseInt(process.env.CLAUDE_CLI_STAGE_TIMEOUT_RESERVE_MS ?? "30000", 10);
+  if (!Number.isFinite(raw)) {
+    return 30_000;
+  }
+  return Math.max(15_000, Math.min(120_000, raw));
+})();
+
+const CLAUDE_CLI_MIN_FALLBACK_WINDOW_MS = (() => {
+  const raw = Number.parseInt(process.env.CLAUDE_CLI_MIN_FALLBACK_WINDOW_MS ?? "90000", 10);
+  if (!Number.isFinite(raw)) {
+    return 90_000;
+  }
+  return Math.max(30_000, Math.min(300_000, raw));
 })();
 
 export const CLAUDE_CLI_FALLBACK_MODEL = (process.env.CLAUDE_CLI_FALLBACK_MODEL ?? "claude-sonnet-4-6").trim();
@@ -41,7 +60,7 @@ export function buildClaudeTimeoutFallbackInput(input: ProviderExecutionInput): 
     step: {
       ...input.step,
       model: nextModel,
-      fastMode: true,
+      fastMode: hasActiveClaudeApiKey(input.provider),
       reasoningEffort: "low",
       use1MContext: false,
       contextWindowTokens: Math.min(input.step.contextWindowTokens, 220_000)
@@ -49,15 +68,56 @@ export function buildClaudeTimeoutFallbackInput(input: ProviderExecutionInput): 
   };
 }
 
-export function resolveClaudeCliAttemptTimeoutMs(step: PipelineStep, providerDefaultModel: string): number {
+function normalizeStageTimeoutMs(stageTimeoutMs: number | undefined): number | undefined {
+  if (typeof stageTimeoutMs !== "number" || !Number.isFinite(stageTimeoutMs)) {
+    return undefined;
+  }
+  return Math.max(60_000, Math.min(MAX_STAGE_TIMEOUT_MS, Math.floor(stageTimeoutMs)));
+}
+
+export function resolveClaudeCliAttemptTimeoutMs(
+  step: PipelineStep,
+  providerDefaultModel: string,
+  stageTimeoutMs?: number
+): number {
   const model = (step.model || providerDefaultModel || "").toLowerCase();
-  if (step.role === "orchestrator") {
-    return CLAUDE_CLI_ORCHESTRATOR_TIMEOUT_MS;
+  let timeoutMs = step.role === "orchestrator" ? CLAUDE_CLI_ORCHESTRATOR_TIMEOUT_MS : CLAUDE_CLI_BASE_TIMEOUT_MS;
+
+  const roleNeedsHeavyTimeout = step.role === "review" || step.role === "tester" || step.role === "executor";
+  const effortNeedsHeavyTimeout = step.reasoningEffort === "high" || step.reasoningEffort === "xhigh";
+  if (
+    roleNeedsHeavyTimeout ||
+    effortNeedsHeavyTimeout ||
+    step.use1MContext ||
+    step.contextWindowTokens >= 500_000 ||
+    model.includes("opus")
+  ) {
+    timeoutMs = Math.max(timeoutMs, CLAUDE_CLI_HEAVY_TIMEOUT_MS);
   }
-  if (step.use1MContext || step.contextWindowTokens >= 500_000 || model.includes("opus")) {
-    return CLAUDE_CLI_HEAVY_TIMEOUT_MS;
+
+  const stageBudgetMs = normalizeStageTimeoutMs(stageTimeoutMs);
+  if (typeof stageBudgetMs === "number") {
+    const reserveMs = Math.max(15_000, Math.min(CLAUDE_CLI_STAGE_TIMEOUT_RESERVE_MS, Math.floor(stageBudgetMs * 0.15)));
+    const maxAttemptMs = Math.max(60_000, stageBudgetMs - reserveMs);
+    const roleNeedsLongAttempt =
+      step.role === "analysis" || step.role === "executor" || step.role === "planner" || step.role === "review" || step.role === "tester";
+    const modelNeedsLongAttempt =
+      model.includes("opus") ||
+      step.reasoningEffort === "high" ||
+      step.reasoningEffort === "xhigh" ||
+      step.use1MContext ||
+      step.contextWindowTokens >= 500_000;
+
+    if (roleNeedsLongAttempt || modelNeedsLongAttempt) {
+      const targetFromBudgetMs = Math.floor(stageBudgetMs * 0.8);
+      const targetAttemptMs = Math.max(CLAUDE_CLI_HEAVY_TIMEOUT_MS, targetFromBudgetMs);
+      timeoutMs = Math.max(timeoutMs, Math.min(targetAttemptMs, maxAttemptMs));
+    }
+
+    timeoutMs = Math.min(timeoutMs, maxAttemptMs);
   }
-  return CLAUDE_CLI_BASE_TIMEOUT_MS;
+
+  return Math.min(timeoutMs, MAX_STAGE_TIMEOUT_MS);
 }
 
 export function shouldTryClaudeTimeoutFallback(input: ProviderExecutionInput, error: unknown): boolean {
@@ -79,7 +139,20 @@ export function shouldTryClaudeTimeoutFallback(input: ProviderExecutionInput, er
     (input.step.reasoningEffort === "low" || input.step.reasoningEffort === "minimal") &&
     !input.step.use1MContext &&
     !model.includes("opus");
-  return !alreadyFast;
+  if (alreadyFast) {
+    return false;
+  }
+
+  const stageBudgetMs = normalizeStageTimeoutMs(input.stageTimeoutMs);
+  if (typeof stageBudgetMs === "number") {
+    const attemptTimeoutMs = resolveClaudeCliAttemptTimeoutMs(input.step, input.provider.defaultModel, input.stageTimeoutMs);
+    const remainingBudgetMs = Math.max(0, stageBudgetMs - attemptTimeoutMs);
+    if (remainingBudgetMs < CLAUDE_CLI_MIN_FALLBACK_WINDOW_MS) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function trimContextForRetry(context: string, maxChars: number): string {

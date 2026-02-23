@@ -26,6 +26,7 @@ export interface StepExecutionInput {
   qualityGates: PipelineQualityGate[];
   stepById: Map<string, PipelineStep>;
   storagePaths: StepStoragePaths;
+  log?: (message: string) => void;
   abortSignal?: AbortSignal;
 }
 

@@ -29,6 +29,7 @@ export const lazyPanelRoutes: readonly LazyPanelRouteDefinition[] = [
         aiChatPending,
         selectedPipeline,
         runs,
+        storageConfig,
         smartRunPlan,
         loadingSmartRunPlan,
         scheduleDraft,
@@ -58,6 +59,7 @@ export const lazyPanelRoutes: readonly LazyPanelRouteDefinition[] = [
           runs={runs}
           smartRunPlan={smartRunPlan}
           loadingSmartRunPlan={loadingSmartRunPlan}
+          storageConfig={storageConfig}
           syncedMode={scheduleDraft.runMode}
           syncedInputs={scheduleDraft.inputs}
           onDraftStateChange={handleRunPanelDraftStateChange}

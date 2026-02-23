@@ -5,6 +5,12 @@ import type {
 } from "./pipeline";
 
 export type StepRunStatus = "pending" | "running" | "completed" | "failed";
+export type StepTriggerReason =
+  | "entry_step"
+  | "cycle_bootstrap"
+  | "route"
+  | "skip_if_artifacts"
+  | "disconnected_fallback";
 export type RunStatus =
   | "queued"
   | "running"
@@ -46,6 +52,8 @@ export interface StepQualityGateResult {
 
 export interface StepRun {
   stepId: string;
+  triggeredByStepId?: string;
+  triggeredByReason?: StepTriggerReason;
   stepName: string;
   role: AgentRole;
   status: StepRunStatus;

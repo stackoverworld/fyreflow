@@ -1,6 +1,7 @@
 import { orderPipelineSteps } from "../pipelineGraph.js";
 import { cancelRun, runPipeline } from "../runner.js";
 import { filterPipelineForScenario } from "../scenarios.js";
+import { normalizeStepLabel } from "../stepLabel.js";
 import { getPipelineSecureInputs, maskSensitiveInputs, mergeRunInputsWithSecure } from "../secureInputs.js";
 import type { LocalStore } from "../storage.js";
 import type { Pipeline, PipelineRun, RunStatus } from "../types.js";
@@ -74,7 +75,7 @@ export function createRunRecoveryRuntime(deps: RunRecoveryRuntimeDependencies): 
     const orderedSteps = orderPipelineSteps(scoped.steps, scoped.links);
     return orderedSteps.map((step) => ({
       stepId: step.id,
-      stepName: step.name,
+      stepName: normalizeStepLabel(step.name, step.id),
       role: step.role,
       status: "pending",
       attempts: 0,

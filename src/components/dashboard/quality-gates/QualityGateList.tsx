@@ -1,5 +1,6 @@
-import { AlertTriangle, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import type { PipelinePayload, QualityGateKind } from "@/lib/types";
+import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
 import { Switch } from "@/components/optics/switch";
@@ -13,6 +14,7 @@ interface QualityGateListProps {
     index: number,
     nextGate: Partial<PipelinePayload["qualityGates"][number]>
   ) => void;
+  onAdd: () => void;
   readOnly?: boolean;
   steps: PipelinePayload["steps"];
 }
@@ -22,14 +24,27 @@ export function QualityGateList({
   kindOptions,
   onDeleteGate,
   onUpdateGate,
+  onAdd,
   readOnly = false,
   steps
 }: QualityGateListProps) {
   return (
     <section className="space-y-4">
-      <div className="flex items-center gap-2 text-ink-400">
-        <ShieldCheck className="h-3.5 w-3.5" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider">Pipeline quality gates</span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-ink-400">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Pipeline quality gates</span>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="shrink-0 whitespace-nowrap"
+          disabled={readOnly}
+          onClick={onAdd}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add Gate
+        </Button>
       </div>
 
       {gates.length === 0 ? (

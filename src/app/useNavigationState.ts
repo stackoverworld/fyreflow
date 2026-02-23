@@ -1,7 +1,17 @@
 import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
-export type WorkspacePanel = "pipelines" | "flow" | "schedules" | "contracts" | "mcp" | "run" | "ai" | "debug" | null;
+export type WorkspacePanel =
+  | "pipelines"
+  | "flow"
+  | "schedules"
+  | "contracts"
+  | "mcp"
+  | "files"
+  | "run"
+  | "ai"
+  | "debug"
+  | null;
 
 export interface NavigationState {
   activePanel: WorkspacePanel;

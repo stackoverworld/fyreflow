@@ -22,3 +22,7 @@
 - `vitest run`
 - `vite build`
 - `npm run test:e2e`
+
+## UI Kit
+- All dashboard UI changes must use the `dashboard-ui-kit` skill and follow `UIKIT.md`.
+- Read `UIKIT.md` §15–§20 before any visual work — they cover color discipline, nested borders, icon alignment, badges, buttons, and timeline patterns.

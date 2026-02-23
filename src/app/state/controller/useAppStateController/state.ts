@@ -54,6 +54,7 @@ export function useAppStateControllerState() {
   const selectedPipelineIdRef = useRef<string | null>(null);
   const draftWorkflowKeyRef = useRef<string>(draftWorkflowKey);
   const [mockRunActive, setMockRunActive] = useState(false);
+  const [debugPreviewDispatchRouteId, setDebugPreviewDispatchRouteId] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(() => loadAppSettings().debugEnabled);
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationSettings>(
     () => loadAppSettings().desktopNotifications
@@ -146,6 +147,8 @@ export function useAppStateControllerState() {
     draftWorkflowKeyRef,
     mockRunActive,
     setMockRunActive,
+    debugPreviewDispatchRouteId,
+    setDebugPreviewDispatchRouteId,
     debugEnabled,
     setDebugEnabled,
     desktopNotifications,

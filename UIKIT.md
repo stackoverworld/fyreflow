@@ -270,6 +270,128 @@ Toggle with label + description, used in settings panels.
 
 ---
 
+## 15. Color discipline
+
+### ink-only palette for layout
+- All borders, backgrounds, and text colors for layout elements use `ink-*` shades (ink-50 through ink-950). These auto-invert between dark and light themes.
+- `ember-*` is the brand accent — only for focus rings, active toggles, and primary CTAs.
+- **Never use raw Tailwind semantic colors** (red-400, sky-400, amber-400, violet-400, blue-500, etc.) for borders, backgrounds, or accents on layout elements. They look garish against the ink palette.
+- Semantic colors (emerald, red, amber) are allowed **only** inside `<Badge>` variants and preflight status icons — never for card borders or backgrounds.
+- When you need visual differentiation between item kinds (e.g. event types in a timeline), use different ink shades (ink-600 vs ink-700) — not rainbow colors.
+
+### Surface tokens (always use these)
+| Token | Usage |
+|-------|-------|
+| `bg-[var(--surface-raised)]` | Card and list-item backgrounds |
+| `bg-[var(--surface-inset)]` | Code blocks, depressed areas |
+| `bg-[var(--surface-overlay)]` | Floating overlays, tooltips, code blocks |
+| `border-ink-800/50` | Standard card/container border |
+| `border-ink-800/40` | Inner divider lines (with `border-t`) |
+| `bg-[var(--divider)]` | Full-width `h-px` horizontal rules |
+
+### Text hierarchy
+| Role | Class |
+|------|-------|
+| Primary (headings) | `text-ink-50` |
+| Secondary (labels, names) | `text-ink-200` |
+| Tertiary (descriptions) | `text-ink-400` |
+| Muted (hints, placeholders) | `text-ink-500` |
+| Near-invisible (fine print) | `text-ink-600` |
+
+---
+
+## 16. No nested borders
+
+- **One level of border maximum.** A bordered card (`rounded-lg border border-ink-800/50`) must never contain children with their own `border` + `rounded-*` + `bg-*`.
+- Inside a bordered card, separate sections with `border-t border-ink-800/40` divider lines.
+- `<details>` inside a card: no border, no background. Just indent with `pl-4`.
+- **Exception**: `<pre>`/`<code>` blocks for code content may keep `border border-ink-800/50 bg-[var(--surface-inset)]`.
+
+**Bad — nested borders:**
+```tsx
+<div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)]">
+  {/* ❌ sub-card with its own border */}
+  <div className="rounded-md border border-ink-800/50 bg-[var(--surface-overlay)]">
+    ...
+  </div>
+</div>
+```
+
+**Good — flat with dividers:**
+```tsx
+<div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)]">
+  <div>Section A</div>
+  <div className="border-t border-ink-800/40 pt-2.5">Section B</div>
+  <div className="border-t border-ink-800/40 pt-2.5">Section C</div>
+</div>
+```
+
+---
+
+## 17. Icon alignment
+
+- Always use `items-start` (not `items-center`) when an icon sits next to text that can wrap to multiple lines.
+- Add `shrink-0` on every icon to prevent squishing.
+- Use `mt-px` on icons for optical alignment with the first line of text.
+
+```tsx
+{/* ✅ Correct */}
+<div className="flex items-start gap-1.5">
+  <Icon className="mt-px h-3.5 w-3.5 shrink-0 text-ink-400" />
+  <p className="text-[12px] text-ink-200">Title that may wrap</p>
+</div>
+
+{/* ❌ Wrong — icon will center-align on multi-line */}
+<div className="flex items-center gap-1.5">
+  <Icon className="h-3.5 w-3.5" />
+  <p>Title</p>
+</div>
+```
+
+---
+
+## 18. Badges and inline labels
+
+- Any badge, tag, or inline label must have `shrink-0 whitespace-nowrap` so it never wraps or gets squished.
+
+```tsx
+<span className="shrink-0 whitespace-nowrap text-[10px] uppercase tracking-wide text-ink-500">
+  attempt 1
+</span>
+```
+
+---
+
+## 19. Auxiliary buttons
+
+- Use `variant="ghost"` for secondary actions inside cards/panels (copy, open folder, refresh) — not `variant="secondary"`.
+- Copy-to-clipboard: prefer a small inline `<button>` with `text-ink-500 hover:text-ink-300` placed right next to the value being copied.
+
+---
+
+## 20. Timeline / event list pattern
+
+Use left-accent border per item — not bordered cards.
+
+```tsx
+<ol className="space-y-3">
+  <li className="border-l-2 border-l-ink-700 pl-3 py-1.5">
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start gap-1.5">
+        <Icon className="mt-px h-3.5 w-3.5 shrink-0 text-ink-400" />
+        <p className="text-[12px] font-medium text-ink-200">Event title</p>
+      </div>
+      <span className="shrink-0 whitespace-nowrap text-[10px] uppercase tracking-wide text-ink-500">
+        attempt 1
+      </span>
+    </div>
+    <p className="mt-2 text-[11px] text-ink-400">Event detail</p>
+  </li>
+</ol>
+```
+
+---
+
 ## Spacing summary
 
 | Where | Class | Pixels |

@@ -41,12 +41,14 @@ export function LeftPanelRouteWrapper({
 
 export interface RightPanelRouteWrapperProps {
   open: boolean;
+  compact?: boolean;
   onClose: () => void;
   children: ReactNode;
 }
 
 export function RightPanelRouteWrapper({
   open,
+  compact = false,
   onClose,
   children
 }: RightPanelRouteWrapperProps) {
@@ -68,7 +70,7 @@ export function RightPanelRouteWrapper({
         </button>
       </div>
 
-      <div className="h-[calc(100%-48px)] overflow-y-auto p-3">{children}</div>
+      <div className={compact ? "h-[calc(100%-48px)]" : "h-[calc(100%-48px)] overflow-y-auto p-3"}>{children}</div>
     </SlidePanel>
   );
 }
@@ -87,7 +89,7 @@ export function ShellNoticeBanner({ notice }: ShellNoticeBannerProps) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 4, scale: 0.98 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="glass-panel-dense pointer-events-none fixed bottom-5 right-4 z-[100] rounded-xl border border-ink-700/40 px-4 py-2 text-xs text-ink-200 shadow-lg"
+          className="glass-panel-dense pointer-events-none fixed bottom-5 left-4 right-4 z-[100] mx-auto w-fit max-w-[calc(100%-2rem)] rounded-xl border border-ink-700/40 px-4 py-2 text-center text-xs text-ink-200 shadow-lg"
         >
           {notice}
         </motion.div>

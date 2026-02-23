@@ -7,11 +7,13 @@ import type {
   PipelineEditorState
 } from "./types";
 import {
+  getDebugPreviewDispatchAnimation,
   getAnimatedLinkIds,
   getAnimatedNodeIds,
   getCanvasLinks,
   getCanvasNodes,
   getIncomingLinks,
+  getOptimisticStartingNodeId,
   getOutgoingLinks,
   getProviderDefaultModel,
   getReasoningModes,
@@ -34,6 +36,8 @@ import {
 export function usePipelineEditorState({
   draft,
   activeRun,
+  startingRun = false,
+  debugPreviewDispatchRouteId = null,
   readOnly = false,
   modelCatalog,
   onChange,
@@ -95,9 +99,67 @@ export function usePipelineEditorState({
   }, [stepPanelBlocked, selectedStepId]);
 
   const canvasNodes = useMemo(() => getCanvasNodes(draft), [draft.steps]);
+  const debugPreviewDispatchAnimation = useMemo(
+    () => getDebugPreviewDispatchAnimation(debugPreviewDispatchRouteId, canvasNodes),
+    [canvasNodes, debugPreviewDispatchRouteId]
+  );
+  const debugPreviewEnabled = !activeRun && !startingRun;
 
-  const animatedNodeIds = useMemo(() => getAnimatedNodeIds(activeRun), [activeRun]);
-  const animatedLinkIds = useMemo(() => getAnimatedLinkIds(activeRun, canvasLinks), [activeRun, canvasLinks]);
+  const activeAnimatedNodeIds = useMemo(() => getAnimatedNodeIds(activeRun), [activeRun]);
+  const optimisticStartingNodeId = useMemo(
+    () => getOptimisticStartingNodeId(draft, activeRun, startingRun),
+    [draft.steps, activeRun, startingRun]
+  );
+  const [stickyAnimatedNodeIds, setStickyAnimatedNodeIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (activeAnimatedNodeIds.length > 0) {
+      setStickyAnimatedNodeIds(activeAnimatedNodeIds);
+      return;
+    }
+
+    if (optimisticStartingNodeId) {
+      setStickyAnimatedNodeIds([optimisticStartingNodeId]);
+      return;
+    }
+
+    if (activeRun?.status === "queued" || activeRun?.status === "running") {
+      return;
+    }
+
+    setStickyAnimatedNodeIds([]);
+  }, [activeAnimatedNodeIds, activeRun?.status, optimisticStartingNodeId]);
+
+  const runtimeAnimatedNodeIds = useMemo(() => {
+    if (activeAnimatedNodeIds.length > 0) {
+      return activeAnimatedNodeIds;
+    }
+
+    if (optimisticStartingNodeId) {
+      return [optimisticStartingNodeId];
+    }
+
+    if (startingRun || activeRun?.status === "queued" || activeRun?.status === "running") {
+      return stickyAnimatedNodeIds;
+    }
+
+    return [];
+  }, [activeAnimatedNodeIds, optimisticStartingNodeId, startingRun, activeRun?.status, stickyAnimatedNodeIds]);
+  const runtimeAnimatedLinkIds = useMemo(() => getAnimatedLinkIds(activeRun, canvasLinks), [activeRun, canvasLinks]);
+  const animatedNodeIds = useMemo(() => {
+    if (!debugPreviewEnabled || debugPreviewDispatchAnimation.nodeIds.length === 0) {
+      return runtimeAnimatedNodeIds;
+    }
+
+    return [...new Set([...runtimeAnimatedNodeIds, ...debugPreviewDispatchAnimation.nodeIds])];
+  }, [debugPreviewDispatchAnimation.nodeIds, debugPreviewEnabled, runtimeAnimatedNodeIds]);
+  const animatedLinkIds = useMemo(() => {
+    if (!debugPreviewEnabled || !debugPreviewDispatchAnimation.routeId) {
+      return runtimeAnimatedLinkIds;
+    }
+
+    return [...new Set([...runtimeAnimatedLinkIds, debugPreviewDispatchAnimation.routeId])];
+  }, [debugPreviewDispatchAnimation.routeId, debugPreviewEnabled, runtimeAnimatedLinkIds]);
 
   const selectedModelMeta = useMemo(() => {
     return getSelectedModelMeta(draft, selectedStepId, modelCatalog);

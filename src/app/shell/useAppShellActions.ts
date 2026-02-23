@@ -9,6 +9,7 @@ export type AppShellActions = Pick<
     | "setRunInputModal"
     | "setRunCompletionModal"
     | "setMockRunActive"
+    | "setDebugPreviewDispatchRouteId"
     | "setDebugEnabled"
     | "setDesktopNotifications"
     | "setSettingsOpen"
@@ -48,6 +49,7 @@ export function useAppShellActions(state: ReturnType<typeof useAppState>): AppSh
     setRunInputModal,
     setRunCompletionModal,
     setMockRunActive,
+    setDebugPreviewDispatchRouteId,
     setDebugEnabled,
     setDesktopNotifications,
     setSettingsOpen,
@@ -86,6 +88,7 @@ export function useAppShellActions(state: ReturnType<typeof useAppState>): AppSh
     setRunInputModal,
     setRunCompletionModal,
     setMockRunActive,
+    setDebugPreviewDispatchRouteId,
     setDebugEnabled,
     setDesktopNotifications,
     setSettingsOpen,

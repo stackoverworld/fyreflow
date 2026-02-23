@@ -1,5 +1,6 @@
 import { createAbortError } from "../abort.js";
 import type { LocalStore } from "../storage.js";
+import { normalizeStepLabel } from "../stepLabel.js";
 import type { PipelineQualityGate, PipelineStep, StepQualityGateResult } from "../types.js";
 import { hasPendingApprovals, sleep, RUN_CONTROL_POLL_MS } from "./scheduling.js";
 
@@ -20,6 +21,7 @@ function ensureManualApprovalsRequested(
   gates: PipelineQualityGate[],
   attempt: number
 ): string[] {
+  const stepLabel = normalizeStepLabel(step.name, step.id);
   const approvalIds = gates.map((gate) => createManualApprovalId(gate.id, step.id, attempt));
 
   store.updateRun(runId, (run) => {
@@ -38,7 +40,7 @@ function ensureManualApprovalsRequested(
         gateId: gate.id,
         gateName: gate.name,
         stepId: step.id,
-        stepName: step.name,
+        stepName: stepLabel,
         status: "pending",
         blocking: gate.blocking,
         message:
@@ -67,7 +69,7 @@ function ensureManualApprovalsRequested(
       approvals,
       logs:
         addedNames.length > 0
-          ? [...run.logs, `${step.name} is waiting for manual approval: ${addedNames.join(", ")}`]
+          ? [...run.logs, `${stepLabel} is waiting for manual approval: ${addedNames.join(", ")}`]
           : run.logs
     };
   });
@@ -99,6 +101,7 @@ export async function waitForManualApprovals(
     return [];
   }
 
+  const stepLabel = normalizeStepLabel(step.name, step.id);
   const approvalIds = ensureManualApprovalsRequested(store, runId, step, gates, attempt);
 
   while (true) {
@@ -147,7 +150,7 @@ export async function waitForManualApprovals(
         return {
           ...current,
           status: "running",
-          logs: [...current.logs, `${step.name} manual approvals resolved; resuming execution.`]
+          logs: [...current.logs, `${stepLabel} manual approvals resolved; resuming execution.`]
         };
       });
       break;

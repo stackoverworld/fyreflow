@@ -28,6 +28,10 @@
 - `vite build`
 - `npm run test:e2e` (critical browser journeys)
 
+## UI Design
+- All dashboard UI changes must follow `UIKIT.md` and the `dashboard-ui-kit` skill (`skills/dashboard-ui-kit/SKILL.md`).
+- Key rules: ink-only colors, no nested borders, surface tokens, `items-start` on icons, `whitespace-nowrap` on badges. See UIKIT.md §15–§20 for full details.
+
 ## Documentation
 - Update `docs/architecture.md` when module boundaries evolve.
 - Update `docs/api-contracts.md` when interfaces or payloads change.

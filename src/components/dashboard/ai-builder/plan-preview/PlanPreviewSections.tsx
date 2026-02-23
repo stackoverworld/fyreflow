@@ -69,7 +69,7 @@ function OrderedListSection({ block, index }: { block: OrderedListBlock; index: 
 
 function BlockquoteSection({ block, index }: { block: BlockquoteBlock; index: number }) {
   return (
-    <blockquote className="border-l-2 border-ink-600/70 pl-3 text-ink-300">
+    <blockquote className="border-l-2 border-ink-700 pl-3 text-ink-300">
       {renderInlineMarkdownWithLineBreaks(block.lines.join("\n"), `md-quote-${index}`)}
     </blockquote>
   );
@@ -78,7 +78,7 @@ function BlockquoteSection({ block, index }: { block: BlockquoteBlock; index: nu
 function CodeBlockSection({ block }: { block: CodeBlock }) {
   return (
     <pre
-      className="overflow-x-auto rounded-lg border border-ink-700/60 bg-[var(--surface-overlay)] px-2.5 py-2"
+      className="overflow-x-auto rounded-lg border border-ink-800/50 bg-[var(--surface-inset)] px-2.5 py-2"
     >
       {block.language ? <p className="mb-1 text-[10px] uppercase text-ink-500">{block.language}</p> : null}
       <code className="whitespace-pre font-mono text-[12px] text-ink-100">{block.code}</code>
@@ -174,7 +174,7 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
 
         {message.generatedDraft && onApply ? (
           <div className="mt-2 flex items-center gap-2">
-            <Badge variant="success">{message.generatedDraft.steps.length} steps</Badge>
+            <Badge variant="neutral">{message.generatedDraft.steps.length} steps</Badge>
             <Badge variant="neutral">{message.generatedDraft.links.length} links</Badge>
             <Button size="sm" variant="ghost" disabled={readOnly} onClick={onApply}>
               Re-apply
@@ -187,7 +187,7 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
             {message.questions?.map((question) => (
               <div
                 key={question.id}
-                className="rounded-lg border border-ink-700/60 bg-[var(--surface-overlay)] px-2.5 py-2"
+                className="rounded-lg bg-ink-900/50 px-2.5 py-2"
               >
                 <p className="text-[12px] font-medium text-ink-200">{question.question}</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">

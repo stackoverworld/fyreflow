@@ -17,6 +17,8 @@ export interface ProviderExecutionInput {
   step: PipelineStep;
   context: string;
   task: string;
+  stageTimeoutMs?: number;
+  log?: (message: string) => void;
   outputMode?: "markdown" | "json";
   signal?: AbortSignal;
 }

@@ -327,7 +327,10 @@ export function normalizeGeneratedFlow(raw: unknown): unknown {
           requiredOutputFields: normalizeStringArray(step.requiredOutputFields, 40),
           requiredOutputFiles: normalizeStringArray(step.requiredOutputFiles, 40),
           scenarios: normalizeStringArray(step.scenarios, 20),
-          skipIfArtifacts: normalizeStringArray(step.skipIfArtifacts, 40)
+          skipIfArtifacts: normalizeStringArray(step.skipIfArtifacts, 40),
+          policyProfileIds: normalizeStringArray(step.policyProfileIds, 20),
+          cacheBypassInputKeys: normalizeStringArray(step.cacheBypassInputKeys, 20),
+          cacheBypassOrchestratorPromptPatterns: normalizeStringArray(step.cacheBypassOrchestratorPromptPatterns, 20)
         };
       })
       .filter((step): step is NonNullable<typeof step> => step !== null);

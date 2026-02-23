@@ -36,6 +36,7 @@ interface PipelineCanvasContentProps {
   animatedNodeSet: Set<string>;
   animatedLinkSet: Set<string>;
   glowReadySet: Set<string>;
+  runStatus?: "running" | "paused" | "queued" | "awaiting_approval" | null;
   toolMode: CanvasToolMode;
   marqueeFrame: MarqueeFrame | null;
   children?: ReactNode;
@@ -63,6 +64,7 @@ export function PipelineCanvasContent({
   animatedNodeSet,
   animatedLinkSet,
   glowReadySet,
+  runStatus,
   toolMode,
   marqueeFrame,
   children
@@ -102,6 +104,7 @@ export function PipelineCanvasContent({
         animatedNodeSet={animatedNodeSet}
         animatedLinkSet={animatedLinkSet}
         glowReadySet={glowReadySet}
+        runStatus={runStatus}
         toolMode={toolMode}
         marqueeFrame={marqueeFrame}
       >

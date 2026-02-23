@@ -69,9 +69,6 @@ function inferPlaceholderForKey(key: string, type: SmartRunFieldType): string {
 
 function inferDescriptionForKey(key: string): string {
   const normalized = key.toLowerCase();
-  if (normalized.includes("figma")) {
-    return "Used by Figma extraction stages.";
-  }
   if (normalized.includes("pdf")) {
     return "Used by PDF extraction/rendering/review stages.";
   }
@@ -175,19 +172,27 @@ export function collectFieldsFromPipeline(pipeline: Pipeline): SmartRunField[] {
     .join("\n")
     .toLowerCase();
 
-  if (aggregateText.includes("figma")) {
-    addField(registry, "figma_links", "heuristic", {
+  if (
+    aggregateText.includes("source links") ||
+    aggregateText.includes("design links") ||
+    aggregateText.includes("input links")
+  ) {
+    addField(registry, "source_links", "heuristic", {
       required: true,
       type: "multiline",
-      description: "One Figma Dev Mode link per line."
+      description: "One source link per line."
     });
   }
 
-  if (aggregateText.includes("figma token") || aggregateText.includes("figma api token")) {
-    addField(registry, "figma_token", "heuristic", {
+  if (
+    aggregateText.includes("api token") ||
+    aggregateText.includes("access token") ||
+    aggregateText.includes("personal access token")
+  ) {
+    addField(registry, "source_api_token", "heuristic", {
       required: true,
       type: "secret",
-      description: "Token used to access Figma resources."
+      description: "Token used to access source APIs."
     });
   }
 

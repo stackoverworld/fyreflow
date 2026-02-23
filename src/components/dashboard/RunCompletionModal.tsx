@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/optics/button";
 import type { RunCompletionModalContext } from "@/app/state/appStateTypes";
+import { buildRunFolderPath, getRevealFolderButtonLabel } from "@/lib/runStoragePath";
 import type { StorageConfig } from "@/lib/types";
 
 interface RunCompletionModalProps {
@@ -11,25 +12,6 @@ interface RunCompletionModalProps {
   storageConfig: StorageConfig | null;
   onClose: () => void;
   onViewRun: () => void;
-}
-
-function trimBoundarySlashes(value: string): string {
-  return value.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "");
-}
-
-function buildRunFolderPath(storageConfig: StorageConfig | null, runId: string): string | null {
-  if (!storageConfig) {
-    return null;
-  }
-
-  const rootPath = storageConfig.rootPath.trim().replace(/[\\/]+$/, "");
-  const runsFolder = trimBoundarySlashes(storageConfig.runsFolder.trim());
-  if (rootPath.length === 0 || runsFolder.length === 0) {
-    return null;
-  }
-
-  const separator = rootPath.includes("\\") ? "\\" : "/";
-  return `${rootPath}${separator}${runsFolder}${separator}${runId}`;
 }
 
 function formatTimestamp(value?: string): string | null {
@@ -43,18 +25,6 @@ function formatTimestamp(value?: string): string | null {
   }
 
   return parsed.toLocaleString();
-}
-
-function getRevealButtonLabel(platform: string | undefined): string {
-  if (platform === "darwin") {
-    return "Open in Finder";
-  }
-
-  if (platform === "win32") {
-    return "Open in Explorer";
-  }
-
-  return "Open folder";
 }
 
 export function RunCompletionModal({
@@ -73,7 +43,7 @@ export function RunCompletionModal({
     desktopBridge?.isElectron === true &&
     typeof desktopBridge.revealPath === "function"
   );
-  const revealButtonLabel = getRevealButtonLabel(desktopBridge?.platform);
+  const revealButtonLabel = getRevealFolderButtonLabel(desktopBridge?.platform);
 
   useEffect(() => {
     if (!open) {

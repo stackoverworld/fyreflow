@@ -150,3 +150,65 @@ export interface StorageConfigPayload {
   isolatedFolder?: string;
   runsFolder?: string;
 }
+
+export type StorageFilesScope = "shared" | "isolated" | "runs";
+
+export interface StorageFileEntry {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  sizeBytes: number | null;
+  updatedAt: string;
+}
+
+export interface StorageFileListQuery {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  path?: string;
+}
+
+export interface StorageFileListResponse {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId: string | null;
+  rootLabel: string;
+  currentPath: string;
+  parentPath: string | null;
+  exists: boolean;
+  entries: StorageFileEntry[];
+  truncated: boolean;
+}
+
+export interface StorageFileContentQuery {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  path: string;
+  maxBytes?: number;
+}
+
+export type StorageFilePreviewKind = "text" | "html";
+
+export interface StorageFileContentResponse {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId: string | null;
+  rootLabel: string;
+  path: string;
+  name: string;
+  mimeType: string;
+  previewKind: StorageFilePreviewKind;
+  sizeBytes: number;
+  truncated: boolean;
+  maxBytes: number;
+  content: string;
+}
+
+export interface StorageFileDeletePayload {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  path: string;
+  recursive?: boolean;
+}

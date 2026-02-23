@@ -1,6 +1,7 @@
 import { TerminalSquare } from "lucide-react";
 import { Badge } from "@/components/optics/badge";
-import type { PipelineRun, StepRunStatus } from "@/lib/types";
+import type { PipelineRun, StepRunStatus, StorageConfig } from "@/lib/types";
+import { RunSessionCard } from "./RunSessionCard";
 
 const stepBadgeVariant = (status: StepRunStatus): "neutral" | "success" | "running" | "danger" | "warning" => {
   if (status === "completed") {
@@ -17,12 +18,22 @@ const stepBadgeVariant = (status: StepRunStatus): "neutral" | "success" | "runni
 
 interface RunDetailsProps {
   run: PipelineRun;
+  isolatedEnabledStepIds?: ReadonlySet<string> | null;
+  storageConfig: StorageConfig | null | undefined;
 }
 
-export function RunDetails({ run }: RunDetailsProps) {
+export function RunDetails({ run, isolatedEnabledStepIds = null, storageConfig }: RunDetailsProps) {
   return (
-    <div className="mt-1.5 space-y-2 rounded-lg border border-ink-800/30 bg-ink-950/40 p-2.5">
+    <div className="mt-1 space-y-2 px-2.5 py-2">
       <p className="text-[11px] text-ink-500">Started {new Date(run.startedAt).toLocaleString()}</p>
+      <RunSessionCard
+        runId={run.id}
+        pipelineId={run.pipelineId}
+        stepFolders={run.steps.map((step) => ({ stepId: step.stepId, stepName: step.stepName }))}
+        isolatedEnabledStepIds={isolatedEnabledStepIds}
+        storageConfig={storageConfig}
+        bordered={false}
+      />
 
       {run.approvals.length > 0 ? (
         <div className="space-y-1 rounded-md bg-[var(--surface-raised)] p-2">

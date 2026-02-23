@@ -14,6 +14,7 @@ export const panelRoutes: readonly PanelRouteConfig[] = [
   { key: "schedules", path: "/schedules", title: "Cron Schedules" },
   { key: "contracts", path: "/contracts", title: "Contracts & Gates" },
   { key: "mcp", path: "/mcp", title: "MCP & Storage" },
+  { key: "files", path: "/files", title: "Files" },
   { key: "ai", path: "/ai", title: "AI Builder" },
   { key: "debug", path: "/debug", title: "Debug" },
   { key: "run", path: "/run", title: "Run" }

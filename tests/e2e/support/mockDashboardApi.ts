@@ -11,6 +11,8 @@ import type {
 
 interface MockDashboardApiOptions {
   aiGeneratedFlowName?: string;
+  defaultStepIsolatedStorage?: boolean;
+  defaultStepSharedStorage?: boolean;
 }
 
 interface MockDashboardApiContext {
@@ -23,7 +25,13 @@ function isoAt(offsetMs: number): string {
   return new Date(BASE_TIME + offsetMs).toISOString();
 }
 
-function createDefaultStep(stepId = "step-1", name = "1. Analysis Bot"): Pipeline["steps"][number] {
+function createDefaultStep(
+  stepId = "step-1",
+  name = "1. Analysis Bot",
+  options: Pick<MockDashboardApiOptions, "defaultStepIsolatedStorage" | "defaultStepSharedStorage"> = {}
+): Pipeline["steps"][number] {
+  const enableIsolatedStorage = options.defaultStepIsolatedStorage === true;
+  const enableSharedStorage = options.defaultStepSharedStorage === true;
   return {
     id: stepId,
     name,
@@ -39,8 +47,8 @@ function createDefaultStep(stepId = "step-1", name = "1. Analysis Bot"): Pipelin
     contextTemplate: "Task:\n{{task}}\n\nPrevious output:\n{{previous_output}}",
     enableDelegation: false,
     delegationCount: 2,
-    enableIsolatedStorage: false,
-    enableSharedStorage: false,
+    enableIsolatedStorage,
+    enableSharedStorage,
     enabledMcpServerIds: [],
     outputFormat: "markdown",
     requiredOutputFields: [],
@@ -50,8 +58,10 @@ function createDefaultStep(stepId = "step-1", name = "1. Analysis Bot"): Pipelin
   };
 }
 
-function createDefaultPipeline(): Pipeline {
-  const step = createDefaultStep();
+function createDefaultPipeline(
+  options: Pick<MockDashboardApiOptions, "defaultStepIsolatedStorage" | "defaultStepSharedStorage"> = {}
+): Pipeline {
+  const step = createDefaultStep("step-1", "1. Analysis Bot", options);
   return {
     id: "pipeline-default",
     name: "Default Multi-Agent Delivery",
@@ -77,7 +87,9 @@ function createDefaultPipeline(): Pipeline {
   };
 }
 
-function createInitialState(): DashboardState {
+function createInitialState(
+  options: Pick<MockDashboardApiOptions, "defaultStepIsolatedStorage" | "defaultStepSharedStorage"> = {}
+): DashboardState {
   return {
     providers: {
       openai: {
@@ -101,7 +113,7 @@ function createInitialState(): DashboardState {
         updatedAt: isoAt(0)
       }
     },
-    pipelines: [createDefaultPipeline()],
+    pipelines: [createDefaultPipeline(options)],
     runs: [],
     mcpServers: [],
     storage: {
@@ -252,7 +264,7 @@ export async function mockDashboardApi(
   page: Page,
   options: MockDashboardApiOptions = {}
 ): Promise<MockDashboardApiContext> {
-  const state = createInitialState();
+  const state = createInitialState(options);
   let pipelineCounter = 1;
   let runCounter = 0;
   const oauthByProvider: Record<ProviderId, ProviderOAuthStatus> = {

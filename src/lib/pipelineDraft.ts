@@ -95,7 +95,7 @@ export function normalizeRuntime(
   return {
     maxLoops: Math.max(0, Math.min(12, Math.floor(runtime?.maxLoops ?? DEFAULT_MAX_LOOPS))),
     maxStepExecutions: Math.max(4, Math.min(120, Math.floor(runtime?.maxStepExecutions ?? DEFAULT_MAX_STEP_EXECUTIONS))),
-    stageTimeoutMs: Math.max(10_000, Math.min(1_200_000, Math.floor(runtime?.stageTimeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS)))
+    stageTimeoutMs: Math.max(10_000, Math.min(18_000_000, Math.floor(runtime?.stageTimeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS)))
   };
 }
 
@@ -168,7 +168,10 @@ export function createOrchestratorStep(index: number): PipelinePayload["steps"][
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
   };
 }
 
@@ -198,7 +201,10 @@ export function createDraftStep(index: number): PipelinePayload["steps"][number]
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
   };
 }
 
@@ -228,7 +234,12 @@ export function toDraft(pipeline: Pipeline): PipelinePayload {
       requiredOutputFields: step.requiredOutputFields,
       requiredOutputFiles: step.requiredOutputFiles,
       scenarios: Array.isArray(step.scenarios) ? step.scenarios : [],
-      skipIfArtifacts: Array.isArray(step.skipIfArtifacts) ? step.skipIfArtifacts : []
+      skipIfArtifacts: Array.isArray(step.skipIfArtifacts) ? step.skipIfArtifacts : [],
+      policyProfileIds: Array.isArray(step.policyProfileIds) ? step.policyProfileIds : [],
+      cacheBypassInputKeys: Array.isArray(step.cacheBypassInputKeys) ? step.cacheBypassInputKeys : [],
+      cacheBypassOrchestratorPromptPatterns: Array.isArray(step.cacheBypassOrchestratorPromptPatterns)
+        ? step.cacheBypassOrchestratorPromptPatterns
+        : []
     })),
     links: (pipeline.links ?? []).map((link) => ({
       id: link.id,

@@ -3,7 +3,8 @@ import type { AiChatMessage, PipelinePayload } from "@/lib/types";
 const AI_CHAT_STORAGE_PREFIX = "fyreflow:ai-chat:";
 const AI_CHAT_DRAFT_PREFIX = "fyreflow:ai-chat-draft:";
 const AI_CHAT_PENDING_PREFIX = "fyreflow:ai-chat-pending:";
-const MAX_MESSAGES_PER_WORKFLOW = 60;
+const MAX_MESSAGES_PER_WORKFLOW = 500;
+const DEFAULT_HISTORY_PAGE_SIZE = 30;
 
 type AiChatLifecycleListener = () => void;
 
@@ -119,7 +120,10 @@ function isPipelinePayload(value: unknown): value is PipelinePayload {
       Array.isArray(step.requiredOutputFields) &&
       Array.isArray(step.requiredOutputFiles) &&
       Array.isArray(step.scenarios) &&
-      Array.isArray(step.skipIfArtifacts)
+      Array.isArray(step.skipIfArtifacts) &&
+      Array.isArray(step.policyProfileIds) &&
+      Array.isArray(step.cacheBypassInputKeys) &&
+      Array.isArray(step.cacheBypassOrchestratorPromptPatterns)
     );
   });
 
@@ -177,7 +181,7 @@ function normalizeMessage(raw: unknown, fallbackIndex: number): AiChatMessage | 
   return message;
 }
 
-export function loadAiChatHistory(workflowKey: string): AiChatMessage[] {
+function readAiChatHistory(workflowKey: string): AiChatMessage[] {
   if (typeof window === "undefined" || workflowKey.trim().length === 0) {
     return [];
   }
@@ -200,6 +204,46 @@ export function loadAiChatHistory(workflowKey: string): AiChatMessage[] {
   } catch {
     return [];
   }
+}
+
+export function loadAiChatHistory(workflowKey: string): AiChatMessage[] {
+  return readAiChatHistory(workflowKey);
+}
+
+function normalizePageNumber(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+export interface LoadAiChatHistoryPageOptions {
+  offset?: number;
+  limit?: number;
+}
+
+export interface AiChatHistoryPage {
+  messages: AiChatMessage[];
+  hasMore: boolean;
+  total: number;
+}
+
+export function loadAiChatHistoryPage(
+  workflowKey: string,
+  options: LoadAiChatHistoryPageOptions = {}
+): AiChatHistoryPage {
+  const allMessages = readAiChatHistory(workflowKey);
+  const total = allMessages.length;
+  const offset = Math.min(normalizePageNumber(options.offset, 0), total);
+  const limit = Math.max(1, normalizePageNumber(options.limit, DEFAULT_HISTORY_PAGE_SIZE));
+  const end = Math.max(total - offset, 0);
+  const start = Math.max(end - limit, 0);
+
+  return {
+    messages: allMessages.slice(start, end),
+    hasMore: start > 0,
+    total
+  };
 }
 
 export function saveAiChatHistory(workflowKey: string, messages: AiChatMessage[]): void {

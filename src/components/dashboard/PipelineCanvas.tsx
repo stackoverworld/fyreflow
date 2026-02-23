@@ -32,6 +32,7 @@ export function PipelineCanvas({
   links,
   animatedNodeIds = [],
   animatedLinkIds = [],
+  runStatus,
   selectedNodeId,
   selectedNodeIds,
   selectedLinkId,
@@ -419,6 +420,7 @@ export function PipelineCanvas({
       animatedNodeSet={animatedNodeSet}
       animatedLinkSet={animatedLinkSet}
       glowReadySet={glowReadySet}
+      runStatus={runStatus}
       toolMode={toolMode}
       marqueeFrame={selectionState.marqueeFrame}
     >

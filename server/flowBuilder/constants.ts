@@ -48,5 +48,7 @@ export const defaultContextTemplate =
   "Task:\n{{task}}\n\nAttempt:\n{{attempt}}\n\nIncoming outputs:\n{{incoming_outputs}}\n\nAll outputs:\n{{all_outputs}}";
 export const workflowStatusPattern = "WORKFLOW_STATUS\\s*:\\s*(PASS|FAIL|NEUTRAL)";
 
-export const maxHistoryMessages = 16;
 export const maxHistoryCharsPerMessage = 1400;
+export const maxHistoryContextChars = 28_000;
+export const maxHistoryCompactionChars = 8_000;
+export const maxHistorySummaryLineChars = 220;

@@ -6,9 +6,11 @@ import { CronSchedulesPanel } from "@/components/dashboard/CronSchedulesPanel";
 import { DebugPanel } from "@/components/dashboard/DebugPanel";
 import { Input } from "@/components/optics/input";
 import { McpSettings } from "@/components/dashboard/McpSettings";
+import { FilesPanel } from "@/components/dashboard/FilesPanel";
 import { PipelineList } from "@/components/dashboard/PipelineList";
 import { QualityGatesPanel } from "@/components/dashboard/QualityGatesPanel";
 import { cn } from "@/lib/cn";
+import { canUseClaudeFastMode, getClaudeFastModeUnavailableNote } from "@/lib/providerCapabilities";
 import { Textarea } from "@/components/optics/textarea";
 import { type useAppState } from "@/app/useAppState";
 import type { AppShellActions } from "../useAppShellActions";
@@ -38,14 +40,21 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
     key: "ai",
     path: staticPanelPath("ai"),
     render: ({ state, actions }) => {
-      const { draft, mcpServers, selectedPipelineEditLocked, aiWorkflowKey } = state;
+      const { draft, mcpServers, providers, selectedPipelineEditLocked, aiWorkflowKey } = state;
       const { applyEditableDraftChange, setNotice } = actions;
+      const claudeProvider = providers?.claude;
+      const claudeFastModeAvailable = canUseClaudeFastMode(claudeProvider);
+      const claudeFastModeUnavailableNote = claudeFastModeAvailable
+        ? undefined
+        : getClaudeFastModeUnavailableNote(claudeProvider);
 
       return (
         <AiBuilderPanel
           workflowKey={aiWorkflowKey}
           currentDraft={draft}
           mcpServers={mcpServers}
+          claudeFastModeAvailable={claudeFastModeAvailable}
+          claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
           readOnly={selectedPipelineEditLocked}
           onApplyDraft={(generatedDraft) => {
             applyEditableDraftChange(generatedDraft);
@@ -94,7 +103,7 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
       return (
         <div>
           {selectedPipelineEditLocked ? (
-            <p className="mb-4 rounded-lg bg-amber-500/8 px-3 py-2 text-[11px] text-amber-300">
+            <p className="mb-4 rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] text-amber-500">
               This flow is running. Flow settings are locked until it finishes or is stopped.
             </p>
           ) : null}
@@ -177,7 +186,7 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
                 <Input
                   type="number"
                   min={10000}
-                  max={1200000}
+                  max={18000000}
                   step={1000}
                   value={runtimeDraft.stageTimeoutMs}
                   onChange={(event) =>
@@ -187,7 +196,7 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
                         ...runtimeDraft,
                         stageTimeoutMs: Math.max(
                           10000,
-                          Math.min(1200000, Number.parseInt(event.target.value, 10) || 10000)
+                          Math.min(18000000, Number.parseInt(event.target.value, 10) || 10000)
                         )
                       }
                     })
@@ -262,21 +271,54 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
     }
   },
   {
+    key: "files",
+    path: staticPanelPath("files"),
+    render: ({ state, actions }) => {
+      const { selectedPipeline, runs, storageConfig } = state;
+      const { setNotice } = actions;
+
+      return (
+        <FilesPanel
+          selectedPipeline={selectedPipeline}
+          runs={runs}
+          storageConfig={storageConfig}
+          onNotice={setNotice}
+        />
+      );
+    }
+  },
+  {
     key: "debug",
     path: staticPanelPath("debug"),
     render: ({ state, actions }) => {
-      const { selectedPipeline, runs, smartRunPlan, loadingSmartRunPlan, startingRun, mockRunActive } = state;
-      const { setRunCompletionModal, setMockRunActive } = actions;
+      const {
+        draft,
+        selectedPipeline,
+        runs,
+        smartRunPlan,
+        loadingSmartRunPlan,
+        startingRun,
+        mockRunActive,
+        selectedPipelineRealRunActive,
+        aiWorkflowKey,
+        debugPreviewDispatchRouteId
+      } = state;
+      const { setRunCompletionModal, setMockRunActive, setDebugPreviewDispatchRouteId } = actions;
 
       return (
         <DebugPanel
+          draft={draft}
           selectedPipeline={selectedPipeline}
+          aiWorkflowKey={aiWorkflowKey}
           runs={runs}
           smartRunPlan={smartRunPlan}
           loadingSmartRunPlan={loadingSmartRunPlan}
           startingRun={startingRun}
           mockRunActive={mockRunActive}
+          realRunActive={selectedPipelineRealRunActive}
           onMockRunChange={setMockRunActive}
+          dispatchPreviewRouteId={debugPreviewDispatchRouteId}
+          onDispatchPreviewRouteIdChange={setDebugPreviewDispatchRouteId}
           onPreviewRunCompletionModal={() => {
             // TEMP: remove this mock trigger after completion modal UI review.
             const previewRun =

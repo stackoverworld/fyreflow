@@ -11,7 +11,8 @@ export {
   markRunCancelled,
   markStepRunning,
   markStepCompleted,
-  markStepFailed
+  markStepFailed,
+  markStepPaused
 } from "./scheduling/state.js";
 export type { RuntimeConfig } from "./types.js";
 export type { PipelineLink, PipelineRun, StepRun } from "../types.js";

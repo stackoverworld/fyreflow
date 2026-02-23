@@ -76,6 +76,9 @@ export function createDefaultStep(role: AgentRole, name: string, providerId: Pro
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
   };
 }

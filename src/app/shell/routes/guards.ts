@@ -12,6 +12,7 @@ export const panelRouteGuards: Record<Exclude<WorkspacePanel, null>, PanelRouteG
   schedules: () => true,
   contracts: () => true,
   mcp: () => true,
+  files: () => true,
   run: () => true,
   ai: () => true,
   debug: () => true

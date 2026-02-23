@@ -18,7 +18,7 @@ export function normalizeRuntime(pipeline: Pipeline): RuntimeConfig {
         : DEFAULT_MAX_STEP_EXECUTIONS,
     stageTimeoutMs:
       typeof pipeline.runtime?.stageTimeoutMs === "number"
-        ? Math.max(10_000, Math.min(1_200_000, Math.floor(pipeline.runtime.stageTimeoutMs)))
+        ? Math.max(10_000, Math.min(18_000_000, Math.floor(pipeline.runtime.stageTimeoutMs)))
         : DEFAULT_STAGE_TIMEOUT_MS
   };
 }
