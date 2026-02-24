@@ -2,17 +2,31 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction,
 import { MODEL_CATALOG, getDefaultModelForProvider } from "@/lib/modelCatalog";
 import { generateFlowDraft } from "@/lib/api";
 import {
+  clearAiChatPendingRequest,
   loadAiChatDraft,
   loadAiChatHistory,
   loadAiChatHistoryPage,
   loadAiChatPending,
+  loadAiChatPendingRequest,
   saveAiChatDraft,
   saveAiChatHistory,
   saveAiChatPending,
+  saveAiChatPendingRequest,
   subscribeAiChatLifecycle
 } from "@/lib/aiChatStorage";
 import { appendAiChatDebugEvent } from "@/lib/aiChatDebugStorage";
 import { autoLayoutPipelineDraftSmart } from "@/lib/flowLayout";
+import { clonePipelinePayload } from "@/lib/pipelineDraft";
+import { hasAssistantResultForRequest, hasErrorResultForRequest } from "@/components/dashboard/ai-builder/requestDedup";
+import { executeFlowBuilderRequestOnce } from "@/components/dashboard/ai-builder/requestExecutionRegistry";
+import { clipFlowBuilderHistoryContent, toFlowBuilderHistoryMessage } from "@/components/dashboard/ai-builder/history";
+import {
+  FLOW_BUILDER_PROMPT_MAX_CHARS,
+  FLOW_BUILDER_PROMPT_MIN_CHARS,
+  getFlowBuilderPromptLength,
+  isFlowBuilderPromptTooLong,
+  normalizeFlowBuilderPrompt
+} from "@/components/dashboard/ai-builder/promptValidation";
 import {
   ASK_MODE_MUTATION_BLOCK_MESSAGE,
   ASK_MODE_MUTATION_BLOCK_NOTICE,
@@ -21,7 +35,15 @@ import {
   resolveAiBuilderMode,
   type AiBuilderMode
 } from "@/components/dashboard/ai-builder/mode";
-import type { AiChatMessage, FlowBuilderAction, McpServerConfig, PipelinePayload, ProviderId, ReasoningEffort } from "@/lib/types";
+import type {
+  AiChatMessage,
+  FlowBuilderAction,
+  FlowBuilderRequest,
+  McpServerConfig,
+  PipelinePayload,
+  ProviderId,
+  ReasoningEffort
+} from "@/lib/types";
 
 const AI_SETTINGS_KEY = "fyreflow:ai-builder-settings";
 const MAX_FLOW_BUILDER_MCP_SERVERS = 40;
@@ -82,7 +104,8 @@ function createRequestId(): string {
   return `ai-chat-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-export const MIN_PROMPT_LENGTH = 2;
+export const MIN_PROMPT_LENGTH = FLOW_BUILDER_PROMPT_MIN_CHARS;
+export const MAX_PROMPT_LENGTH = FLOW_BUILDER_PROMPT_MAX_CHARS;
 
 interface UseAiBuilderSessionOptions {
   workflowKey: string;
@@ -123,6 +146,14 @@ interface UseAiBuilderSessionState {
   loadOlderMessages: () => boolean;
 }
 
+interface ExecuteFlowBuilderRequestOptions {
+  requestId: string;
+  payload: FlowBuilderRequest;
+  startedAt: number;
+  mode: AiBuilderMode;
+  resumed: boolean;
+}
+
 export function useAiBuilderSession({
   workflowKey,
   currentDraft,
@@ -148,6 +179,7 @@ export function useAiBuilderSession({
   const [generating, setGenerating] = useState(false);
   const visibleMessageCountRef = useRef(0);
   const loadingOlderMessagesRef = useRef(false);
+  const activeRequestIdRef = useRef<string | null>(null);
   const effectiveMode = resolveAiBuilderMode(mode, mutationLocked);
 
   const modelCatalog = useMemo(() => MODEL_CATALOG[providerId] ?? [], [providerId]);
@@ -253,6 +285,7 @@ export function useAiBuilderSession({
     setLoadingOlderMessages(false);
     setHydratedWorkflowKey(workflowKey);
     setPrompt(loadAiChatDraft(workflowKey));
+    activeRequestIdRef.current = null;
     setGenerating(loadAiChatPending(workflowKey));
   }, [workflowKey]);
 
@@ -320,9 +353,268 @@ export function useAiBuilderSession({
     }
   }, [hasOlderMessages, hydratedWorkflowKey, workflowKey]);
 
+  const runFlowBuilderRequest = useCallback(
+    async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
+      const execution = executeFlowBuilderRequestOnce(requestId, async () => {
+        try {
+          const result = await generateFlowDraft(payload);
+          const mutationAction = result.action === "update_current_flow" || result.action === "replace_flow";
+          const mutationSuppressedByAskMode = requestMode === "ask" && mutationAction;
+          const responseAction: FlowBuilderAction = mutationSuppressedByAskMode ? "answer" : result.action;
+          const shouldApplyDraft = mutationAction && !mutationSuppressedByAskMode;
+          const nextDraft =
+            shouldApplyDraft && result.draft
+              ? result.action === "replace_flow"
+                ? await autoLayoutPipelineDraftSmart(result.draft)
+                : result.draft
+              : undefined;
+          const generatedDraftSnapshot = nextDraft ? clonePipelinePayload(nextDraft) : undefined;
+
+          const baseAssistantContent = result.message.trim().length
+            ? result.message.trim()
+            : responseAction === "answer"
+              ? "Answered without changing the flow."
+              : result.source === "model"
+                ? `Prepared ${nextDraft?.steps.length ?? 0} step(s) and ${nextDraft?.links.length ?? 0} link(s).`
+                : `Generated deterministic template: ${result.notes.join(" ")}`;
+          const assistantContent = mutationSuppressedByAskMode
+            ? `${baseAssistantContent}\n\nAsk mode kept this response read-only; no flow changes were applied.`
+            : baseAssistantContent;
+
+          const aiMsg: AiChatMessage = {
+            id: crypto.randomUUID(),
+            requestId,
+            role: "assistant",
+            content: assistantContent,
+            generatedDraft: generatedDraftSnapshot,
+            action: responseAction,
+            questions: result.questions,
+            source: result.source,
+            notes: mutationSuppressedByAskMode
+              ? [...result.notes, "Ask mode kept the response read-only; flow mutation output was ignored."]
+              : result.notes,
+            timestamp: Date.now(),
+          };
+          const latestMessages = loadAiChatHistory(workflowKey);
+          if (hasAssistantResultForRequest(latestMessages, requestId)) {
+            appendAiChatDebugEvent(workflowKey, {
+              level: "info",
+              event: "request_duplicate_ignored",
+              message: "Ignored duplicate AI Builder completion for request",
+              meta: {
+                requestId,
+                mode: requestMode,
+                resumed,
+                reason: "assistant_result_already_recorded"
+              }
+            });
+            return;
+          }
+
+          const durationMs = Date.now() - startedAt;
+          appendAiChatDebugEvent(workflowKey, {
+            level: "info",
+            event: "request_success",
+            message: "AI Builder chat request completed",
+            meta: {
+              requestId,
+              durationMs,
+              mode: requestMode,
+              resumed,
+              action: result.action,
+              source: result.source,
+              hasDraft: Boolean(result.draft),
+              questions: result.questions?.length ?? 0
+            }
+          });
+
+          const messagesWithAssistant = [...latestMessages, aiMsg];
+          appendVisibleMessages([aiMsg]);
+          saveAiChatHistory(workflowKey, messagesWithAssistant);
+
+          if (generatedDraftSnapshot) {
+            onApplyDraft(clonePipelinePayload(generatedDraftSnapshot));
+            onNotice(
+              result.action === "replace_flow"
+                ? "AI rebuilt the flow from chat."
+                : "AI updated the current flow from chat."
+            );
+          } else if (mutationSuppressedByAskMode) {
+            onNotice("Ask mode replied without changing the flow.");
+          } else if ((result.questions?.length ?? 0) > 0) {
+            onNotice("AI asked clarification questions.");
+          } else {
+            onNotice("AI replied in chat.");
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : "Failed to process AI chat message";
+          const durationMs = Date.now() - startedAt;
+          const latestMessages = loadAiChatHistory(workflowKey);
+          if (hasAssistantResultForRequest(latestMessages, requestId) || hasErrorResultForRequest(latestMessages, requestId)) {
+            appendAiChatDebugEvent(workflowKey, {
+              level: "info",
+              event: "request_duplicate_ignored",
+              message: "Ignored duplicate AI Builder failure for request",
+              meta: {
+                requestId,
+                mode: requestMode,
+                resumed,
+                reason: "terminal_result_already_recorded"
+              }
+            });
+            return;
+          }
+
+          appendAiChatDebugEvent(workflowKey, {
+            level: "error",
+            event: "request_error",
+            message: "AI Builder chat request failed",
+            meta: {
+              requestId,
+              durationMs,
+              resumed,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+              providerId: payload.providerId,
+              model: payload.model
+            },
+            details: errorMessage
+          });
+          const errorMessageEntry: AiChatMessage = {
+            id: crypto.randomUUID(),
+            requestId,
+            role: "error",
+            content: errorMessage,
+            action: "answer",
+            timestamp: Date.now(),
+          };
+          const messagesWithError = [...latestMessages, errorMessageEntry];
+          appendVisibleMessages([errorMessageEntry]);
+          saveAiChatHistory(workflowKey, messagesWithError);
+          onNotice(errorMessage);
+        } finally {
+          if (activeRequestIdRef.current === requestId) {
+            activeRequestIdRef.current = null;
+          }
+          setGenerating(false);
+          saveAiChatPending(workflowKey, false);
+          clearAiChatPendingRequest(workflowKey);
+          appendAiChatDebugEvent(workflowKey, {
+            level: "info",
+            event: "request_end",
+            message: "AI Builder chat request lifecycle finished",
+            meta: {
+              requestId,
+              mode: requestMode,
+              resumed,
+              pending: false,
+              elapsedMs: Date.now() - startedAt
+            }
+          });
+        }
+      });
+
+      if (execution.joinedExisting) {
+        appendAiChatDebugEvent(workflowKey, {
+          level: "info",
+          event: "request_duplicate_ignored",
+          message: "Joined in-flight AI Builder request",
+          meta: {
+            requestId,
+            mode: requestMode,
+            resumed,
+            reason: "request_execution_already_in_flight"
+          }
+        });
+      }
+
+      await execution.promise;
+    },
+    [appendVisibleMessages, onApplyDraft, onNotice, workflowKey]
+  );
+
+  useEffect(() => {
+    if (hydratedWorkflowKey !== workflowKey || activeRequestIdRef.current) {
+      return;
+    }
+
+    if (!loadAiChatPending(workflowKey)) {
+      return;
+    }
+
+    const pendingRequest = loadAiChatPendingRequest(workflowKey);
+    if (!pendingRequest) {
+      saveAiChatPending(workflowKey, false);
+      clearAiChatPendingRequest(workflowKey);
+      setGenerating(false);
+      appendAiChatDebugEvent(workflowKey, {
+        level: "info",
+        event: "request_resume_missing",
+        message: "Pending AI Builder request was missing its payload",
+        meta: {
+          pending: false
+        }
+      });
+      return;
+    }
+
+    const requestMode = pendingRequest.mode ?? effectiveMode;
+    activeRequestIdRef.current = pendingRequest.requestId;
+    setGenerating(true);
+    appendAiChatDebugEvent(workflowKey, {
+      level: "info",
+      event: "request_resume",
+      message: "Resuming pending AI Builder chat request",
+      meta: {
+        requestId: pendingRequest.requestId,
+        mode: requestMode,
+        elapsedMs: Math.max(0, Date.now() - pendingRequest.startedAt)
+      }
+    });
+
+    void runFlowBuilderRequest({
+      requestId: pendingRequest.requestId,
+      payload: pendingRequest.payload,
+      startedAt: pendingRequest.startedAt,
+      mode: requestMode,
+      resumed: true
+    });
+  }, [effectiveMode, hydratedWorkflowKey, runFlowBuilderRequest, workflowKey]);
+
   const sendPrompt = async (nextPrompt: string, options?: { clearComposer?: boolean }) => {
-    const trimmed = nextPrompt.trim();
-    if (trimmed.length < MIN_PROMPT_LENGTH || generating) return;
+    const trimmed = normalizeFlowBuilderPrompt(nextPrompt);
+    if (trimmed.length < MIN_PROMPT_LENGTH || generating || activeRequestIdRef.current) return;
+
+    if (isFlowBuilderPromptTooLong(trimmed)) {
+      const requestId = createRequestId();
+      const promptLength = getFlowBuilderPromptLength(trimmed);
+      const message = `Prompt is too long (${promptLength}/${MAX_PROMPT_LENGTH}). Shorten it and try again.`;
+      appendAiChatDebugEvent(workflowKey, {
+        level: "info",
+        event: "request_blocked",
+        message: "AI Builder prompt exceeded max length",
+        meta: {
+          requestId,
+          mode: effectiveMode,
+          promptChars: promptLength,
+          maxPromptChars: MAX_PROMPT_LENGTH
+        }
+      });
+
+      const latestMessages = loadAiChatHistory(workflowKey);
+      const errorMessageEntry: AiChatMessage = {
+        id: crypto.randomUUID(),
+        requestId,
+        role: "error",
+        content: message,
+        action: "answer",
+        timestamp: Date.now(),
+      };
+      appendVisibleMessages([errorMessageEntry]);
+      saveAiChatHistory(workflowKey, [...latestMessages, errorMessageEntry]);
+      onNotice(message);
+      return;
+    }
+
     const effectiveFastMode = providerId === "claude" && claudeFastModeAvailable && fastMode;
     const requestId = createRequestId();
     const startedAt = Date.now();
@@ -330,15 +622,15 @@ export function useAiBuilderSession({
     const persistedMessages = loadAiChatHistory(workflowKey);
     const userMsg: AiChatMessage = {
       id: crypto.randomUUID(),
+      requestId,
       role: "user",
       content: trimmed,
       timestamp: Date.now(),
     };
-    const serializedHistory = persistedMessages.flatMap((entry) =>
-      entry.role === "user" || entry.role === "assistant"
-        ? [{ role: entry.role, content: entry.content }]
-        : []
-    );
+    const serializedHistory = persistedMessages.flatMap((entry) => {
+      const message = toFlowBuilderHistoryMessage(entry);
+      return message ? [message] : [];
+    });
     const historyWindow: Array<{ role: "user" | "assistant"; content: string }> = [];
     let historyChars = trimmed.length;
     for (let index = serializedHistory.length - 1; index >= 0; index -= 1) {
@@ -354,7 +646,7 @@ export function useAiBuilderSession({
       historyChars = nextChars;
     }
     historyWindow.reverse();
-    const history = [...historyWindow, { role: "user" as const, content: trimmed }];
+    const history = [...historyWindow, { role: "user" as const, content: clipFlowBuilderHistoryContent(trimmed) }];
     const messagesWithUser = [...persistedMessages, userMsg];
 
     if (!canSendPromptToFlowMutationEndpoint(effectiveMode, trimmed)) {
@@ -411,143 +703,43 @@ export function useAiBuilderSession({
       setPrompt("");
       saveAiChatDraft(workflowKey, "");
     }
+
+    const payload: FlowBuilderRequest = {
+      requestId,
+      prompt: trimmed,
+      providerId,
+      model,
+      reasoningEffort,
+      fastMode: effectiveFastMode,
+      use1MContext,
+      history,
+      currentDraft,
+      availableMcpServers: mcpServers.slice(0, MAX_FLOW_BUILDER_MCP_SERVERS).map((server) => ({
+        id: server.id,
+        name: server.name,
+        enabled: server.enabled,
+        transport: server.transport,
+        summary: `${server.transport}${server.enabled ? "" : " (disabled)"}`
+      }))
+    };
+
+    activeRequestIdRef.current = requestId;
+    saveAiChatPendingRequest(workflowKey, {
+      requestId,
+      payload,
+      startedAt,
+      mode: effectiveMode
+    });
     setGenerating(true);
     saveAiChatPending(workflowKey, true);
 
-    try {
-      const result = await generateFlowDraft({
-        prompt: trimmed,
-        providerId,
-        model,
-        reasoningEffort,
-        fastMode: effectiveFastMode,
-        use1MContext,
-        history,
-        currentDraft,
-        availableMcpServers: mcpServers.slice(0, MAX_FLOW_BUILDER_MCP_SERVERS).map((server) => ({
-          id: server.id,
-          name: server.name,
-          enabled: server.enabled,
-          transport: server.transport,
-          summary: `${server.transport}${server.enabled ? "" : " (disabled)"}`
-        }))
-      });
-      const durationMs = Date.now() - startedAt;
-      appendAiChatDebugEvent(workflowKey, {
-        level: "info",
-        event: "request_success",
-        message: "AI Builder chat request completed",
-        meta: {
-          requestId,
-          durationMs,
-          mode: effectiveMode,
-          action: result.action,
-          source: result.source,
-          hasDraft: Boolean(result.draft),
-          questions: result.questions?.length ?? 0
-        }
-      });
-
-      const mutationAction = result.action === "update_current_flow" || result.action === "replace_flow";
-      const mutationSuppressedByAskMode = effectiveMode === "ask" && mutationAction;
-      const responseAction: FlowBuilderAction = mutationSuppressedByAskMode ? "answer" : result.action;
-      const shouldApplyDraft = mutationAction && !mutationSuppressedByAskMode;
-      const nextDraft =
-        shouldApplyDraft && result.draft
-          ? result.action === "replace_flow"
-            ? await autoLayoutPipelineDraftSmart(result.draft)
-            : result.draft
-          : undefined;
-
-      const baseAssistantContent = result.message.trim().length
-        ? result.message.trim()
-        : responseAction === "answer"
-          ? "Answered without changing the flow."
-          : result.source === "model"
-            ? `Prepared ${nextDraft?.steps.length ?? 0} step(s) and ${nextDraft?.links.length ?? 0} link(s).`
-            : `Generated deterministic template: ${result.notes.join(" ")}`;
-      const assistantContent = mutationSuppressedByAskMode
-        ? `${baseAssistantContent}\n\nAsk mode kept this response read-only; no flow changes were applied.`
-        : baseAssistantContent;
-
-      const aiMsg: AiChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: assistantContent,
-        generatedDraft: nextDraft,
-        action: responseAction,
-        questions: result.questions,
-        source: result.source,
-        notes: mutationSuppressedByAskMode
-          ? [...result.notes, "Ask mode kept the response read-only; flow mutation output was ignored."]
-          : result.notes,
-        timestamp: Date.now(),
-      };
-      const latestMessages = loadAiChatHistory(workflowKey);
-      const messagesWithAssistant = [...latestMessages, aiMsg];
-      appendVisibleMessages([aiMsg]);
-      saveAiChatHistory(workflowKey, messagesWithAssistant);
-
-      if (nextDraft) {
-        onApplyDraft(nextDraft);
-        onNotice(
-          result.action === "replace_flow"
-            ? "AI rebuilt the flow from chat."
-            : "AI updated the current flow from chat."
-        );
-      } else if (mutationSuppressedByAskMode) {
-        onNotice("Ask mode replied without changing the flow.");
-      } else if ((result.questions?.length ?? 0) > 0) {
-        onNotice("AI asked clarification questions.");
-      } else {
-        onNotice("AI replied in chat.");
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to process AI chat message";
-      const durationMs = Date.now() - startedAt;
-      appendAiChatDebugEvent(workflowKey, {
-        level: "error",
-        event: "request_error",
-        message: "AI Builder chat request failed",
-        meta: {
-          requestId,
-          durationMs,
-          errorName: error instanceof Error ? error.name : "UnknownError",
-          providerId,
-          model
-        },
-        details: errorMessage
-      });
-      const latestMessages = loadAiChatHistory(workflowKey);
-      const errorMessageEntry: AiChatMessage = {
-        id: crypto.randomUUID(),
-        role: "error",
-        content: errorMessage,
-        action: "answer",
-        timestamp: Date.now(),
-      };
-      const messagesWithError = [
-        ...latestMessages,
-        errorMessageEntry,
-      ];
-      appendVisibleMessages([errorMessageEntry]);
-      saveAiChatHistory(workflowKey, messagesWithError);
-      onNotice(errorMessage);
-    } finally {
-      setGenerating(false);
-      saveAiChatPending(workflowKey, false);
-      appendAiChatDebugEvent(workflowKey, {
-        level: "info",
-        event: "request_end",
-        message: "AI Builder chat request lifecycle finished",
-        meta: {
-          requestId,
-          mode: effectiveMode,
-          pending: false,
-          elapsedMs: Date.now() - startedAt
-        }
-      });
-    }
+    await runFlowBuilderRequest({
+      requestId,
+      payload,
+      startedAt,
+      mode: effectiveMode,
+      resumed: false
+    });
   };
 
   const handleSend = async () => {

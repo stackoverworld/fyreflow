@@ -3,12 +3,14 @@
 ## Intent
 Set up fyreflow as a Bun-managed monorepo where web and API evolve through shared typed contracts, Codex can work in small bounded modules, and delivery is reproducible in local and CI runs.
 
-- Last reviewed: 2026-02-20
+- Last reviewed: 2026-02-24
 
 ## Structural Principles
 - Use a workspace layout with apps/web, apps/api, packages/shared, and packages/config under one lockfile and root scripts.
 - Adopt contract-first development: request/response schemas live in packages/shared and are imported by both API handlers and web client code.
 - Structure API code as routes -> services -> repositories so behavior is testable and storage can be swapped without handler changes.
+- Keep API bootstrap isolated in a runtime kernel (`server/runtime/kernel.ts`) so local and remote deployment profiles can share one core composition.
+- Keep startup orchestration profile-driven with explicit feature flags (`scheduler`, `recovery`) to avoid environment-specific forks in route/service code.
 - Keep workflow runtime behavior profile-driven: step-level policy fields should control cache bypass, skip validation, and artifact contracts instead of hardcoded scenario branches in runner core.
 - Structure web code by domain features (agents, runs, settings) with route-level modules and a thin typed API client.
 - Apply progressive disclosure docs: short task-oriented runbooks first, then deeper ADR rationale in docs/decisions.
@@ -37,6 +39,10 @@ Set up fyreflow as a Bun-managed monorepo where web and API evolve through share
 | `tests/e2e/agents-dashboard.spec.ts` | End-to-end smoke for core dashboard and API interaction path. |
 | `scripts/verify.sh` | Deterministic local/CI gate runner in fixed order. |
 | `docs/decisions/0001-contract-first-monorepo.md` | ADR capturing boundaries, dependencies, and tradeoffs. |
+| `server/runtime/config.ts` | Parse runtime mode, CORS, auth token, and startup feature flags from env in one place. |
+| `server/runtime/bootstrap.ts` | Deterministic startup sequence for recovery/scheduler, with disposable scheduler loop. |
+| `server/runtime/kernel.ts` | Compose store, runtimes, HTTP app, and bootstrap lifecycle behind one start/stop API. |
+| `docs/decisions/0002-runtime-kernel-and-managed-release-updates.md` | ADR capturing runtime profile boundaries and release-driven backend update policy. |
 
 ## Dependency Direction
 - Domain and business logic should not depend on delivery frameworks.

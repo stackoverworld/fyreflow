@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PipelineLink, PipelineQualityGate, PipelineStep } from "../../server/types/contracts.js";
-import { retargetDeliveryCompletionGates } from "../../server/runner/qualityGateTargeting.js";
+import { validateDeliveryCompletionGateTargets } from "../../server/runner/qualityGateTargeting.js";
 
 function createStep(id: string, name: string, role: PipelineStep["role"] = "executor"): PipelineStep {
   return {
@@ -44,8 +44,8 @@ function createGate(partial: Partial<PipelineQualityGate>): PipelineQualityGate 
   };
 }
 
-describe("retargetDeliveryCompletionGates", () => {
-  it("retargets COMPLETE workflow gate from any_step to terminal delivery step", () => {
+describe("validateDeliveryCompletionGateTargets", () => {
+  it("flags any_step target for COMPLETE workflow gates", () => {
     const steps = [
       createStep("step-orchestrator", "Pipeline Orchestrator"),
       createStep("step-review", "HTML Reviewer"),
@@ -70,13 +70,14 @@ describe("retargetDeliveryCompletionGates", () => {
       })
     ];
 
-    const retargeted = retargetDeliveryCompletionGates(gates, steps, links);
-
-    expect(retargeted.find((gate) => gate.id === "delivery-complete")?.targetStepId).toBe("step-delivery");
-    expect(retargeted.find((gate) => gate.id === "review-status")?.targetStepId).toBe("step-review");
+    const issues = validateDeliveryCompletionGateTargets(gates, steps, links);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.gateId).toBe("delivery-complete");
+    expect(issues[0]?.targetStepId).toBe("any_step");
+    expect(issues[0]?.expectedStepId).toBe("step-delivery");
   });
 
-  it("does not retarget non-COMPLETE any_step workflow gates", () => {
+  it("ignores non-COMPLETE workflow regex gates", () => {
     const steps = [createStep("step-a", "A"), createStep("step-b", "B")];
     const links: PipelineLink[] = [{ id: "l1", sourceStepId: "step-a", targetStepId: "step-b", condition: "always" }];
     const gates = [
@@ -88,11 +89,11 @@ describe("retargetDeliveryCompletionGates", () => {
       })
     ];
 
-    const retargeted = retargetDeliveryCompletionGates(gates, steps, links);
-    expect(retargeted[0]?.targetStepId).toBe("any_step");
+    const issues = validateDeliveryCompletionGateTargets(gates, steps, links);
+    expect(issues).toHaveLength(0);
   });
 
-  it("retargets misconfigured COMPLETE gate from non-delivery step to delivery step", () => {
+  it("flags COMPLETE gate targeting a non-terminal step", () => {
     const steps = [
       createStep("step-orchestrator", "Pipeline Orchestrator"),
       createStep("step-review", "PDF Reviewer"),
@@ -111,46 +112,52 @@ describe("retargetDeliveryCompletionGates", () => {
       })
     ];
 
-    const retargeted = retargetDeliveryCompletionGates(gates, steps, links);
-    expect(retargeted[0]?.targetStepId).toBe("step-delivery");
+    const issues = validateDeliveryCompletionGateTargets(gates, steps, links);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.gateId).toBe("delivery-complete-misconfigured");
+    expect(issues[0]?.targetStepId).toBe("step-review");
+    expect(issues[0]?.expectedStepId).toBe("step-delivery");
   });
 
-  it("targets terminal step when no terminal executor exists", () => {
+  it("accepts explicit terminal delivery target", () => {
     const steps = [
-      createStep("step-plan", "Planner", "planner"),
-      createStep("step-build", "Builder", "executor"),
-      createStep("step-review", "Reviewer", "review")
+      createStep("step-orchestrator", "Pipeline Orchestrator"),
+      createStep("step-review", "Reviewer"),
+      createStep("step-delivery", "Delivery")
     ];
     const links: PipelineLink[] = [
-      { id: "l1", sourceStepId: "step-plan", targetStepId: "step-build", condition: "always" },
-      { id: "l2", sourceStepId: "step-build", targetStepId: "step-review", condition: "always" }
+      { id: "l1", sourceStepId: "step-orchestrator", targetStepId: "step-review", condition: "always" },
+      { id: "l2", sourceStepId: "step-review", targetStepId: "step-delivery", condition: "always" }
     ];
     const gates = [
       createGate({
         id: "delivery-complete",
         name: "Delivery Completion Gate",
-        targetStepId: "any_step",
+        targetStepId: "step-delivery",
         pattern: "WORKFLOW_STATUS:\\s*COMPLETE"
       })
     ];
 
-    const retargeted = retargetDeliveryCompletionGates(gates, steps, links);
-    expect(retargeted[0]?.targetStepId).toBe("step-review");
+    const issues = validateDeliveryCompletionGateTargets(gates, steps, links);
+    expect(issues).toHaveLength(0);
   });
 
-  it("does not retarget regex gates that are not workflow COMPLETE checks", () => {
+  it("flags COMPLETE gate targeting a missing step id", () => {
     const steps = [createStep("step-a", "A"), createStep("step-b", "B")];
     const links: PipelineLink[] = [{ id: "l1", sourceStepId: "step-a", targetStepId: "step-b", condition: "always" }];
     const gates = [
       createGate({
-        id: "delivery-label-only",
+        id: "delivery-complete-missing",
         name: "Delivery Completion Gate",
-        targetStepId: "any_step",
-        pattern: "HTML_REVIEW_STATUS:\\s*(PASS|FAIL)"
+        targetStepId: "step-missing",
+        pattern: "WORKFLOW_STATUS:\\s*COMPLETE"
       })
     ];
 
-    const retargeted = retargetDeliveryCompletionGates(gates, steps, links);
-    expect(retargeted[0]?.targetStepId).toBe("any_step");
+    const issues = validateDeliveryCompletionGateTargets(gates, steps, links);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.gateId).toBe("delivery-complete-missing");
+    expect(issues[0]?.targetStepId).toBe("step-missing");
+    expect(issues[0]?.reason).toContain("not present");
   });
 });

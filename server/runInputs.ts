@@ -21,6 +21,7 @@ const TOKEN_CANONICAL_EQUIVALENTS: Record<string, string> = {
 const LOCATION_SUFFIXES = new Set(["path", "dir", "file"]);
 const SECRET_SUFFIXES = ["token", "key", "secret"] as const;
 const SECRET_QUALIFIERS = new Set(["api", "personal", "access", "private", "auth", "pat"]);
+const SENSITIVE_KEY_SUBSTRINGS = new Set(["token", "secret", "password", "credential", "apikey", "api_key"]);
 
 function normalizeForMatch(raw: string): string {
   return raw
@@ -74,6 +75,25 @@ function buildRunInputKeyVariants(raw: string): Set<string> {
 
 export function normalizeRunInputKey(raw: string): string {
   return normalizeForMatch(raw);
+}
+
+export function isSensitiveRunInputKey(raw: string): boolean {
+  const normalized = normalizeRunInputKey(raw);
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  if (normalized.endsWith("_key")) {
+    return true;
+  }
+
+  for (const substring of SENSITIVE_KEY_SUBSTRINGS) {
+    if (normalized.includes(substring)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function areRunInputKeysEquivalent(leftRaw: string, rightRaw: string): boolean {
@@ -265,5 +285,7 @@ export function formatRunInputsSummary(runInputs: RunInputs): string {
     return "None";
   }
 
-  return entries.map(([key, value]) => `- ${key}: ${value}`).join("\n");
+  return entries
+    .map(([key, value]) => `- ${key}: ${isSensitiveRunInputKey(key) ? "[REDACTED]" : value}`)
+    .join("\n");
 }

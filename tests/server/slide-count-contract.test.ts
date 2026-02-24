@@ -124,4 +124,25 @@ describe("slide count contract", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("passes when frame-map is a numeric-keyed object map", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "fyreflow-slide-count-"));
+    try {
+      await writeFile(
+        path.join(tempDir, "frame-map.json"),
+        JSON.stringify({
+          0: { frameId: "6883:4842", name: "Slide 1" },
+          1: { frameId: "6883:4850", name: "Slide 2" }
+        }),
+        "utf8"
+      );
+      await writeFile(path.join(tempDir, "investor-deck.html"), createDivHtml(2), "utf8");
+
+      const result = await evaluateStepContracts(createStep(), "WORKFLOW_STATUS: PASS", createStoragePaths(tempDir), {});
+      const gate = result.gateResults.find((entry) => entry.gateName === "Slide count matches frame map");
+      expect(gate?.status).toBe("pass");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -47,6 +47,11 @@ export function NodesLayer({
         const providerMeta = PROVIDER_META[node.providerId];
         const ProviderIcon = providerMeta?.Icon;
         const isOrchestrator = node.role === "orchestrator";
+        const nodeSelectionTone = selectedNodeSet.has(node.id)
+          ? selectedNodeId === node.id
+            ? "border-ember-500 ring-ember-500/40"
+            : "border-ember-400/80 ring-ember-500/30"
+          : null;
 
         return (<div
           key={node.id}
@@ -55,11 +60,7 @@ export function NodesLayer({
               glowReadySet.has(node.id) && "node-border-glow",
               animatedNodeSet.has(node.id) && "glow-active node-running-tint",
               readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing",
-              selectedNodeSet.has(node.id)
-                ? selectedNodeId === node.id
-                  ? "border-ember-500 ring-ember-500/40"
-                  : "border-ember-400/80 ring-ember-500/30"
-                : "border-[var(--card-border)] hover:border-[var(--card-border-hover)]"
+              nodeSelectionTone ?? "border-[var(--card-border)] hover:border-[var(--card-border-hover)]"
             )}
           style={{
             left: node.position.x,
@@ -288,7 +289,11 @@ export function NodesLayer({
 
               {/* Frosted glass sub-card */}
               <div
-                className="pointer-events-auto absolute left-0 rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] px-3 py-2.5 shadow-sm pipeline-node-surface"
+                className={cn(
+                  "pointer-events-auto absolute left-0 rounded-xl border bg-[var(--card-surface)] px-3 py-2.5 shadow-sm ring-2 ring-transparent transition-colors pipeline-node-surface",
+                  animatedNodeSet.has(node.id) && "node-running-tint",
+                  nodeSelectionTone ?? "border-[var(--card-border)]"
+                )}
                 style={{
                   top: NODE_HEIGHT + DELEGATION_SPINE_HEIGHT,
                   width: NODE_WIDTH,

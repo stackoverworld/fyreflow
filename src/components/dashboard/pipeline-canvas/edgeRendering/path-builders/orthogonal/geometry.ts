@@ -1,5 +1,5 @@
 import type { AnchorSide, CanonicalRouteCandidate, FlowNode, OrchestratorLaneMeta, Point, Rect, ReciprocalLaneMeta } from "../../../types";
-import { NODE_HEIGHT, nodeRect } from "../../../useNodeLayout";
+import { NODE_HEIGHT, nodeSourceAnchorRect, nodeTargetAnchorRect } from "../../../useNodeLayout";
 import {
   ANCHOR_SIDES,
   anchorDirection,
@@ -73,8 +73,12 @@ export function buildOrchestratorBusRoutePoints(
 
   const otherNode = orchestratorNode.id === sourceNode.id ? targetNode : sourceNode;
   const outgoing = orchestratorNode.id === sourceNode.id;
-  const orchestratorRect = nodeRect(orchestratorNode);
-  const otherRect = nodeRect(otherNode);
+  const orchestratorRect = outgoing
+    ? nodeSourceAnchorRect(orchestratorNode)
+    : nodeTargetAnchorRect(orchestratorNode);
+  const otherRect = outgoing
+    ? nodeTargetAnchorRect(otherNode)
+    : nodeSourceAnchorRect(otherNode);
   const side = orchestratorLane.side;
   const spread = (orchestratorLane.index - (orchestratorLane.count - 1) / 2) * ORCHESTRATOR_BUS_SIDE_SPREAD;
   const orchestratorAnchor = sideDistributedPoint(orchestratorRect, side, orchestratorLane.index, orchestratorLane.count);
@@ -126,8 +130,8 @@ export function buildReciprocalPairRoutePoints(
   targetNode: FlowNode,
   reciprocalLane: ReciprocalLaneMeta
 ): Point[] {
-  const sourceRect = nodeRect(sourceNode);
-  const targetRect = nodeRect(targetNode);
+  const sourceRect = nodeSourceAnchorRect(sourceNode);
+  const targetRect = nodeTargetAnchorRect(targetNode);
   const sourceCenter = rectCenter(sourceRect);
   const targetCenter = rectCenter(targetRect);
   const dx = targetCenter.x - sourceCenter.x;
@@ -190,8 +194,8 @@ export function buildManualWaypointRouteCandidatePoints(
   targetNode: FlowNode,
   manualWaypoint: Point
 ): ManualWaypointCandidateSetPoints {
-  const sourceRect = nodeRect(sourceNode);
-  const targetRect = nodeRect(targetNode);
+  const sourceRect = nodeSourceAnchorRect(sourceNode);
+  const targetRect = nodeTargetAnchorRect(targetNode);
   const sourceSide = sideTowardPoint(sourceRect, manualWaypoint);
   const targetSide = sideTowardPoint(targetRect, manualWaypoint);
   const start = anchorPoint(sourceRect, sourceSide, manualWaypoint);

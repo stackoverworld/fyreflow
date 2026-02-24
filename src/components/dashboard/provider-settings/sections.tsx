@@ -18,6 +18,7 @@ import {
   shouldShowOAuthConnectedNote,
   shouldShowOAuthTokenInput
 } from "./validation";
+import { useIconSpin } from "@/lib/useIconSpin";
 
 interface ProviderSettingsSectionProps {
   providerId: ProviderId;
@@ -54,6 +55,7 @@ export function ProviderSettingsSection({
   onRefresh,
   onSave
 }: ProviderSettingsSectionProps) {
+  const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const authMode: AuthMode = provider.authMode;
   const isLoggedIn = status?.loggedIn === true;
   const canUseCli = status?.canUseCli === true;
@@ -184,10 +186,11 @@ export function ProviderSettingsSection({
                 variant="ghost"
                 disabled={busy}
                 onClick={async () => {
+                  triggerRefreshSpin();
                   await onRefresh(providerId);
                 }}
               >
-                <RefreshCw className="mr-1 h-4 w-4" /> Refresh
+                <RefreshCw className="mr-1 h-4 w-4" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} /> Refresh
               </Button>
             </div>
 

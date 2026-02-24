@@ -11,6 +11,8 @@ describe("flow builder policy profile guidance", () => {
     expect(context).toContain("design_deck_assets");
     expect(context).toContain("cacheBypassInputKeys");
     expect(context).toContain("cacheBypassOrchestratorPromptPatterns");
+    expect(context).toContain("on_fail remediation route");
+    expect(context).toContain("configured MCP servers");
   });
 
   it("chat planner context includes policy profile instructions", () => {
@@ -23,5 +25,7 @@ describe("flow builder policy profile guidance", () => {
     expect(context).toContain("design_deck_assets");
     expect(context).toContain("cacheBypassInputKeys");
     expect(context).toContain("cacheBypassOrchestratorPromptPatterns");
+    expect(context).toContain("on_fail remediation route");
+    expect(context).toContain("prefer action=answer");
   });
 });

@@ -213,9 +213,30 @@ async function listDirectoryEntries(
 function inferMimeType(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();
   switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
+    case ".ico":
+      return "image/x-icon";
+    case ".bmp":
+      return "image/bmp";
     case ".html":
     case ".htm":
       return "text/html";
+    case ".js":
+      return "text/javascript";
+    case ".mjs":
+      return "text/javascript";
+    case ".css":
+      return "text/css";
     case ".md":
     case ".markdown":
       return "text/markdown";
@@ -368,6 +389,42 @@ function parseDeleteBody(request: Request): {
   };
 }
 
+function parseRawParams(request: Request): {
+  pipelineId: string;
+  scope: FilesScope;
+  runId?: string;
+  path: string;
+} {
+  const scopeValue = (request.params.scope ?? "").trim();
+  if (scopeValue !== "shared" && scopeValue !== "isolated" && scopeValue !== "runs") {
+    throw new FileManagerRouteError(400, "Invalid storage scope.");
+  }
+
+  const pipelineId = (request.params.pipelineId ?? "").trim();
+  if (pipelineId.length === 0 || pipelineId.length > 240) {
+    throw new FileManagerRouteError(400, "Invalid pipelineId.");
+  }
+
+  const runIdParam = (request.params.runId ?? "").trim();
+  const runId = runIdParam === "-" ? undefined : runIdParam;
+  if (scopeValue === "runs" && (!runId || runId.length === 0)) {
+    throw new FileManagerRouteError(400, "runId is required for runs scope.");
+  }
+
+  const wildcardPath = (request.params["0"] ?? "").trim();
+  const normalizedPath = normalizeRelativePath(wildcardPath);
+  if (normalizedPath.length === 0) {
+    throw new FileManagerRouteError(400, "File path is required.");
+  }
+
+  return {
+    pipelineId,
+    scope: scopeValue,
+    runId,
+    path: normalizedPath
+  };
+}
+
 function parentPathFrom(relativePath: string): string | null {
   if (relativePath.length === 0) {
     return null;
@@ -505,6 +562,48 @@ export function registerFileManagerRoutes(app: Express, deps: PipelineRouteConte
         maxBytes,
         content: preview.content
       });
+    } catch (error) {
+      sendFileManagerError(error, response);
+    }
+  });
+
+  app.get("/api/files/raw/:scope/:pipelineId/:runId/*", async (request: Request, response: Response) => {
+    try {
+      const input = parseRawParams(request);
+      const pipeline = deps.store.getPipeline(input.pipelineId);
+      if (!pipeline) {
+        response.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      const state = deps.store.getState();
+      const scope = resolveScopeRoot(state, state.storage, input.pipelineId, input.scope, input.runId);
+      const targetPath = resolvePathWithinRoot(scope.rootPath, input.path);
+      await assertRealPathInsideRoot(scope.rootPath, targetPath);
+
+      const stats = await fs.lstat(targetPath).catch((error) => {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT") {
+          throw new FileManagerRouteError(404, "Path not found.");
+        }
+        throw error;
+      });
+
+      if (!stats) {
+        throw new FileManagerRouteError(404, "Path not found.");
+      }
+      if (stats.isSymbolicLink()) {
+        throw new FileManagerRouteError(400, "Symbolic links are not supported.");
+      }
+      if (!stats.isFile()) {
+        throw new FileManagerRouteError(400, "Requested path is not a file.");
+      }
+
+      const content = await fs.readFile(targetPath);
+      response.setHeader("Content-Type", inferMimeType(targetPath));
+      response.setHeader("Content-Length", String(content.length));
+      response.setHeader("Cache-Control", "no-store");
+      response.send(content);
     } catch (error) {
       sendFileManagerError(error, response);
     }

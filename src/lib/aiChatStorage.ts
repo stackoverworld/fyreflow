@@ -1,12 +1,22 @@
-import type { AiChatMessage, PipelinePayload } from "@/lib/types";
+import type { AiChatMessage, FlowBuilderRequest, PipelinePayload } from "@/lib/types";
 
 const AI_CHAT_STORAGE_PREFIX = "fyreflow:ai-chat:";
 const AI_CHAT_DRAFT_PREFIX = "fyreflow:ai-chat-draft:";
 const AI_CHAT_PENDING_PREFIX = "fyreflow:ai-chat-pending:";
+const AI_CHAT_PENDING_REQUEST_PREFIX = "fyreflow:ai-chat-pending-request:";
 const MAX_MESSAGES_PER_WORKFLOW = 500;
 const DEFAULT_HISTORY_PAGE_SIZE = 30;
 
 type AiChatLifecycleListener = () => void;
+
+export type AiChatPendingMode = "ask" | "build";
+
+export interface AiChatPendingRequest {
+  requestId: string;
+  payload: FlowBuilderRequest;
+  startedAt: number;
+  mode?: AiChatPendingMode;
+}
 
 const aiChatLifecycleListeners = new Map<string, Set<AiChatLifecycleListener>>();
 
@@ -20,6 +30,10 @@ function getDraftKey(workflowKey: string): string {
 
 function getPendingKey(workflowKey: string): string {
   return `${AI_CHAT_PENDING_PREFIX}${workflowKey}`;
+}
+
+function getPendingRequestKey(workflowKey: string): string {
+  return `${AI_CHAT_PENDING_REQUEST_PREFIX}${workflowKey}`;
 }
 
 function notifyAiChatLifecycle(workflowKey: string): void {
@@ -137,6 +151,119 @@ function isPipelinePayload(value: unknown): value is PipelinePayload {
   );
 }
 
+function isValidFlowBuilderHistoryMessage(
+  value: unknown
+): value is NonNullable<FlowBuilderRequest["history"]>[number] {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return (
+    (value.role === "user" || value.role === "assistant") &&
+    typeof value.content === "string" &&
+    value.content.trim().length > 0
+  );
+}
+
+function isValidFlowBuilderMcpServer(
+  value: unknown
+): value is NonNullable<FlowBuilderRequest["availableMcpServers"]>[number] {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  if (typeof value.id !== "string" || value.id.trim().length === 0) {
+    return false;
+  }
+
+  if (typeof value.name !== "string" || value.name.trim().length === 0) {
+    return false;
+  }
+
+  if (typeof value.enabled !== "undefined" && typeof value.enabled !== "boolean") {
+    return false;
+  }
+
+  if (
+    typeof value.transport !== "undefined" &&
+    value.transport !== "stdio" &&
+    value.transport !== "http" &&
+    value.transport !== "sse"
+  ) {
+    return false;
+  }
+
+  return typeof value.summary === "undefined" || typeof value.summary === "string";
+}
+
+function isFlowBuilderRequest(value: unknown): value is FlowBuilderRequest {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  if (typeof value.requestId !== "undefined" && (typeof value.requestId !== "string" || value.requestId.trim().length === 0)) {
+    return false;
+  }
+
+  if (typeof value.prompt !== "string" || value.prompt.trim().length < 2) {
+    return false;
+  }
+
+  if (value.providerId !== "openai" && value.providerId !== "claude") {
+    return false;
+  }
+
+  if (typeof value.model !== "string" || value.model.trim().length === 0) {
+    return false;
+  }
+
+  if (
+    typeof value.reasoningEffort !== "undefined" &&
+    value.reasoningEffort !== "minimal" &&
+    value.reasoningEffort !== "low" &&
+    value.reasoningEffort !== "medium" &&
+    value.reasoningEffort !== "high" &&
+    value.reasoningEffort !== "xhigh"
+  ) {
+    return false;
+  }
+
+  if (typeof value.fastMode !== "undefined" && typeof value.fastMode !== "boolean") {
+    return false;
+  }
+
+  if (typeof value.use1MContext !== "undefined" && typeof value.use1MContext !== "boolean") {
+    return false;
+  }
+
+  if (
+    typeof value.history !== "undefined" &&
+    (!Array.isArray(value.history) || !value.history.every((entry) => isValidFlowBuilderHistoryMessage(entry)))
+  ) {
+    return false;
+  }
+
+  if (typeof value.currentDraft !== "undefined" && !isPipelinePayload(value.currentDraft)) {
+    return false;
+  }
+
+  if (
+    typeof value.availableMcpServers !== "undefined" &&
+    (!Array.isArray(value.availableMcpServers) || !value.availableMcpServers.every((entry) => isValidFlowBuilderMcpServer(entry)))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function normalizePendingMode(value: unknown): AiChatPendingMode | undefined {
+  if (value === "ask" || value === "build") {
+    return value;
+  }
+  return undefined;
+}
+
 function normalizeMessage(raw: unknown, fallbackIndex: number): AiChatMessage | null {
   if (!isObject(raw)) {
     return null;
@@ -152,6 +279,10 @@ function normalizeMessage(raw: unknown, fallbackIndex: number): AiChatMessage | 
     content: raw.content,
     timestamp: typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp) ? raw.timestamp : Date.now()
   };
+
+  if (typeof raw.requestId === "string" && raw.requestId.trim().length > 0) {
+    message.requestId = raw.requestId.trim();
+  }
 
   if (raw.source === "model" || raw.source === "fallback") {
     message.source = raw.source;
@@ -314,6 +445,80 @@ export function saveAiChatPending(workflowKey: string, pending: boolean): void {
   } catch {
     // Ignore write errors (quota, private mode, etc.)
   }
+}
+
+export function loadAiChatPendingRequest(workflowKey: string): AiChatPendingRequest | null {
+  if (typeof window === "undefined" || workflowKey.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getPendingRequestKey(workflowKey));
+    if (!raw) {
+      return null;
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!isObject(parsed)) {
+      return null;
+    }
+
+    const requestId = typeof parsed.requestId === "string" ? parsed.requestId.trim() : "";
+    if (requestId.length === 0 || !isFlowBuilderRequest(parsed.payload)) {
+      return null;
+    }
+
+    const payload: FlowBuilderRequest =
+      parsed.payload.requestId === requestId ? parsed.payload : { ...parsed.payload, requestId };
+
+    const startedAt =
+      typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) ? parsed.startedAt : Date.now();
+
+    return {
+      requestId,
+      payload,
+      startedAt,
+      mode: normalizePendingMode(parsed.mode)
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveAiChatPendingRequest(workflowKey: string, request: AiChatPendingRequest | null): void {
+  if (typeof window === "undefined" || workflowKey.trim().length === 0) {
+    return;
+  }
+
+  try {
+    if (!request) {
+      window.localStorage.removeItem(getPendingRequestKey(workflowKey));
+    } else {
+      const normalized: AiChatPendingRequest = {
+        ...request,
+        requestId: request.requestId.trim(),
+        payload: {
+          ...request.payload,
+          requestId: request.requestId.trim()
+        },
+        mode: normalizePendingMode(request.mode)
+      };
+
+      if (normalized.requestId.length === 0 || !isFlowBuilderRequest(normalized.payload)) {
+        window.localStorage.removeItem(getPendingRequestKey(workflowKey));
+      } else {
+        window.localStorage.setItem(getPendingRequestKey(workflowKey), JSON.stringify(normalized));
+      }
+    }
+
+    notifyAiChatLifecycle(workflowKey);
+  } catch {
+    // Ignore write errors (quota, private mode, etc.)
+  }
+}
+
+export function clearAiChatPendingRequest(workflowKey: string): void {
+  saveAiChatPendingRequest(workflowKey, null);
 }
 
 export function moveAiChatHistory(sourceWorkflowKey: string, targetWorkflowKey: string): void {

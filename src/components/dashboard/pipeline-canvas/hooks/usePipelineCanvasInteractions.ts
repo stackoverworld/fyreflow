@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useRef,
   useState,
   type Dispatch,
@@ -50,6 +51,10 @@ export function usePipelineCanvasInteractions({
   const routeAxisMemoryRef = useRef<Map<string, RouteAxis>>(new Map());
   const [smartRouteByLinkId, setSmartRouteByLinkId] = useState<Record<string, Point[]>>({});
   const [toolMode, setToolMode] = useState<CanvasToolMode>("pan");
+  const handleAutoLayout = useCallback(() => {
+    routeAxisMemoryRef.current = new Map();
+    onAutoLayout?.();
+  }, [onAutoLayout]);
 
   const selectionState = useCanvasSelection({
     nodes,
@@ -64,7 +69,7 @@ export function usePipelineCanvasInteractions({
     onDeleteNodes,
     onDeleteLink,
     onDragStateChange,
-    onAutoLayout,
+    onAutoLayout: handleAutoLayout,
     readOnly,
     setSmartRouteByLinkId,
     setViewport,
@@ -77,7 +82,7 @@ export function usePipelineCanvasInteractions({
   usePipelineCanvasKeyboard({
     readOnly,
     selectedLinkId,
-    onAutoLayout,
+    onAutoLayout: handleAutoLayout,
     setToolMode,
     triggerAutoLayout: selectionState.triggerAutoLayout,
     undoManualRoutePlacement: selectionState.undoManualRoutePlacement,

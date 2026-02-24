@@ -88,6 +88,7 @@ export interface FlowBuilderQuestion {
 }
 
 export interface FlowBuilderRequest {
+  requestId?: string;
   prompt: string;
   providerId: ProviderId;
   model: string;
@@ -120,6 +121,7 @@ export interface FlowBuilderResponse {
 
 export interface AiChatMessage {
   id: string;
+  requestId?: string;
   role: "user" | "assistant" | "error";
   content: string;
   generatedDraft?: PipelinePayload;

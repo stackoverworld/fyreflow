@@ -38,6 +38,8 @@ interface ChatRequest extends PlannerRequest {
   history?: PromptHistoryMessage[];
 }
 
+const REGENERATION_OUTPUT_CLIP_CHARS = 48_000;
+
 function summarizeCurrentDraft(currentDraft: PipelineInput | undefined): string {
   if (!currentDraft) {
     return "No current flow is loaded in the editor.";
@@ -259,8 +261,11 @@ export function buildChatPlannerContext(request: ChatRequest): string {
     "- Link conditions allowed: always, on_pass, on_fail.",
     "- Always configure pipeline qualityGates. Add blocking status gates for review/tester steps.",
     "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- Use json_field_exists for JSON outputs, or provide artifactPath when validating a JSON file artifact.",
     "- Use manual_approval when user asks for explicit human decision points in the loop.",
     "- Use step requiredOutputFields/requiredOutputFiles for per-step contracts and qualityGates for pipeline-level checks.",
+    "- For every non-review/tester step with required outputs, outputFormat=json, or blocking quality gates targeted at that step, include at least one on_fail remediation route.",
+    "- Do not create flows where a producer step can only pass if its own artifacts already existed before the first run.",
     "- For artifact-producing flows, enable shared storage on producer/consumer steps and use {{shared_storage_path}} for intermediate artifacts.",
     "- Use isolated storage for step-private scratch/temp artifacts that should not be shared downstream.",
     "- Prefer {{shared_storage_path}} for internal pipeline files and use {{input.output_dir}} only for final delivery/export.",
@@ -275,6 +280,8 @@ export function buildChatPlannerContext(request: ChatRequest): string {
     "- For update_current_flow, return the full updated flow result in flow (not a patch).",
     "- Preserve existing structure unless user asks for broader changes.",
     "- Use replace_flow only when the user explicitly asks for a new/rebuilt flow.",
+    "- Do not place orchestrator preflight checks that require downstream artifacts before producer steps execute.",
+    "- If required external tooling (for example Figma extraction) is unavailable in configured MCP servers, prefer action=answer with a clarification question over emitting a brittle flow.",
     "- flow must be omitted when action=answer.",
     "- questions must be omitted when no clarification is needed.",
     "- Platform supports startup-check and runtime needs_input prompts, including secure per-pipeline secret persistence.",
@@ -307,8 +314,8 @@ export function buildChatRegenerationContext(
   rawOutput: string,
   repairedOutput?: string
 ): string {
-  const rawClip = clip(rawOutput, 12000);
-  const repairedClip = repairedOutput ? clip(repairedOutput, 12000) : "";
+  const rawClip = clip(rawOutput, REGENERATION_OUTPUT_CLIP_CHARS);
+  const repairedClip = repairedOutput ? clip(repairedOutput, REGENERATION_OUTPUT_CLIP_CHARS) : "";
 
   return [
     buildChatPlannerContext(request),

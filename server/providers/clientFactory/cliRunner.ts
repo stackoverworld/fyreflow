@@ -17,6 +17,11 @@ import {
   applyClaudeNonInteractiveFlags,
   isUnknownClaudeOptionError
 } from "./config.js";
+import {
+  buildEnglishSummaryFromOutput,
+  isEnglishSummaryCandidate,
+  sanitizeSummaryCandidate
+} from "./modelSummary.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_STREAM_CHUNK_LOGS = (process.env.CLI_STREAM_CHUNK_LOGS ?? "1").trim() !== "0";
@@ -24,9 +29,9 @@ const CLAUDE_CLI_STREAM_JSON = (process.env.CLAUDE_CLI_STREAM_JSON ?? "1").trim(
 const CLAUDE_CLI_MARKDOWN_STREAM_JSON = (process.env.CLAUDE_CLI_MARKDOWN_STREAM_JSON ?? "1").trim() !== "0";
 
 type ClaudeCliOutputFormat = "text" | "json" | "stream-json";
+type CodexCliSandboxMode = "read-only" | "workspace-write";
 const STREAM_JSON_MAX_LINE_CHARS = 8_000_000;
 const MODEL_COMMAND_MAX_CHARS = 360;
-const MODEL_SUMMARY_MAX_CHARS = 420;
 const EMBEDDED_JSON_MAX_CHARS = 1_000_000;
 
 function redactSensitiveText(value: string): string {
@@ -77,26 +82,7 @@ function sanitizeModelCommand(value: string): string {
 }
 
 function sanitizeModelSummary(value: string): string {
-  const normalized = redactSensitiveText(value).replace(/\s+/g, " ").trim();
-  if (normalized.length <= MODEL_SUMMARY_MAX_CHARS) {
-    return normalized;
-  }
-  return `${normalized.slice(0, MODEL_SUMMARY_MAX_CHARS - 3)}...`;
-}
-
-function shouldUseSummaryCandidate(value: string): boolean {
-  const normalized = value.trim();
-  if (normalized.length < 18) {
-    return false;
-  }
-  if (!/[A-Za-z]/.test(normalized)) {
-    return false;
-  }
-  const lowered = normalized.toLowerCase();
-  if (lowered === "tool" || lowered === "plan" || lowered === "explore") {
-    return false;
-  }
-  return true;
+  return sanitizeSummaryCandidate(redactSensitiveText(value));
 }
 
 function maybeRecord(value: unknown): Record<string, unknown> | null {
@@ -274,7 +260,7 @@ function pushStreamJsonSummaryHint(hints: StreamJsonSummaryHint[], seen: Set<str
   if (sanitizedSummary.length === 0) {
     return;
   }
-  if (!shouldUseSummaryCandidate(sanitizedSummary)) {
+  if (!isEnglishSummaryCandidate(sanitizedSummary)) {
     return;
   }
   const lowered = sanitizedSummary.toLowerCase();
@@ -846,13 +832,16 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
 
   try {
     const prompt = composeCliPrompt(input);
+    const sandboxMode = resolveCodexCliSandboxMode(input);
+    input.log?.("Model summary: Request accepted; model started processing.");
+    input.log?.(`Codex CLI sandbox mode: ${sandboxMode}`);
     await runCommand(
       CODEX_CLI_COMMAND,
       [
         "exec",
         "--skip-git-repo-check",
         "--sandbox",
-        "read-only",
+        sandboxMode,
         "--color",
         "never",
         "--model",
@@ -872,13 +861,25 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
     const output = await fs.readFile(outputPath, "utf8");
     const trimmed = output.trim();
     if (trimmed.length > 0) {
+      const summary = buildEnglishSummaryFromOutput(redactSensitiveText(trimmed));
+      input.log?.(`Model summary: ${summary}`);
       return trimmed;
     }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 
+  input.log?.("Model summary: Step completed with no text output.");
   return "Codex CLI completed with no final message output.";
+}
+
+export function resolveCodexCliSandboxMode(input: ProviderExecutionInput): CodexCliSandboxMode {
+  // Keep orchestrator in read-only mode; non-orchestrator stages often need to
+  // materialize required artifacts in shared/isolated storage.
+  if (input.step.role === "orchestrator") {
+    return "read-only";
+  }
+  return "workspace-write";
 }
 
 interface BuildClaudeCliArgsInput {
@@ -1201,6 +1202,7 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
   input.log?.(
     `Claude CLI request started: model=${selectedModel}, timeout=${timeoutMs}ms, effort=${input.step.reasoningEffort}, fastMode=${input.step.fastMode ? "on" : "off"}, outputMode=${outputMode}, cliOutputFormat=${initialOutputFormat}, tools=${shouldDisableClaudeCliTools(input) ? "disabled" : "enabled"}`
   );
+  input.log?.("Model summary: Request accepted; model started processing.");
 
   let stdout = "";
   let usedCompatibilityFallback = false;
@@ -1253,6 +1255,22 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
     usedOutputFormat,
     input.log
   );
+
+  let hasStreamSummaryHint = false;
+  if (usedOutputFormat === "stream-json") {
+    for (const line of stdout.split(/\r?\n/)) {
+      if (extractStreamJsonSummaryHints(line).length > 0) {
+        hasStreamSummaryHint = true;
+        break;
+      }
+    }
+  }
+
+  if (!hasStreamSummaryHint) {
+    const summary = buildEnglishSummaryFromOutput(redactSensitiveText(trimmed));
+    input.log?.(`Model summary: ${summary}`);
+  }
+
   if (trimmed.length > 0) {
     return trimmed;
   }

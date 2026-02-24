@@ -132,4 +132,19 @@ describe("CLI runner progress logging", () => {
     expect(hints.some((entry) => entry.summary.includes("Updated all deck slides"))).toBe(true);
     expect(hints.some((entry) => entry.summary.includes("workflow=PASS"))).toBe(true);
   });
+
+  it("skips non-English summary text and keeps English status summary fallback", () => {
+    const line = JSON.stringify({
+      type: "result",
+      structured_output: {
+        workflow_status: "PASS",
+        next_action: "continue",
+        summary: "Слайды обновлены и проверка пройдена."
+      }
+    });
+
+    const hints = extractStreamJsonSummaryHints(line);
+    expect(hints.some((entry) => /workflow=PASS/i.test(entry.summary))).toBe(true);
+    expect(hints.some((entry) => /Слайды/i.test(entry.summary))).toBe(false);
+  });
 });

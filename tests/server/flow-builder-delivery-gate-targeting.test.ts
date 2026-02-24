@@ -29,8 +29,8 @@ function createStep(id: string, name: string): DraftStepRecord {
   };
 }
 
-describe("buildQualityGates delivery completion target fallback", () => {
-  it("maps delivery completion gate with unknown target to delivery step instead of any_step", () => {
+describe("buildQualityGates delivery completion targeting", () => {
+  it("keeps any_step when delivery completion gate target cannot be resolved", () => {
     const stepRecords: DraftStepRecord[] = [
       createStep("step-1", "Pipeline Orchestrator"),
       createStep("step-2", "HTML Reviewer"),
@@ -47,6 +47,6 @@ describe("buildQualityGates delivery completion target fallback", () => {
     ];
 
     const built = buildQualityGates({ qualityGates }, stepRecords);
-    expect(built[0]?.targetStepId).toBe("step-3");
+    expect(built[0]?.targetStepId).toBe("any_step");
   });
 });

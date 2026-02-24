@@ -18,6 +18,7 @@ import { Select } from "@/components/optics/select";
 import { Switch } from "@/components/optics/switch";
 import { cn } from "@/lib/cn";
 import { getRunInputValue } from "@/lib/runInputAliases";
+import { useIconSpin } from "@/lib/useIconSpin";
 import { usePersistedTab } from "@/components/dashboard/usePersistedTab";
 import { CronScheduleRow } from "@/components/dashboard/panels/cron/CronScheduleRow";
 import { RowActions } from "@/components/dashboard/panels/cron/RowActions";
@@ -71,6 +72,7 @@ export function CronSchedulesPanel({
   onRefreshSmartRunPlan
 }: CronSchedulesPanelProps) {
   const [activeTab, handleTabChange] = usePersistedTab<CronTab>("fyreflow:cron-tab", "schedule", CRON_TABS);
+  const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
 
   const schedule = normalizeSchedule(draft.schedule);
   const passCount = (smartRunPlan?.checks ?? []).filter((c) => c.status === "pass").length;
@@ -305,6 +307,7 @@ export function CronSchedulesPanel({
                     disabled={!pipelineId || loadingSmartRunPlan}
                     onClick={async () => {
                       if (!onRefreshSmartRunPlan) return;
+                      triggerRefreshSpin();
                       await onRefreshSmartRunPlan(
                         schedule.runMode,
                         schedule.runMode === "smart" ? schedule.inputs : {},
@@ -312,7 +315,7 @@ export function CronSchedulesPanel({
                       );
                     }}
                   >
-                    {loadingSmartRunPlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    <RefreshCw className="h-3.5 w-3.5" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} />
                     Refresh
                   </Button>
                 </div>

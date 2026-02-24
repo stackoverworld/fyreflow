@@ -1,5 +1,4 @@
 import { motion } from "motion/react";
-import { Loader2 } from "lucide-react";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
 import { cn } from "@/lib/cn";
@@ -154,10 +153,10 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
         className={cn(
           "max-w-[85%] rounded-2xl px-3 py-2",
           isUser
-            ? "bg-ember-500/15 text-ink-100"
+            ? "bg-ink-800/50 text-ink-100"
             : isError
               ? "border border-red-500/20 bg-red-500/10 text-red-400"
-              : "bg-ink-800/50 text-ink-200"
+              : "text-ink-200"
         )}
       >
         {actionLabel && !isUser && !isError ? (
@@ -218,9 +217,8 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
 
 export function PlanPreviewGeneratingIndicator() {
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
-      <Loader2 className="h-3.5 w-3.5 animate-spin text-ember-400" />
-      <span className="text-xs text-ink-500">Thinking...</span>
+    <div className="px-3 py-2">
+      <span className="shiny-text text-xs font-medium">Thinking...</span>
     </div>
   );
 }

@@ -166,6 +166,7 @@ async function executeClaudeApiWithCompatibilityFallback(
     const fallbackOptions: ClaudeApiOptions[] = [
       { disable1MContext: true },
       { disableEffort: true },
+      { disableOutputFormat: true },
       { disable1MContext: true, disableEffort: true }
     ];
 

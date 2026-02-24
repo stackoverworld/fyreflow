@@ -113,6 +113,43 @@ describe("System and Auth Routes", () => {
       }
     );
     expect(headerNextCalled).toBe(true);
+
+    const rawQueryResponse = createMockResponse();
+    let rawQueryNextCalled = false;
+    middleware(
+      {
+        path: "/api/files/raw/shared/pipeline-id/-/assets/logo.png",
+        method: "GET",
+        query: {
+          api_token: "super-secret-token"
+        },
+        headers: {}
+      } as never,
+      rawQueryResponse as never,
+      () => {
+        rawQueryNextCalled = true;
+      }
+    );
+    expect(rawQueryNextCalled).toBe(true);
+
+    const stateQueryResponse = createMockResponse();
+    let stateQueryNextCalled = false;
+    middleware(
+      {
+        path: "/api/state",
+        method: "GET",
+        query: {
+          api_token: "super-secret-token"
+        },
+        headers: {}
+      } as never,
+      stateQueryResponse as never,
+      () => {
+        stateQueryNextCalled = true;
+      }
+    );
+    expect(stateQueryNextCalled).toBe(false);
+    expect(stateQueryResponse.statusCode).toBe(401);
   });
 
   it("returns sanitized provider and MCP secrets from /api/state", async () => {

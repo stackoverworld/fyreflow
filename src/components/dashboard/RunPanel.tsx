@@ -21,6 +21,7 @@ import type { Pipeline, PipelineRun, SmartRunPlan } from "@/lib/types";
 import type { RunDraftState, RunMode } from "@/lib/runDraftStorage";
 import { usePersistedTab } from "@/components/dashboard/usePersistedTab";
 import { useRunPanelState } from "@/components/dashboard/run-panel/useRunPanelState";
+import { useIconSpin } from "@/lib/useIconSpin";
 import { RunPanelActions } from "@/components/dashboard/panels/run/RunPanelActions";
 import { RunHistoryList } from "@/components/dashboard/run-panel/RunHistoryList";
 import { RunSessionCard } from "@/components/dashboard/run-panel/RunSessionCard";
@@ -111,6 +112,7 @@ export function RunPanel({
   storageConfig = null
 }: RunPanelProps) {
   const [activeTab, handleTabChange] = usePersistedTab<RunTab>("fyreflow:run-tab", "launch", RUN_TABS);
+  const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const isolatedEnabledStepIds = useMemo(() => {
     if (!selectedPipeline) {
       return null;
@@ -263,14 +265,11 @@ export function RunPanel({
                       variant="secondary"
                       disabled={!selectedPipeline || loadingSmartRunPlan || controlsLocked}
                       onClick={async () => {
+                        triggerRefreshSpin();
                         await refreshSmartRunPlan({ force: true });
                       }}
                     >
-                      {loadingSmartRunPlan ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
+                      <RefreshCw className="h-3.5 w-3.5" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} />
                       Refresh
                     </Button>
                   </div>

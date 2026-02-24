@@ -3,7 +3,6 @@ import { resolveDefaultContextWindow, resolveReasoning } from "../modelCatalog.j
 import {
   defaultContextTemplate,
   defaultRolePrompts,
-  orchestratorClaudeModel,
   orchestratorContextWindowCap
 } from "./constants.js";
 import type { PipelineInput, PipelineLink, PipelineQualityGate, PipelineStep } from "../types.js";
@@ -30,6 +29,96 @@ type StorageResolutionInput = {
   requiredOutputFiles: string[];
   skipIfArtifacts: string[];
 };
+
+type StepRoutingInput = {
+  role: PipelineStep["role"];
+  name: string;
+  prompt: string;
+  requestPrompt: string;
+  requiredOutputFiles: string[];
+  requiredOutputFields: string[];
+};
+
+type StepExecutionDefaults = {
+  providerId: PipelineStep["providerId"];
+  model: string;
+  reasoningEffort: PipelineStep["reasoningEffort"];
+  fastMode: boolean;
+  use1MContext: boolean;
+  contextWindowTokens: number;
+};
+
+const codexCodeRoute = {
+  providerId: "openai",
+  model: "gpt-5.3-codex",
+  reasoningEffort: "xhigh"
+} as const satisfies Pick<StepExecutionDefaults, "providerId" | "model" | "reasoningEffort">;
+
+const claudeStrategicRoute = {
+  providerId: "claude",
+  model: "claude-opus-4-6",
+  reasoningEffort: "high"
+} as const satisfies Pick<StepExecutionDefaults, "providerId" | "model" | "reasoningEffort">;
+
+const uiTaskPattern =
+  /\b(ui|ux|landing\s*page|frontend|front-end|figma|wireframe|mockup|design\s*system|visual\s*design|html|css|tailwind|responsive\s*layout|website|web\s*page)\b/i;
+const planningTaskPattern =
+  /\b(plan(?:ning)?|roadmap|strategy|milestones?|spec(?:ification)?s?|requirements?|acceptance\s+criteria|work\s*breakdown)\b/i;
+const researchTaskPattern =
+  /\b(web\s*research|web\s*search|research|investigat(?:e|ion|ing)|gather\s+sources?|benchmark(?:ing)?|competitive\s+analysis|fact[-\s]?check|citations?)\b/i;
+const orchestrationTaskPattern = /\borchestrat(?:e|or|ion)|coordinat(?:e|ion|or)|dispatch|route\s+work\b/i;
+const hardCodeTaskPattern =
+  /\b(code|coding|implement(?:ation)?|refactor|debug|fix(?:ing)?|bugs?|unit\s*tests?|integration\s*tests?|typescript|javascript|node(?:\.js)?|python|go|rust|sql|database|schema|endpoint|api|backend|server|cli|algorithm)\b/i;
+
+function shouldUseClaudeStrategicRoute(input: StepRoutingInput): boolean {
+  if (input.role === "planner" || input.role === "orchestrator") {
+    return true;
+  }
+
+  const localTaskText = [
+    input.name,
+    input.prompt,
+    ...input.requiredOutputFiles,
+    ...input.requiredOutputFields
+  ].join("\n");
+
+  if (
+    uiTaskPattern.test(localTaskText) ||
+    planningTaskPattern.test(localTaskText) ||
+    researchTaskPattern.test(localTaskText) ||
+    orchestrationTaskPattern.test(localTaskText)
+  ) {
+    return true;
+  }
+
+  if (hardCodeTaskPattern.test(localTaskText)) {
+    return false;
+  }
+
+  return uiTaskPattern.test(input.requestPrompt) || researchTaskPattern.test(input.requestPrompt);
+}
+
+function resolveStepExecutionDefaults(input: StepRoutingInput, request: DraftBuildRequest): StepExecutionDefaults {
+  const preferred = shouldUseClaudeStrategicRoute(input) ? claudeStrategicRoute : codexCodeRoute;
+  const use1MContext = preferred.providerId === "claude" ? request.use1MContext === true : false;
+  const fastMode = preferred.providerId === "claude" ? request.fastMode === true : false;
+  const baseContextWindow = resolveDefaultContextWindow(preferred.providerId, preferred.model);
+  const contextWindowTokens = use1MContext ? Math.max(baseContextWindow, 1_000_000) : baseContextWindow;
+
+  return {
+    providerId: preferred.providerId,
+    model: preferred.model,
+    reasoningEffort: resolveReasoning(
+      preferred.providerId,
+      preferred.reasoningEffort,
+      preferred.model,
+      preferred.reasoningEffort
+    ),
+    fastMode,
+    use1MContext,
+    contextWindowTokens
+  };
+}
 
 function preserveLinksFromCurrentDraft(
   currentLinks: PipelineInput["links"] | undefined,
@@ -136,6 +225,85 @@ function resolveIsolatedStorageEnabled(input: StorageResolutionInput): boolean {
   }
 
   return false;
+}
+
+function hasBlockingStepQualityGate(
+  stepId: string,
+  qualityGates: NonNullable<PipelineInput["qualityGates"]>
+): boolean {
+  return qualityGates.some(
+    (gate) =>
+      gate.blocking !== false &&
+      gate.targetStepId === stepId &&
+      gate.kind !== "manual_approval"
+  );
+}
+
+function shouldAttachAutoRemediationOnFail(
+  step: PipelineInput["steps"][number],
+  qualityGates: NonNullable<PipelineInput["qualityGates"]>
+): boolean {
+  if (step.role === "orchestrator" || step.role === "review" || step.role === "tester") {
+    return false;
+  }
+
+  const requiredOutputFiles = Array.isArray(step.requiredOutputFiles) ? step.requiredOutputFiles : [];
+  const requiredOutputFields = Array.isArray(step.requiredOutputFields) ? step.requiredOutputFields : [];
+  if (requiredOutputFiles.length > 0 || requiredOutputFields.length > 0 || step.outputFormat === "json") {
+    return true;
+  }
+
+  return hasBlockingStepQualityGate(step.id, qualityGates);
+}
+
+function ensureBlockingFailureRemediationLinks(draft: PipelineInput): PipelineInput {
+  if (draft.steps.length === 0) {
+    return draft;
+  }
+
+  const qualityGates: NonNullable<PipelineInput["qualityGates"]> = Array.isArray(draft.qualityGates)
+    ? draft.qualityGates
+    : [];
+  const links: NonNullable<PipelineInput["links"]> = Array.isArray(draft.links) ? [...draft.links] : [];
+  const seen = new Set(links.map((link) => `${link.sourceStepId}->${link.targetStepId}:${link.condition ?? "always"}`));
+  let changed = false;
+
+  for (const step of draft.steps) {
+    if (typeof step.id !== "string" || step.id.trim().length === 0) {
+      continue;
+    }
+    if (!shouldAttachAutoRemediationOnFail(step, qualityGates)) {
+      continue;
+    }
+
+    const hasOnFailRoute = links.some((link) => link.sourceStepId === step.id && link.condition === "on_fail");
+    if (hasOnFailRoute) {
+      continue;
+    }
+
+    const dedupeKey = `${step.id}->${step.id}:on_fail`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    links.push({
+      id: nanoid(),
+      sourceStepId: step.id,
+      targetStepId: step.id,
+      condition: "on_fail"
+    });
+    seen.add(dedupeKey);
+    changed = true;
+  }
+
+  if (!changed) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    links
+  };
 }
 
 function shouldDisableSkipArtifactsForStrictRuns(prompt: string): boolean {
@@ -311,30 +479,33 @@ export function buildFlowDraft(
   spec: GeneratedFlowSpec,
   request: DraftBuildRequest
 ): PipelineInput {
-  const reasoningEffort = resolveReasoning(request.providerId, request.reasoningEffort, request.model, "medium");
-  const baseContext = resolveDefaultContextWindow(request.providerId, request.model);
-  const use1MContext = request.providerId === "claude" && request.use1MContext === true;
-  const contextWindowTokens = use1MContext ? Math.max(baseContext, 1_000_000) : baseContext;
-  const fastMode = request.providerId === "claude" ? request.fastMode === true : false;
   const disableSkipArtifacts = shouldDisableSkipArtifactsForStrictRuns(request.prompt);
   const runtime = normalizeRuntime(spec.runtime);
   const schedule = normalizeSchedule(spec.schedule);
 
   const stepRecords: PipelineInput["steps"] = spec.steps.map((step, index) => {
     const role = step.role ?? (index === 0 ? "analysis" : "executor");
-    const isClaudeOrchestrator = request.providerId === "claude" && role === "orchestrator";
-    const stepModel =
-      isClaudeOrchestrator && request.model.toLowerCase().includes("opus") ? orchestratorClaudeModel : request.model;
-    const stepReasoningEffort = isClaudeOrchestrator ? "low" : reasoningEffort;
-    const stepFastMode = fastMode;
-    const stepUse1MContext = isClaudeOrchestrator ? false : use1MContext;
-    const stepContextWindowTokens = isClaudeOrchestrator
-      ? Math.min(contextWindowTokens, orchestratorContextWindowCap)
-      : contextWindowTokens;
     const row = Math.floor(index / 4);
     const col = index % 4;
+    const prompt = step.prompt?.trim() || defaultRolePrompts[role];
     const requiredOutputFields = normalizeStringArray(step.requiredOutputFields, 40) ?? [];
     const requiredOutputFiles = normalizeStringArray(step.requiredOutputFiles, 40) ?? [];
+    const stepDefaults = resolveStepExecutionDefaults(
+      {
+        role,
+        name: step.name,
+        prompt,
+        requestPrompt: request.prompt,
+        requiredOutputFiles,
+        requiredOutputFields
+      },
+      request
+    );
+    const isClaudeOrchestrator = stepDefaults.providerId === "claude" && role === "orchestrator";
+    const stepUse1MContext = isClaudeOrchestrator ? false : stepDefaults.use1MContext;
+    const stepContextWindowTokens = isClaudeOrchestrator
+      ? Math.min(stepDefaults.contextWindowTokens, orchestratorContextWindowCap)
+      : stepDefaults.contextWindowTokens;
     const scenarios = normalizeStringArray(step.scenarios, 20) ?? [];
     const policyProfileIds = normalizeStringArray(step.policyProfileIds, 20) ?? [];
     const cacheBypassInputKeys = normalizeStringArray(step.cacheBypassInputKeys, 20) ?? [];
@@ -359,11 +530,11 @@ export function buildFlowDraft(
       id: nanoid(),
       name: step.name,
       role,
-      prompt: step.prompt?.trim() || defaultRolePrompts[role],
-      providerId: request.providerId,
-      model: stepModel,
-      reasoningEffort: stepReasoningEffort,
-      fastMode: stepFastMode,
+      prompt,
+      providerId: stepDefaults.providerId,
+      model: stepDefaults.model,
+      reasoningEffort: stepDefaults.reasoningEffort,
+      fastMode: stepDefaults.fastMode,
       use1MContext: stepUse1MContext,
       contextWindowTokens: stepContextWindowTokens,
       position: {
@@ -406,7 +577,7 @@ export function buildFlowDraft(
     schedule
   };
 
-  return ensureDeliveryStageForCompletionGates(draft);
+  return ensureBlockingFailureRemediationLinks(ensureDeliveryStageForCompletionGates(draft));
 }
 
 export function buildFlowDraftFromExisting(
@@ -426,58 +597,6 @@ export function buildFlowDraftFromExisting(
   const stepRecords: PipelineInput["steps"] = spec.steps.map((step, index) => {
     const existing = existingByName.get(normalizeRef(step.name));
     const role = step.role ?? existing?.role ?? (index === 0 ? "analysis" : "executor");
-
-    const existingProviderId =
-      existing?.providerId === "openai" || existing?.providerId === "claude" ? existing.providerId : undefined;
-    const providerChanged = !!existingProviderId && existingProviderId !== request.providerId;
-    const providerId = providerChanged ? request.providerId : existingProviderId ?? request.providerId;
-
-    const existingModel =
-      typeof existing?.model === "string" && existing.model.trim().length > 0 ? existing.model : undefined;
-    const requestedModel = providerChanged || !existingModel ? request.model : existingModel;
-    const isClaudeOrchestrator = providerId === "claude" && role === "orchestrator";
-    const model =
-      isClaudeOrchestrator && requestedModel.toLowerCase().includes("opus") ? orchestratorClaudeModel : requestedModel;
-
-    const resolvedReasoningEffort = resolveReasoning(
-      providerId,
-      providerChanged ? request.reasoningEffort : existing?.reasoningEffort ?? request.reasoningEffort,
-      model,
-      "medium"
-    );
-    const reasoningEffort = isClaudeOrchestrator ? "low" : resolvedReasoningEffort;
-    const baseContext = resolveDefaultContextWindow(providerId, model);
-
-    const resolvedUse1MContext =
-      providerId === "claude"
-        ? !providerChanged && typeof existing?.use1MContext === "boolean"
-          ? existing.use1MContext
-          : request.use1MContext === true
-        : false;
-
-    const resolvedFastMode =
-      providerId === "claude"
-        ? !providerChanged && typeof existing?.fastMode === "boolean"
-          ? existing.fastMode
-          : request.fastMode === true
-        : false;
-
-    const use1MContext = isClaudeOrchestrator ? false : resolvedUse1MContext;
-    const fastMode = resolvedFastMode;
-    const existingContextWindow =
-      !providerChanged && typeof existing?.contextWindowTokens === "number" && Number.isFinite(existing.contextWindowTokens)
-        ? Math.floor(existing.contextWindowTokens)
-        : undefined;
-
-    const resolvedContextWindowTokens =
-      existingContextWindow && existingContextWindow > 0
-        ? existingContextWindow
-        : use1MContext
-          ? Math.max(baseContext, 1_000_000)
-          : baseContext;
-    const contextWindowTokens = isClaudeOrchestrator
-      ? Math.min(resolvedContextWindowTokens, orchestratorContextWindowCap)
-      : resolvedContextWindowTokens;
     const row = Math.floor(index / 4);
     const col = index % 4;
 
@@ -505,6 +624,49 @@ export function buildFlowDraftFromExisting(
     const requiredOutputFiles =
       normalizeStringArray(step.requiredOutputFiles, 40) ??
       (Array.isArray(existing?.requiredOutputFiles) ? existing.requiredOutputFiles.slice(0, 40) : []);
+    const prompt = step.prompt?.trim() || existing?.prompt || defaultRolePrompts[role];
+    const stepDefaults = resolveStepExecutionDefaults(
+      {
+        role,
+        name: step.name,
+        prompt,
+        requestPrompt: request.prompt,
+        requiredOutputFiles,
+        requiredOutputFields
+      },
+      request
+    );
+    const providerId = stepDefaults.providerId;
+    const model = stepDefaults.model;
+    const reasoningEffort = stepDefaults.reasoningEffort;
+    const isClaudeOrchestrator = providerId === "claude" && role === "orchestrator";
+    const existingMatchesRoute = existing?.providerId === providerId && existing?.model === model;
+
+    const resolvedUse1MContext =
+      providerId === "claude"
+        ? existingMatchesRoute && typeof existing?.use1MContext === "boolean"
+          ? existing.use1MContext
+          : stepDefaults.use1MContext
+        : false;
+
+    const resolvedFastMode =
+      providerId === "claude"
+        ? existingMatchesRoute && typeof existing?.fastMode === "boolean"
+          ? existing.fastMode
+          : stepDefaults.fastMode
+        : false;
+
+    const use1MContext = isClaudeOrchestrator ? false : resolvedUse1MContext;
+    const fastMode = resolvedFastMode;
+    const existingContextWindow =
+      existingMatchesRoute && typeof existing?.contextWindowTokens === "number" && Number.isFinite(existing.contextWindowTokens)
+        ? Math.floor(existing.contextWindowTokens)
+        : undefined;
+    const resolvedContextWindowTokens =
+      existingContextWindow && existingContextWindow > 0 ? existingContextWindow : stepDefaults.contextWindowTokens;
+    const contextWindowTokens = isClaudeOrchestrator
+      ? Math.min(resolvedContextWindowTokens, orchestratorContextWindowCap)
+      : resolvedContextWindowTokens;
     const scenarios =
       normalizeStringArray(step.scenarios, 20) ??
       (Array.isArray(existing?.scenarios) ? existing.scenarios.slice(0, 20) : []);
@@ -543,7 +705,7 @@ export function buildFlowDraftFromExisting(
       id: typeof existing?.id === "string" && existing.id.trim().length > 0 ? existing.id : nanoid(),
       name: step.name,
       role,
-      prompt: step.prompt?.trim() || existing?.prompt || defaultRolePrompts[role],
+      prompt,
       providerId,
       model,
       reasoningEffort,
@@ -614,5 +776,5 @@ export function buildFlowDraftFromExisting(
     schedule: normalizeSchedule(spec.schedule ?? currentDraft.schedule)
   };
 
-  return ensureDeliveryStageForCompletionGates(draft);
+  return ensureBlockingFailureRemediationLinks(ensureDeliveryStageForCompletionGates(draft));
 }

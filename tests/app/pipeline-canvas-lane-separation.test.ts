@@ -14,7 +14,7 @@ function createNode(id: string, x: number, y: number): FlowNode {
 }
 
 describe("pipeline canvas lane separation", () => {
-  it("keeps the target entry segment horizontal for separated overlapping links", () => {
+  it("avoids tiny endpoint hooks when resolving overlapping dashed links", () => {
     const source = createNode("source", 520, 180);
     const target = createNode("target", 200, 180);
     const nodes = [source, target];
@@ -50,14 +50,52 @@ describe("pipeline canvas lane separation", () => {
 
     expect(primaryRoute).toBeDefined();
     expect(separatedRoute).toBeDefined();
-    expect(separatedRoute).not.toEqual(primaryRoute);
+    expect(primaryRoute).not.toBeNull();
+    expect(separatedRoute).not.toBeNull();
+    if (!primaryRoute || !separatedRoute) {
+      return;
+    }
 
-    const end = separatedRoute?.[separatedRoute.length - 1];
-    const beforeEnd = separatedRoute?.[separatedRoute.length - 2];
-    expect(end).toBeDefined();
-    expect(beforeEnd).toBeDefined();
+    const segmentLength = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+      Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+    const hasTinyEndpointHook = (route: Array<{ x: number; y: number }>): boolean => {
+      if (route.length >= 3) {
+        const first = segmentLength(route[0], route[1]);
+        const second = segmentLength(route[1], route[2]);
+        if (first <= 26 && second <= 26) {
+          return true;
+        }
+      }
+      if (route.length >= 4) {
+        const n = route.length;
+        const last = segmentLength(route[n - 2], route[n - 1]);
+        const beforeLast = segmentLength(route[n - 3], route[n - 2]);
+        if (last <= 26 && beforeLast <= 26) {
+          return true;
+        }
+      }
+      return false;
+    };
 
-    expect(beforeEnd?.y).toBe(end?.y);
-    expect(beforeEnd?.x).toBeGreaterThan(end?.x ?? Number.POSITIVE_INFINITY);
+    const hasUndersizedEndpointLeg = (route: Array<{ x: number; y: number }>): boolean => {
+      if (route.length < 3) {
+        return false;
+      }
+      const first = segmentLength(route[0], route[1]);
+      const second = segmentLength(route[1], route[2]);
+      if (first < 32 && second > 32) {
+        return true;
+      }
+
+      const n = route.length;
+      const last = segmentLength(route[n - 2], route[n - 1]);
+      const beforeLast = segmentLength(route[n - 3], route[n - 2]);
+      return last < 32 && beforeLast > 32;
+    };
+
+    expect(hasTinyEndpointHook(primaryRoute)).toBe(false);
+    expect(hasTinyEndpointHook(separatedRoute)).toBe(false);
+    expect(hasUndersizedEndpointLeg(primaryRoute)).toBe(false);
+    expect(hasUndersizedEndpointLeg(separatedRoute)).toBe(false);
   });
 });

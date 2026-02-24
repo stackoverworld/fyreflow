@@ -49,7 +49,7 @@ import { mapStepExecutionResult } from "./runner/resultMapping.js";
 import { executeStepForPipeline } from "./runner/stepExecution.js";
 import { checkArtifactsState } from "./runner/artifacts.js";
 import { routeMatchesCondition } from "./runner/qualityGates.js";
-import { retargetDeliveryCompletionGates } from "./runner/qualityGateTargeting.js";
+import { validateDeliveryCompletionGateTargets } from "./runner/qualityGateTargeting.js";
 import { resolveSkipIfArtifactsBypassReason } from "./runner/skipPolicy.js";
 import { validateStepSkipArtifactsQuality } from "./runner/policyProfiles.js";
 
@@ -209,12 +209,28 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
     return Math.max(maxWorkers, stepWorkers);
   }, 1);
   const eligibleStepIds = new Set(orderedSteps.map((step) => step.id));
-  const scopedQualityGates = retargetDeliveryCompletionGates(
+  const deliveryCompletionGateTargetIssues = validateDeliveryCompletionGateTargets(
     pipeline.qualityGates ?? [],
     orderedSteps,
     scopedPipeline.links
   );
-  const pipelineQualityGates = scopedQualityGates.filter(
+  if (deliveryCompletionGateTargetIssues.length > 0) {
+    for (const issue of deliveryCompletionGateTargetIssues) {
+      appendRunLog(
+        store,
+        runId,
+        `Quality gate configuration error (${issue.gateName}): ${issue.reason}`
+      );
+    }
+    markRunFailed(
+      store,
+      runId,
+      "Delivery completion quality gate is misconfigured. Set an explicit targetStepId for the terminal delivery step."
+    );
+    await persistRunStateSnapshot(store, runId, runRootPath);
+    return;
+  }
+  const pipelineQualityGates = (pipeline.qualityGates ?? []).filter(
     (gate) => gate.targetStepId === "any_step" || eligibleStepIds.has(gate.targetStepId)
   );
   const runPipelineDefinition = {
@@ -509,7 +525,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
         storagePaths,
         runInputs
       );
-      markStepRunning(store, runId, step, context, attempt, queuedByStepId, queuedByReason);
+      markStepRunning(store, runId, step, context, attempt, runInputs, queuedByStepId, queuedByReason);
 
       const executionResult = await executeStepForPipeline({
         store,

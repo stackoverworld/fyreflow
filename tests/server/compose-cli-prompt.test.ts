@@ -54,6 +54,7 @@ describe("composeCliPrompt", () => {
     expect(prompt).toContain("Do NOT write/copy artifacts via shell redirection");
     expect(prompt).toContain("Do NOT create or run ad-hoc scripts for artifact transformation");
     expect(prompt).toContain("Never repeat the same write/copy action after success");
+    expect(prompt).toContain("Language requirement: any summary or status summary text must be written in English.");
   });
 
   it("applies strict discipline for executor role as well", () => {
@@ -75,5 +76,14 @@ describe("composeCliPrompt", () => {
     expect(prompt).toContain("Artifact contract:");
     expect(prompt).toContain("Deck synthesis contract:");
     expect(prompt).toContain("Prefer assets-manifest file references");
+  });
+
+  it("requires English summary fields in JSON mode", () => {
+    const input = createInput("review");
+    input.outputMode = "json";
+
+    const prompt = composeCliPrompt(input);
+
+    expect(prompt).toContain("All human-readable summary fields must be in English.");
   });
 });

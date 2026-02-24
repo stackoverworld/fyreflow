@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeRunInputKey, normalizeRunInputs, type RunInputs } from "./runInputs.js";
+import { isSensitiveRunInputKey, normalizeRunInputKey, normalizeRunInputs, type RunInputs } from "./runInputs.js";
 import { decryptSecret, encryptSecret } from "./secretsCrypto.js";
 
 interface SecureInputsFile {
@@ -95,20 +95,7 @@ async function writeSecureInputsFile(pipelineId: string, values: RunInputs): Pro
 }
 
 export function isSensitiveInputKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return false;
-  }
-
-  return (
-    normalized.includes("token") ||
-    normalized.includes("secret") ||
-    normalized.includes("password") ||
-    normalized.includes("api_key") ||
-    normalized.includes("apikey") ||
-    normalized.includes("credential") ||
-    normalized.endsWith("_key")
-  );
+  return isSensitiveRunInputKey(key);
 }
 
 export function pickSensitiveInputs(rawInputs: RunInputs): RunInputs {

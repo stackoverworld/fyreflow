@@ -107,7 +107,6 @@ describe("Quality gate JSON status contract", () => {
   });
 
   it("matches regex status gates from JSON-only outputs via derived status signals", async () => {
-    vi.stubEnv("FYREFLOW_ENABLE_LEGACY_REGEX_GATES", "1");
     const step = createReviewStep();
     const output = JSON.stringify({
       workflow_status: "PASS",

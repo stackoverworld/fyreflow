@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearAiChatPendingRequest,
   loadAiChatHistory,
   loadAiChatHistoryPage,
+  loadAiChatPendingRequest,
   moveAiChatHistory,
-  saveAiChatHistory
+  saveAiChatHistory,
+  saveAiChatPendingRequest
 } from "../../src/lib/aiChatStorage";
-import type { AiChatMessage } from "../../src/lib/types";
+import type { AiChatMessage, FlowBuilderRequest } from "../../src/lib/types";
 
 function createLocalStorageMock(): Storage {
   const store = new Map<string, string>();
@@ -91,5 +94,67 @@ describe("aiChatStorage", () => {
     const targetHistory = loadAiChatHistory("wf-target");
     expect(targetHistory.map((entry) => entry.id)).toEqual(["msg-20", "msg-10", "msg-11"]);
     expect(loadAiChatHistory("wf-source")).toEqual([]);
+  });
+
+  it("persists and restores pending flow-builder request payload", () => {
+    const pendingPayload: FlowBuilderRequest = {
+      requestId: "req-1",
+      prompt: "Generate a flow",
+      providerId: "claude",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: "high",
+      history: [{ role: "user", content: "Generate a flow" }]
+    };
+
+    saveAiChatPendingRequest("wf-pending", {
+      requestId: "req-1",
+      payload: pendingPayload,
+      startedAt: 123456,
+      mode: "build"
+    });
+
+    const restored = loadAiChatPendingRequest("wf-pending");
+    expect(restored).not.toBeNull();
+    expect(restored?.requestId).toBe("req-1");
+    expect(restored?.payload.requestId).toBe("req-1");
+    expect(restored?.payload.prompt).toBe("Generate a flow");
+    expect(restored?.startedAt).toBe(123456);
+    expect(restored?.mode).toBe("build");
+
+    clearAiChatPendingRequest("wf-pending");
+    expect(loadAiChatPendingRequest("wf-pending")).toBeNull();
+  });
+
+  it("restores request ids on chat history entries", () => {
+    saveAiChatHistory("wf-req", [
+      {
+        id: "assistant-1",
+        requestId: "req-history-1",
+        role: "assistant",
+        content: "Generated",
+        timestamp: 1
+      }
+    ]);
+
+    const restored = loadAiChatHistory("wf-req");
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.requestId).toBe("req-history-1");
+  });
+
+  it("ignores malformed pending flow-builder requests", () => {
+    window.localStorage.setItem(
+      "fyreflow:ai-chat-pending-request:wf-invalid",
+      JSON.stringify({
+        requestId: "req-invalid",
+        payload: {
+          requestId: "req-invalid",
+          prompt: "",
+          providerId: "claude",
+          model: "claude-sonnet-4-6"
+        }
+      })
+    );
+
+    expect(loadAiChatPendingRequest("wf-invalid")).toBeNull();
   });
 });

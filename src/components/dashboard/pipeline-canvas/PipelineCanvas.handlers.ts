@@ -13,7 +13,7 @@ import {
   routeMidpoint,
   routePath
 } from "./edgeRendering";
-import { expandRect, nodeRect } from "./useNodeLayout";
+import { expandRect, nodeRect, nodeSourceAnchorRect, nodeTargetAnchorRect } from "./useNodeLayout";
 import { type FlowLink, type FlowNode, type OrchestratorLaneMeta, type Point, type RenderedLink, type ReciprocalLaneMeta, type RouteAxis } from "./types";
 
 const SMART_ROUTE_ENDPOINT_MAX_DISTANCE = 14;
@@ -30,10 +30,15 @@ const ROUTE_LANE_SEPARATION_TRIGGER = 12;
 const ROUTE_LANE_SEPARATION_MIN_BRIDGE = 27;
 const ROUTE_LANE_SEPARATION_MIN_LEG = 12;
 const ROUTE_LANE_SEPARATION_MAX_LEG = 20;
+const ROUTE_TINY_ENDPOINT_SEGMENT_MAX = 26;
+const ROUTE_DASHED_ENDPOINT_LEG_MIN = 32;
+const ROUTE_MICRO_SEGMENT_HARD_MAX = 8;
+const ROUTE_MICRO_SEGMENT_SOFT_MAX = 14;
+const ROUTE_INTERIOR_SOFT_SEGMENT_MAX = 20;
 const ROUTE_EDGE_INDEX_VARIANTS = [0, 1, 2, 3, 4, 5] as const;
 
-function pointDistanceToNodePerimeter(point: Point, node: FlowNode): number {
-  const rect = nodeRect(node);
+function pointDistanceToNodePerimeter(point: Point, node: FlowNode, asSource: boolean): number {
+  const rect = asSource ? nodeSourceAnchorRect(node) : nodeTargetAnchorRect(node);
   const outsideDx = point.x < rect.left ? rect.left - point.x : point.x > rect.right ? point.x - rect.right : 0;
   const outsideDy = point.y < rect.top ? rect.top - point.y : point.y > rect.bottom ? point.y - rect.bottom : 0;
 
@@ -56,8 +61,8 @@ function smartRouteMatchesNodes(route: Point[], sourceNode: FlowNode, targetNode
   }
 
   return (
-    pointDistanceToNodePerimeter(start, sourceNode) <= SMART_ROUTE_ENDPOINT_MAX_DISTANCE &&
-    pointDistanceToNodePerimeter(end, targetNode) <= SMART_ROUTE_ENDPOINT_MAX_DISTANCE
+    pointDistanceToNodePerimeter(start, sourceNode, true) <= SMART_ROUTE_ENDPOINT_MAX_DISTANCE &&
+    pointDistanceToNodePerimeter(end, targetNode, false) <= SMART_ROUTE_ENDPOINT_MAX_DISTANCE
   );
 }
 
@@ -78,8 +83,8 @@ function routeBounds(route: Point[]): { minX: number; maxX: number; minY: number
 }
 
 function routeQualityScore(route: Point[], sourceNode: FlowNode, targetNode: FlowNode, allNodes: FlowNode[]): number {
-  const sourceRect = nodeRect(sourceNode);
-  const targetRect = nodeRect(targetNode);
+  const sourceRect = nodeSourceAnchorRect(sourceNode);
+  const targetRect = nodeTargetAnchorRect(targetNode);
   const sourceCenterX = (sourceRect.left + sourceRect.right) / 2;
   const sourceCenterY = (sourceRect.top + sourceRect.bottom) / 2;
   const targetCenterX = (targetRect.left + targetRect.right) / 2;
@@ -182,6 +187,192 @@ function routeScoreWithOverlap(
 
 function routeKey(route: Point[]): string {
   return route.map((point) => `${point.x},${point.y}`).join("|");
+}
+
+function segmentLength(a: Point, b: Point): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function hasTinyEndpointHook(route: Point[]): boolean {
+  if (route.length >= 3) {
+    const firstLength = segmentLength(route[0], route[1]);
+    const secondLength = segmentLength(route[1], route[2]);
+    if (firstLength <= ROUTE_TINY_ENDPOINT_SEGMENT_MAX && secondLength <= ROUTE_TINY_ENDPOINT_SEGMENT_MAX) {
+      return true;
+    }
+  }
+
+  if (route.length >= 4) {
+    const n = route.length;
+    const lastLength = segmentLength(route[n - 2], route[n - 1]);
+    const beforeLastLength = segmentLength(route[n - 3], route[n - 2]);
+    if (lastLength <= ROUTE_TINY_ENDPOINT_SEGMENT_MAX && beforeLastLength <= ROUTE_TINY_ENDPOINT_SEGMENT_MAX) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasUndersizedEndpointLeg(route: Point[], minLength: number): boolean {
+  if (route.length < 3) {
+    return false;
+  }
+
+  const firstLength = segmentLength(route[0], route[1]);
+  const secondLength = segmentLength(route[1], route[2]);
+  if (firstLength < minLength && secondLength > minLength) {
+    return true;
+  }
+
+  const n = route.length;
+  const lastLength = segmentLength(route[n - 2], route[n - 1]);
+  const beforeLastLength = segmentLength(route[n - 3], route[n - 2]);
+  return lastLength < minLength && beforeLastLength > minLength;
+}
+
+function routeVisualArtifactPenalty(route: Point[], dashed: boolean): number {
+  if (route.length < 2) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  let penalty = 0;
+  for (let index = 1; index < route.length; index += 1) {
+    const length = segmentLength(route[index - 1], route[index]);
+    const isEndpointSegment = index === 1 || index === route.length - 1;
+
+    if (length <= ROUTE_MICRO_SEGMENT_HARD_MAX) {
+      penalty += isEndpointSegment ? 260 : 340;
+      continue;
+    }
+
+    if (length < ROUTE_MICRO_SEGMENT_SOFT_MAX) {
+      penalty += isEndpointSegment ? 120 : 170;
+      continue;
+    }
+
+    if (!isEndpointSegment && length < ROUTE_INTERIOR_SOFT_SEGMENT_MAX) {
+      penalty += 28;
+    }
+  }
+
+  if (hasTinyEndpointHook(route)) {
+    penalty += 900;
+  }
+
+  if (dashed && hasUndersizedEndpointLeg(route, ROUTE_DASHED_ENDPOINT_LEG_MIN)) {
+    penalty += 420;
+  }
+
+  return penalty;
+}
+
+function stabilizeStartLeg(route: Point[], minLength: number): Point[] {
+  if (route.length < 3) {
+    return route;
+  }
+
+  const next = [...route];
+  const a = next[0];
+  const b = next[1];
+  const c = next[2];
+  const firstLength = segmentLength(a, b);
+  const secondLength = segmentLength(b, c);
+
+  if (firstLength >= minLength || secondLength <= minLength) {
+    return route;
+  }
+
+  if (a.y === b.y && b.x === c.x) {
+    const direction = Math.sign(b.x - a.x);
+    if (direction === 0) {
+      return route;
+    }
+    const needed = minLength - firstLength;
+    const available = secondLength - minLength;
+    const shift = Math.min(needed, available);
+    if (shift <= 0) {
+      return route;
+    }
+    next[1] = { x: b.x + direction * shift, y: b.y };
+    next[2] = { x: c.x + direction * shift, y: c.y };
+    return normalizeRoute(next);
+  }
+
+  if (a.x === b.x && b.y === c.y) {
+    const direction = Math.sign(b.y - a.y);
+    if (direction === 0) {
+      return route;
+    }
+    const needed = minLength - firstLength;
+    const available = secondLength - minLength;
+    const shift = Math.min(needed, available);
+    if (shift <= 0) {
+      return route;
+    }
+    next[1] = { x: b.x, y: b.y + direction * shift };
+    next[2] = { x: c.x, y: c.y + direction * shift };
+    return normalizeRoute(next);
+  }
+
+  return route;
+}
+
+function stabilizeEndLeg(route: Point[], minLength: number): Point[] {
+  if (route.length < 3) {
+    return route;
+  }
+
+  const next = [...route];
+  const n = next.length;
+  const x = next[n - 3];
+  const y = next[n - 2];
+  const z = next[n - 1];
+  const previousLength = segmentLength(x, y);
+  const lastLength = segmentLength(y, z);
+
+  if (lastLength >= minLength || previousLength <= minLength) {
+    return route;
+  }
+
+  if (y.y === z.y && x.x === y.x) {
+    const direction = Math.sign(z.x - y.x);
+    if (direction === 0) {
+      return route;
+    }
+    const needed = minLength - lastLength;
+    const available = previousLength - minLength;
+    const shift = Math.min(needed, available);
+    if (shift <= 0) {
+      return route;
+    }
+    next[n - 2] = { x: y.x - direction * shift, y: y.y };
+    next[n - 3] = { x: x.x - direction * shift, y: x.y };
+    return normalizeRoute(next);
+  }
+
+  if (y.x === z.x && x.y === y.y) {
+    const direction = Math.sign(z.y - y.y);
+    if (direction === 0) {
+      return route;
+    }
+    const needed = minLength - lastLength;
+    const available = previousLength - minLength;
+    const shift = Math.min(needed, available);
+    if (shift <= 0) {
+      return route;
+    }
+    next[n - 2] = { x: y.x, y: y.y - direction * shift };
+    next[n - 3] = { x: x.x, y: x.y - direction * shift };
+    return normalizeRoute(next);
+  }
+
+  return route;
+}
+
+function stabilizeEndpointLegs(route: Point[], minLength: number): Point[] {
+  const afterStart = stabilizeStartLeg(route, minLength);
+  return stabilizeEndLeg(afterStart, minLength);
 }
 
 function segmentAxis(start: Point | undefined, end: Point | undefined): RouteAxis | null {
@@ -310,7 +501,8 @@ function resolveRouteLaneSeparation(
   sourceNode: FlowNode,
   targetNode: FlowNode,
   allNodes: FlowNode[],
-  existingRoutes: Point[][]
+  existingRoutes: Point[][],
+  avoidTinyEndpointHooks: boolean
 ): Point[] {
   const effectiveAxis = axis ?? routeAxisFromEndpoints(route);
   if (!effectiveAxis || existingRoutes.length === 0) {
@@ -337,6 +529,9 @@ function resolveRouteLaneSeparation(
 
     const shiftedRoute = offsetRoutePerpendicular(route, effectiveAxis, offset);
     if (shiftedRoute.length < 2 || routeIntersections(shiftedRoute, obstacles) > 0) {
+      continue;
+    }
+    if (avoidTinyEndpointHooks && hasTinyEndpointHook(shiftedRoute)) {
       continue;
     }
 
@@ -465,19 +660,91 @@ export function buildRenderedLinks({
       normalizedSmartRoute.length >= 2 &&
       shouldUseSmartRoute(normalizedSmartRoute, fallbackRouteResult.route, sourceNode, targetNode, nodes, selectedRoutes);
 
-    const { route, axis } =
+    const preferredRouteResult =
       useValidatedSmartRoute
         ? {
             route: normalizedSmartRoute,
             axis: routeAxisFromEndpoints(normalizedSmartRoute)
           }
         : fallbackRouteResult;
-    const resolvedRoute = manualWaypoint
-      ? route
-      : resolveRouteLaneSeparation(route, axis, sourceNode, targetNode, nodes, selectedRoutes);
-    const resolvedAxis = axis ?? routeAxisFromEndpoints(resolvedRoute);
+    const dasharray = edgeStrokeDasharray(sourceNode.role, targetNode.role);
+    const dashed = dasharray !== null;
+    const seenCandidateKeys = new Set<string>();
+    const routeCandidates: Array<{ route: Point[]; axis: RouteAxis | null }> = [];
 
-    const path = routePath(resolvedRoute, manualWaypoint ? MANUAL_CORNER_RADIUS : CORNER_RADIUS);
+    const pushRouteCandidate = (candidateRoute: Point[], candidateAxis: RouteAxis | null): void => {
+      if (candidateRoute.length < 2) {
+        return;
+      }
+
+      const stabilizedRoute =
+        !manualWaypoint && dashed
+          ? stabilizeEndpointLegs(candidateRoute, ROUTE_DASHED_ENDPOINT_LEG_MIN)
+          : candidateRoute;
+      const key = routeKey(stabilizedRoute);
+      if (seenCandidateKeys.has(key)) {
+        return;
+      }
+
+      seenCandidateKeys.add(key);
+      routeCandidates.push({
+        route: stabilizedRoute,
+        axis: candidateAxis ?? routeAxisFromEndpoints(stabilizedRoute)
+      });
+    };
+
+    const buildCandidateVariants = (baseRoute: Point[], baseAxis: RouteAxis | null): void => {
+      pushRouteCandidate(baseRoute, baseAxis);
+
+      if (manualWaypoint) {
+        return;
+      }
+
+      const separated = resolveRouteLaneSeparation(
+        baseRoute,
+        baseAxis,
+        sourceNode,
+        targetNode,
+        nodes,
+        selectedRoutes,
+        dashed
+      );
+      pushRouteCandidate(separated, baseAxis ?? routeAxisFromEndpoints(separated));
+    };
+
+    buildCandidateVariants(preferredRouteResult.route, preferredRouteResult.axis);
+    if (useValidatedSmartRoute) {
+      buildCandidateVariants(fallbackRouteResult.route, fallbackRouteResult.axis);
+    }
+
+    const fallbackCandidate = routeCandidates[0] ?? {
+      route: preferredRouteResult.route,
+      axis: preferredRouteResult.axis
+    };
+
+    let bestCandidate = fallbackCandidate;
+    let bestArtifactPenalty = routeVisualArtifactPenalty(fallbackCandidate.route, dashed);
+    let bestQualityScore = routeScoreWithOverlap(fallbackCandidate.route, sourceNode, targetNode, nodes, selectedRoutes);
+
+    for (let candidateIndex = 1; candidateIndex < routeCandidates.length; candidateIndex += 1) {
+      const candidate = routeCandidates[candidateIndex];
+      const candidateArtifactPenalty = routeVisualArtifactPenalty(candidate.route, dashed);
+      const candidateQualityScore = routeScoreWithOverlap(candidate.route, sourceNode, targetNode, nodes, selectedRoutes);
+      const hasBetterArtifacts = candidateArtifactPenalty < bestArtifactPenalty;
+      const hasBetterQuality = candidateArtifactPenalty === bestArtifactPenalty && candidateQualityScore < bestQualityScore;
+
+      if (hasBetterArtifacts || hasBetterQuality) {
+        bestCandidate = candidate;
+        bestArtifactPenalty = candidateArtifactPenalty;
+        bestQualityScore = candidateQualityScore;
+      }
+    }
+
+    const resolvedRoute = bestCandidate.route;
+    const resolvedAxis = bestCandidate.axis ?? routeAxisFromEndpoints(resolvedRoute);
+
+    const cornerRadius = manualWaypoint ? MANUAL_CORNER_RADIUS : CORNER_RADIUS;
+    const path = routePath(resolvedRoute, cornerRadius);
     const endPoint = resolvedRoute[resolvedRoute.length - 1];
     if (!path || !endPoint) {
       continue;
@@ -491,7 +758,7 @@ export function buildRenderedLinks({
       pathDistance,
       endPoint,
       axis: resolvedAxis,
-      dasharray: edgeStrokeDasharray(sourceNode.role, targetNode.role),
+      dasharray,
       hasOrchestrator: edgeInvolvesOrchestrator(sourceNode.role, targetNode.role),
       controlPoint: manualWaypoint ?? routeMidpoint(resolvedRoute),
       hasManualRoute: Boolean(manualWaypoint),

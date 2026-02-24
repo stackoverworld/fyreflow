@@ -13,7 +13,7 @@ export const CLAUDE_CLI_COMMAND =
   (process.env.CLAUDE_CLI_PATH ?? "").trim() ||
   (fs.existsSync(CLAUDE_LOCAL_BIN_PATH) ? CLAUDE_LOCAL_BIN_PATH : "claude");
 
-export const CLAUDE_CLI_SKIP_PERMISSIONS = (process.env.CLAUDE_CLI_SKIP_PERMISSIONS ?? "1").trim() !== "0";
+export const CLAUDE_CLI_SKIP_PERMISSIONS = (process.env.CLAUDE_CLI_SKIP_PERMISSIONS ?? "0").trim() !== "0";
 export const CLAUDE_CLI_STRICT_MCP = (process.env.CLAUDE_CLI_STRICT_MCP ?? "1").trim() !== "0";
 export const CLAUDE_CLI_DISABLE_SLASH_COMMANDS = (process.env.CLAUDE_CLI_DISABLE_SLASH_COMMANDS ?? "1").trim() !== "0";
 const DEFAULT_CLAUDE_CLI_SETTING_SOURCES = "project,local";

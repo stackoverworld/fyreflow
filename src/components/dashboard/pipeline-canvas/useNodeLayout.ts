@@ -10,9 +10,36 @@ export const DRAG_GRID_SIZE = 24;
 
 /** Total visual height of a node including its delegation sub-card. */
 export function nodeVisualHeight(node: FlowNode): number {
-  return node.enableDelegation && node.delegationCount && node.delegationCount > 0
+  return hasDelegationCard(node)
     ? NODE_HEIGHT + DELEGATION_SPINE_HEIGHT + DELEGATION_CARD_HEIGHT
     : NODE_HEIGHT;
+}
+
+export function hasDelegationCard(node: FlowNode): boolean {
+  return Boolean(node.enableDelegation && node.delegationCount && node.delegationCount > 0);
+}
+
+export function nodeDelegationRect(node: FlowNode): Rect | null {
+  if (!hasDelegationCard(node)) {
+    return null;
+  }
+
+  const top = node.position.y + NODE_HEIGHT + DELEGATION_SPINE_HEIGHT;
+  return {
+    left: node.position.x,
+    right: node.position.x + NODE_WIDTH,
+    top,
+    bottom: top + DELEGATION_CARD_HEIGHT
+  };
+}
+
+export function nodeMainCardRect(node: FlowNode): Rect {
+  return {
+    left: node.position.x,
+    right: node.position.x + NODE_WIDTH,
+    top: node.position.y,
+    bottom: node.position.y + NODE_HEIGHT
+  };
 }
 
 export function clamp(value: number, min: number, max: number): number {
@@ -30,6 +57,21 @@ export function nodeRect(node: FlowNode): Rect {
     top: node.position.y,
     bottom: node.position.y + nodeVisualHeight(node)
   };
+}
+
+/** Generic anchor rect defaults to the main card. */
+export function nodeAnchorRect(node: FlowNode): Rect {
+  return nodeMainCardRect(node);
+}
+
+/** Outgoing edge anchors originate from the main card. */
+export function nodeSourceAnchorRect(node: FlowNode): Rect {
+  return nodeMainCardRect(node);
+}
+
+/** Incoming edge anchors always terminate on the main card. */
+export function nodeTargetAnchorRect(node: FlowNode): Rect {
+  return nodeMainCardRect(node);
 }
 
 export function expandRect(rect: Rect, padding: number): Rect {

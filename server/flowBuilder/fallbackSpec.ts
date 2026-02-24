@@ -160,10 +160,14 @@ export function fallbackSpec(prompt: string): GeneratedFlowSpec {
         ...(includeOrchestrator
           ? [{ source: "Main Orchestrator", target: "Design Asset Extraction", condition: "always" as const }]
           : []),
+        { source: "Design Asset Extraction", target: "Design Asset Extraction", condition: "on_fail" },
         { source: root, target: "Source Content Extraction", condition: "always" },
+        { source: "Source Content Extraction", target: "Source Content Extraction", condition: "on_fail" },
+        { source: "HTML Builder", target: "HTML Builder", condition: "on_fail" },
         { source: "Source Content Extraction", target: "HTML Builder", condition: "always" },
         { source: "HTML Builder", target: "HTML Reviewer", condition: "always" },
         { source: "HTML Reviewer", target: "HTML Builder", condition: "on_fail" },
+        { source: "PDF Renderer", target: "PDF Renderer", condition: "on_fail" },
         { source: "HTML Reviewer", target: "PDF Renderer", condition: "on_pass" },
         { source: "PDF Renderer", target: "PDF Reviewer", condition: "always" },
         { source: "PDF Reviewer", target: "HTML Builder", condition: "on_fail" },

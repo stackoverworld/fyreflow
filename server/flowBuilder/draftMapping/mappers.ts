@@ -87,17 +87,12 @@ export function buildQualityGates(
   );
   const seen = new Set<string>();
   const gates: NonNullable<PipelineInput["qualityGates"]> = [];
-  const fallbackDeliveryTargetStepId = resolveFallbackDeliveryTargetStepId(stepRecords);
 
   for (const gate of spec.qualityGates as DraftQualityGateSpec[]) {
-    const mappedTargetStepId =
+    const targetStepId =
       typeof gate.target === "string" && gate.target.trim().length > 0
         ? idByName.get(normalizeRef(gate.target)) ?? "any_step"
         : "any_step";
-    const targetStepId =
-      mappedTargetStepId === "any_step" && isDeliveryCompletionGate(gate) && fallbackDeliveryTargetStepId
-        ? fallbackDeliveryTargetStepId
-        : mappedTargetStepId;
 
     const normalized = {
       id: nanoid(),
@@ -123,31 +118,6 @@ export function buildQualityGates(
   }
 
   return gates.slice(0, 80);
-}
-
-function isDeliveryCompletionGate(gate: DraftQualityGateSpec): boolean {
-  if (gate.kind !== "regex_must_match") {
-    return false;
-  }
-
-  const pattern = gate.pattern?.trim() ?? "";
-  return /\bworkflow_status\b/i.test(pattern) && /\bcomplete\b/i.test(pattern);
-}
-
-function resolveFallbackDeliveryTargetStepId(stepRecords: DraftStepRecord[]): string | null {
-  const withId = stepRecords.filter(
-    (step): step is DraftStepRecord & { id: string } => typeof step.id === "string" && step.id.trim().length > 0
-  );
-  if (withId.length === 0) {
-    return null;
-  }
-
-  const trailingExecutor = [...withId].reverse().find((step) => step.role === "executor");
-  if (trailingExecutor) {
-    return trailingExecutor.id;
-  }
-
-  return withId[withId.length - 1]?.id ?? null;
 }
 
 function gateDedupeKey(gate: NonNullable<PipelineInput["qualityGates"]>[number]): string {

@@ -3,7 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 import { Textarea } from "@/components/optics/textarea";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
-import { MIN_PROMPT_LENGTH } from "@/components/dashboard/ai-builder/useAiBuilderSession";
+import { MAX_PROMPT_LENGTH, MIN_PROMPT_LENGTH } from "@/components/dashboard/ai-builder/useAiBuilderSession";
 import type { AiBuilderMode } from "@/components/dashboard/ai-builder/mode";
 
 const MODE_SEGMENTS: Segment<AiBuilderMode>[] = [
@@ -32,6 +32,11 @@ export function PromptEditor({
   onModeChange,
   onSend,
 }: PromptEditorProps) {
+  const promptLength = prompt.trim().length;
+  const promptTooShort = promptLength < MIN_PROMPT_LENGTH;
+  const promptTooLong = promptLength > MAX_PROMPT_LENGTH;
+  const sendDisabled = composerDisabled || generating || promptTooShort || promptTooLong;
+
   return (
     <div className="border-t border-ink-800/60 p-3">
       <div className="mb-2.5 flex items-center justify-between gap-2">
@@ -58,18 +63,20 @@ export function PromptEditor({
           onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              void onSend();
+              if (!sendDisabled) {
+                void onSend();
+              }
             }
           }}
           placeholder={mode === "agent" ? "Describe changes to apply to the flow..." : "Ask a question about the current flow..."}
         />
         <button
           type="button"
-          disabled={composerDisabled || generating || prompt.trim().length < MIN_PROMPT_LENGTH}
+          disabled={sendDisabled}
           onClick={() => void onSend()}
           className={cn(
             "absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
-            prompt.trim().length >= MIN_PROMPT_LENGTH && !generating && !composerDisabled
+            !sendDisabled
               ? "bg-ember-500 text-ink-950 hover:bg-ember-400 cursor-pointer"
               : "bg-ink-800 text-ink-600 cursor-not-allowed"
           )}
@@ -78,8 +85,9 @@ export function PromptEditor({
           <Send className="h-3.5 w-3.5" />
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] text-ink-600">
-        Shift+Enter for new line &middot; min 2 characters
+      <p className={cn("mt-1.5 text-[11px]", promptTooLong ? "text-red-400" : "text-ink-600")}>
+        Shift+Enter for new line &middot; min {MIN_PROMPT_LENGTH} characters &middot; max {MAX_PROMPT_LENGTH}
+        {promptTooLong ? ` (${promptLength}/${MAX_PROMPT_LENGTH})` : ""}
         {modeLocked ? " · Active run locks Agent mode." : ""}
       </p>
     </div>

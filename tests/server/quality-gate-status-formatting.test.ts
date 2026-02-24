@@ -60,7 +60,6 @@ describe("status marker normalization", () => {
   });
 
   it("allows regex quality gates to pass when status value is wrapped with markdown markers", async () => {
-    vi.stubEnv("FYREFLOW_ENABLE_LEGACY_REGEX_GATES", "1");
     const output = [
       "## Review",
       "HTML_REVIEW_STATUS: **PASS**",
@@ -90,7 +89,6 @@ describe("status marker normalization", () => {
   });
 
   it("treats WORKFLOW_STATUS: COMPLETE as pass for legacy workflow-status regex gates", async () => {
-    vi.stubEnv("FYREFLOW_ENABLE_LEGACY_REGEX_GATES", "1");
     const output = [
       "## PDF Review",
       "PDF_REVIEW_STATUS: PASS",
@@ -117,7 +115,29 @@ describe("status marker normalization", () => {
     expect(inferWorkflowOutcome(output)).toBe("pass");
   });
 
-  it("skips regex quality gates unless legacy debug mode is enabled", async () => {
+  it("evaluates regex quality gates by default", async () => {
+    const output = "WORKFLOW_STATUS: FAIL";
+    const gates = [createRegexGate("gate-workflow", "Workflow Gate", "WORKFLOW_STATUS\\s*:\\s*PASS")];
+
+    const results = await evaluatePipelineQualityGates(
+      createStep(),
+      output,
+      null,
+      gates,
+      {
+        sharedStoragePath: "",
+        isolatedStoragePath: "",
+        runStoragePath: ""
+      },
+      {}
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe("fail");
+  });
+
+  it("allows disabling legacy regex gate evaluation explicitly", async () => {
+    vi.stubEnv("FYREFLOW_ENABLE_LEGACY_REGEX_GATES", "0");
     const output = "WORKFLOW_STATUS: FAIL";
     const gates = [createRegexGate("gate-workflow", "Workflow Gate", "WORKFLOW_STATUS\\s*:\\s*PASS")];
 

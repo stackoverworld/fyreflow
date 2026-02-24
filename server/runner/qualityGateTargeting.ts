@@ -39,36 +39,76 @@ function resolveDeliveryTargetStepId(steps: PipelineStep[], links: PipelineLink[
   return steps[steps.length - 1]?.id ?? null;
 }
 
-export function retargetDeliveryCompletionGates(
+export interface DeliveryCompletionGateTargetIssue {
+  gateId: string;
+  gateName: string;
+  targetStepId: string;
+  expectedStepId: string | null;
+  reason: string;
+}
+
+export function validateDeliveryCompletionGateTargets(
   gates: PipelineQualityGate[],
   steps: PipelineStep[],
   links: PipelineLink[]
-): PipelineQualityGate[] {
+): DeliveryCompletionGateTargetIssue[] {
   if (gates.length === 0) {
-    return gates;
+    return [];
   }
 
-  const targetStepId = resolveDeliveryTargetStepId(steps, links);
-  if (!targetStepId) {
-    return gates;
-  }
+  const expectedStepId = resolveDeliveryTargetStepId(steps, links);
+  const stepIds = new Set(steps.map((step) => step.id));
+  const issues: DeliveryCompletionGateTargetIssue[] = [];
 
-  let changed = false;
-  const next = gates.map((gate) => {
+  for (const gate of gates) {
     if (!isDeliveryCompletionGate(gate)) {
-      return gate;
+      continue;
     }
 
-    if (gate.targetStepId === targetStepId) {
-      return gate;
+    const targetStepId = gate.targetStepId;
+    if (targetStepId === "any_step") {
+      issues.push({
+        gateId: gate.id,
+        gateName: gate.name,
+        targetStepId,
+        expectedStepId,
+        reason: "Delivery completion gates must target an explicit final delivery step; any_step is not allowed."
+      });
+      continue;
     }
 
-    changed = true;
-    return {
-      ...gate,
-      targetStepId
-    };
-  });
+    if (!stepIds.has(targetStepId)) {
+      issues.push({
+        gateId: gate.id,
+        gateName: gate.name,
+        targetStepId,
+        expectedStepId,
+        reason: `Target step "${targetStepId}" is not present in the active pipeline graph.`
+      });
+      continue;
+    }
 
-  return changed ? next : gates;
+    if (expectedStepId && targetStepId !== expectedStepId) {
+      issues.push({
+        gateId: gate.id,
+        gateName: gate.name,
+        targetStepId,
+        expectedStepId,
+        reason: `Target step "${targetStepId}" is not the terminal delivery step "${expectedStepId}".`
+      });
+      continue;
+    }
+
+    if (!expectedStepId) {
+      issues.push({
+        gateId: gate.id,
+        gateName: gate.name,
+        targetStepId,
+        expectedStepId: null,
+        reason: "Unable to resolve a terminal delivery step for delivery completion gate validation."
+      });
+    }
+  }
+
+  return issues;
 }

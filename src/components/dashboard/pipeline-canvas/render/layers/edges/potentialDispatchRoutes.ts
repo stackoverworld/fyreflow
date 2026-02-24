@@ -16,7 +16,7 @@ import type {
   OrchestratorLaneMeta,
   Point
 } from "../../../types";
-import { expandRect, nodeRect } from "../../../useNodeLayout";
+import { expandRect, nodeAnchorRect, nodeRect } from "../../../useNodeLayout";
 
 export interface PotentialDispatchRoute {
   id: string;
@@ -126,8 +126,8 @@ export function buildPotentialOrchestratorDispatchRoutes(
         continue;
       }
 
-      const side = preferredSide(nodeRect(orchestratorNode), nodeRect(targetNode));
-      const targetCenter = rectCenter(nodeRect(targetNode));
+      const side = preferredSide(nodeAnchorRect(orchestratorNode), nodeAnchorRect(targetNode));
+      const targetCenter = rectCenter(nodeAnchorRect(targetNode));
       const sortKey = side === "left" || side === "right" ? targetCenter.y : targetCenter.x;
 
       candidates.push({

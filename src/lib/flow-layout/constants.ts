@@ -21,6 +21,7 @@ export const ELK_BASE_LAYOUT_OPTIONS: Record<string, string> = {
   "elk.direction": "RIGHT",
   "elk.edgeRouting": "ORTHOGONAL",
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+  "elk.layered.nodePlacement.favorStraightEdges": "true",
   "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
   "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
   "elk.layered.feedbackEdges": "true",

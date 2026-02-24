@@ -11,6 +11,8 @@ export interface RouteNodeInput {
   id: string;
   position: Position;
   role?: AgentRole;
+  enableDelegation?: boolean;
+  delegationCount?: number;
 }
 
 export interface RouteLinkInput {

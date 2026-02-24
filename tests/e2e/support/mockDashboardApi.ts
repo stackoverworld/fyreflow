@@ -11,6 +11,7 @@ import type {
 
 interface MockDashboardApiOptions {
   aiGeneratedFlowName?: string;
+  aiGeneratedFlowNames?: string[];
   defaultStepIsolatedStorage?: boolean;
   defaultStepSharedStorage?: boolean;
 }
@@ -267,6 +268,7 @@ export async function mockDashboardApi(
   const state = createInitialState(options);
   let pipelineCounter = 1;
   let runCounter = 0;
+  let flowBuilderGenerationCounter = 0;
   const oauthByProvider: Record<ProviderId, ProviderOAuthStatus> = {
     openai: createInitialOAuthStatus("openai"),
     claude: createInitialOAuthStatus("claude")
@@ -562,9 +564,15 @@ export async function mockDashboardApi(
       const body = parseRequestBody(route);
       const currentDraft = body.currentDraft as PipelinePayload | undefined;
       const baseDraft = currentDraft ?? toPipelinePayload(state.pipelines[0]);
+      const generatedFlowName =
+        options.aiGeneratedFlowNames?.[flowBuilderGenerationCounter] ??
+        options.aiGeneratedFlowNames?.[options.aiGeneratedFlowNames.length - 1] ??
+        options.aiGeneratedFlowName ??
+        "AI Generated Regression Flow";
+      flowBuilderGenerationCounter += 1;
       const nextDraft: PipelinePayload = {
         ...baseDraft,
-        name: options.aiGeneratedFlowName ?? "AI Generated Regression Flow"
+        name: generatedFlowName
       };
       await fulfillJson(route, 200, {
         action: "update_current_flow",

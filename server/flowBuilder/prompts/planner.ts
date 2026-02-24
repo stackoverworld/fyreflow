@@ -16,6 +16,8 @@ interface PlannerRequest {
   }>;
 }
 
+const REGENERATION_OUTPUT_CLIP_CHARS = 48_000;
+
 function summarizeAvailableMcpServers(servers: PlannerRequest["availableMcpServers"]): string {
   if (!Array.isArray(servers) || servers.length === 0) {
     return "No MCP servers configured.";
@@ -73,8 +75,11 @@ export function buildPlannerContext(request: PlannerRequest): string {
     "- Use on_fail/on_pass links for remediation loops when reviewers exist.",
     "- Always configure pipeline qualityGates. At minimum, add one blocking status gate per review/tester step.",
     "- qualityGate kinds supported: regex_must_match, regex_must_not_match, json_field_exists, artifact_exists, manual_approval.",
+    "- Use json_field_exists for JSON outputs, or provide artifactPath when validating a JSON file artifact.",
     "- Use manual_approval for explicit human checkpoints; these gates pause run execution until approved or rejected.",
     "- Use step requiredOutputFields/requiredOutputFiles for step contracts; use qualityGates for pipeline-level blocking checks.",
+    "- For every non-review/tester step with required outputs, outputFormat=json, or blocking quality gates targeted at that step, include at least one on_fail remediation route.",
+    "- Do not create flows where producer steps can only pass if their artifacts already existed before the first run.",
     "- For artifact-producing flows, enable shared storage on producer/consumer steps and write intermediate files under {{shared_storage_path}}.",
     "- Use isolated storage for step-private scratch/temp artifacts and caches that should remain local to one step.",
     "- Prefer {{shared_storage_path}} for internal pipeline artifacts; reserve {{input.output_dir}} for final user-facing deliverables.",
@@ -96,6 +101,7 @@ export function buildPlannerContext(request: PlannerRequest): string {
     "- Use step.policyProfileIds to enable reusable backend policies (for example design_deck_assets for frame-map/assets-manifest contracts).",
     "- Use step.cacheBypassInputKeys when a step must bypass skip-cache on explicit run inputs.",
     "- Use step.cacheBypassOrchestratorPromptPatterns when orchestrator instructions should force a step refresh.",
+    "- If required external tooling is unavailable in configured MCP servers, add an explicit prerequisite/manual approval checkpoint instead of pretending extraction already happened.",
     "",
     providerRuntime,
     "",
@@ -112,8 +118,8 @@ export function buildPlannerRegenerationContext(
   rawOutput: string,
   repairedOutput?: string
 ): string {
-  const rawClip = clip(rawOutput, 12000);
-  const repairedClip = repairedOutput ? clip(repairedOutput, 12000) : "";
+  const rawClip = clip(rawOutput, REGENERATION_OUTPUT_CLIP_CHARS);
+  const repairedClip = repairedOutput ? clip(repairedOutput, REGENERATION_OUTPUT_CLIP_CHARS) : "";
 
   return [
     buildPlannerContext(request),

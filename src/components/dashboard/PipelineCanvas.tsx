@@ -280,7 +280,9 @@ export function PipelineCanvas({
             x: node.position.x,
             y: node.position.y
           },
-          role: node.role
+          role: node.role,
+          enableDelegation: node.enableDelegation,
+          delegationCount: node.delegationCount
         })),
         links.map((link) => ({
           id: link.id,

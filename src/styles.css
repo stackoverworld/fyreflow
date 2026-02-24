@@ -300,11 +300,15 @@
 }
 
 .node-running-tint {
-  background-color: rgba(217, 119, 87, 0.035) !important;
+  background-color: rgb(var(--ink-900) / 0.46) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  backdrop-filter: blur(16px) saturate(1.1);
 }
 
 [data-theme="light"] .node-running-tint {
-  background-color: rgba(196, 104, 73, 0.04) !important;
+  background-color: rgba(255, 255, 255, 0.44) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.06);
+  backdrop-filter: blur(14px) saturate(1.06);
 }
 
 [data-theme="dark"] .pipeline-node-surface {
@@ -384,6 +388,30 @@
   box-shadow:
     0 0 20px 5px rgba(196, 104, 73, 0.22),
     0 0 44px 10px rgba(196, 104, 73, 0.07);
+}
+
+/* ── Shiny text effect ── */
+
+.shiny-text {
+  color: rgb(var(--ink-600));
+  background: linear-gradient(
+    90deg,
+    rgb(var(--ink-600)) 0%,
+    rgb(var(--ink-600)) 35%,
+    rgb(var(--ink-100)) 50%,
+    rgb(var(--ink-600)) 65%,
+    rgb(var(--ink-600)) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shiny-sweep 2.5s ease-in-out infinite;
+}
+
+@keyframes shiny-sweep {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 
 /* ── Theme-aware icon inversion ── */

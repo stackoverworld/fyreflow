@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronRight,
@@ -24,17 +24,25 @@ import type {
   Pipeline,
   PipelineRun,
   StorageConfig,
-  StorageFileContentResponse,
   StorageFileEntry,
   StorageFileListResponse,
   StorageFilesScope
 } from "@/lib/types";
-import { deleteStorageFilePath, getStorageFileContent, listStorageFiles } from "@/lib/api";
+import { buildStorageRawFileUrl, deleteStorageFilePath, getStorageFileContent, listStorageFiles } from "@/lib/api";
+import { useIconSpin } from "@/lib/useIconSpin";
 import { Button } from "@/components/optics/button";
 import { Select } from "@/components/optics/select";
 import { Tooltip } from "@/components/optics/tooltip";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
 import { FilePreviewModal } from "@/components/dashboard/file-preview/FilePreviewModal";
+import {
+  chooseContentPreviewBytes,
+  classifyFilePreviewByName,
+  getRawPreviewLimitBytes,
+  isRawPreviewTooLarge,
+  resolveTextPreviewKind,
+  type FilePreviewModalData
+} from "@/components/dashboard/file-preview/previewModel";
 
 interface FilesPanelProps {
   selectedPipeline: Pipeline | undefined;
@@ -142,11 +150,15 @@ export function FilesPanel({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const [preview, setPreview] = useState<StorageFileContentResponse | null>(null);
+  const [preview, setPreview] = useState<FilePreviewModalData | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const closePreviewModal = useCallback(() => {
+    setModalOpen(false);
+  }, []);
 
   const clearPreview = () => {
     setPreviewPath(null);
@@ -283,34 +295,133 @@ export function FilesPanel({
       return;
     }
 
+    const runId = scope === "runs" ? selectedRunId : undefined;
+    const runIdValue = runId ?? null;
+    const classification = classifyFilePreviewByName(entry.name);
+    const sizeBytes = entry.sizeBytes ?? 0;
     const requestId = previewRequestCounterRef.current + 1;
     previewRequestCounterRef.current = requestId;
     setPreviewPath(entry.path);
     setPreview(null);
     setPreviewError(null);
     setPreviewLoading(true);
+    setModalOpen(false);
 
     try {
+      if (classification.mode === "raw") {
+        if (isRawPreviewTooLarge(classification.kind, entry.sizeBytes)) {
+          const limitBytes = getRawPreviewLimitBytes(classification.kind);
+          if (previewRequestCounterRef.current !== requestId) {
+            return;
+          }
+
+          setPreview({
+            pipelineId: selectedPipeline.id,
+            scope,
+            runId: runIdValue,
+            kind: "binary",
+            name: entry.name,
+            path: entry.path,
+            mimeType: classification.mimeType,
+            sizeBytes,
+            message: `File is too large for inline preview (${formatSize(sizeBytes)}). Limit: ${formatSize(limitBytes)}.`
+          });
+          setModalOpen(true);
+          return;
+        }
+
+        const rawUrl = buildStorageRawFileUrl({
+          pipelineId: selectedPipeline.id,
+          scope,
+          runId,
+          path: entry.path
+        });
+
+        if (previewRequestCounterRef.current !== requestId) {
+          return;
+        }
+
+        setPreview({
+          pipelineId: selectedPipeline.id,
+          scope,
+          runId: runIdValue,
+          kind: classification.kind,
+          name: entry.name,
+          path: entry.path,
+          mimeType: classification.mimeType,
+          sizeBytes,
+          rawUrl
+        });
+        setModalOpen(true);
+        return;
+      }
+
+      if (classification.mode === "unsupported") {
+        if (previewRequestCounterRef.current !== requestId) {
+          return;
+        }
+
+        setPreview({
+          pipelineId: selectedPipeline.id,
+          scope,
+          runId: runIdValue,
+          kind: "binary",
+          name: entry.name,
+          path: entry.path,
+          mimeType: classification.mimeType,
+          sizeBytes,
+          message: "Preview is unavailable for this file type."
+        });
+        setModalOpen(true);
+        return;
+      }
+
       const response = await getStorageFileContent({
         pipelineId: selectedPipeline.id,
         scope,
-        runId: scope === "runs" ? selectedRunId : undefined,
-        path: entry.path
+        runId,
+        path: entry.path,
+        maxBytes: chooseContentPreviewBytes(entry.sizeBytes)
       });
       if (previewRequestCounterRef.current !== requestId) {
         return;
       }
 
-      setPreview(response);
-      if (response.previewKind === "html") {
-        setModalOpen(true);
-      }
+      setPreview({
+        pipelineId: response.pipelineId,
+        scope: response.scope,
+        runId: response.runId,
+        kind: resolveTextPreviewKind(response.mimeType, response.previewKind),
+        name: response.name,
+        path: response.path,
+        mimeType: response.mimeType,
+        sizeBytes: response.sizeBytes,
+        content: response.content,
+        truncated: response.truncated,
+        maxBytes: response.maxBytes
+      });
+      setModalOpen(true);
     } catch (error) {
       if (previewRequestCounterRef.current !== requestId) {
         return;
       }
 
       const message = error instanceof Error ? error.message : "Failed to open file";
+      if (message.toLowerCase().includes("text files only")) {
+        setPreview({
+          pipelineId: selectedPipeline.id,
+          scope,
+          runId: runIdValue,
+          kind: "binary",
+          name: entry.name,
+          path: entry.path,
+          mimeType: classification.mimeType,
+          sizeBytes,
+          message: "Binary file preview is not supported."
+        });
+        setModalOpen(true);
+        return;
+      }
       setPreviewError(message);
     } finally {
       if (previewRequestCounterRef.current === requestId) {
@@ -445,9 +556,9 @@ export function FilesPanel({
                   variant="ghost"
                   className="shrink-0 whitespace-nowrap"
                   disabled={loading}
-                  onClick={refreshListing}
+                  onClick={() => { triggerRefreshSpin(); refreshListing(); }}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
+                  <RefreshCw className="h-3.5 w-3.5" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} />
                   Refresh
                 </Button>
               </div>
@@ -620,25 +731,27 @@ export function FilesPanel({
                       {preview.mimeType} · {formatSize(preview.sizeBytes)}
                     </div>
 
-                    {preview.previewKind === "html" ? (
-                      <button
-                        type="button"
-                        className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-3 text-xs text-ink-300 transition-colors hover:bg-ink-800/60 hover:text-ink-100"
-                        onClick={() => setModalOpen(true)}
-                      >
-                        <Maximize2 className="h-3.5 w-3.5" />
-                        Open full preview
-                      </button>
-                    ) : (
-                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-ink-800/50 bg-[var(--surface-overlay)] p-2.5 font-mono text-[11px] text-ink-300">
-                        {preview.content}
-                      </pre>
-                    )}
+                    <button
+                      type="button"
+                      className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-3 text-xs text-ink-300 transition-colors hover:bg-ink-800/60 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={() => setModalOpen(true)}
+                      disabled={preview.kind === "binary"}
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      {preview.kind === "binary" ? "Preview unavailable" : "Open preview"}
+                    </button>
+
+                    {preview.kind === "binary" ? (
+                      <div className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
+                        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                        {preview.message ?? "This file type cannot be previewed."}
+                      </div>
+                    ) : null}
 
                     {preview.truncated ? (
                       <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
                         <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                        Large file. Showing first {formatSize(preview.maxBytes)}.
+                        Large file. Showing first {formatSize(preview.maxBytes ?? null)}.
                       </div>
                     ) : null}
                   </>
@@ -650,9 +763,9 @@ export function FilesPanel({
       ) : null}
 
       <FilePreviewModal
-        open={modalOpen && preview?.previewKind === "html"}
+        open={modalOpen && preview !== null}
         preview={preview}
-        onClose={() => setModalOpen(false)}
+        onClose={closePreviewModal}
       />
     </div>
   );

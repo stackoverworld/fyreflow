@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { SELECT_DROPDOWN_CONTENT_CLASS } from "@/components/optics/overlay-classes";
 
 export interface SelectOption {
   value: string;
@@ -130,7 +131,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
           transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
           style={dropdownStyle}
           className={cn(
-            "max-h-56 min-w-[140px] select-none overflow-y-auto rounded-xl border border-[var(--card-border)] bg-[var(--card-surface)] p-1 shadow-xl",
+            SELECT_DROPDOWN_CONTENT_CLASS,
             openAbove ? "origin-bottom" : "origin-top"
           )}
         >

@@ -31,6 +31,35 @@ test.describe("Critical AI Regression Flows", () => {
     await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow");
   });
 
+  test("AI builder can re-apply an older flow update snapshot", async ({ page }) => {
+    await mockDashboardApi(page, {
+      aiGeneratedFlowNames: ["AI Regression Flow v1", "AI Regression Flow v2"]
+    });
+
+    await page.goto("/");
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+
+    await page.getByRole("button", { name: "AI builder" }).click();
+    await page.getByRole("button", { name: "Agent" }).click();
+    const promptInput = page.getByPlaceholder(/Describe changes to apply to the flow|Ask a question about the current flow/);
+
+    await promptInput.fill("Apply revision one to this flow.");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("button", { name: "Re-apply" })).toHaveCount(1);
+
+    await promptInput.fill("Apply revision two to this flow.");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("button", { name: "Re-apply" })).toHaveCount(2);
+
+    await page.getByRole("button", { name: "Flow settings" }).click();
+    await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow v2");
+
+    await page.getByRole("button", { name: "AI builder" }).click();
+    await page.getByRole("button", { name: "Re-apply" }).first().click();
+    await page.getByRole("button", { name: "Flow settings" }).click();
+    await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow v1");
+  });
+
   test("run panel starts a smart run and shows run history", async ({ page }) => {
     await mockDashboardApi(page, {
       defaultStepIsolatedStorage: true,

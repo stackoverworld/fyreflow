@@ -19,6 +19,9 @@ import {
 } from "./normalizers.js";
 
 function extractFrameCount(value: unknown): number | null {
+  if (Array.isArray(value) && value.length > 0) {
+    return value.length;
+  }
   if (typeof value !== "object" || value === null) {
     return null;
   }
@@ -52,6 +55,53 @@ function extractFrameCount(value: unknown): number | null {
   const slideMap = record.slideMap;
   if (Array.isArray(slideMap) && slideMap.length > 0) {
     return slideMap.length;
+  }
+  if (typeof slideMap === "object" && slideMap !== null) {
+    const slideMapEntries = Object.values(slideMap).filter((entry) => typeof entry === "object" && entry !== null);
+    if (slideMapEntries.length > 0) {
+      return slideMapEntries.length;
+    }
+  }
+  const frameMap = record.frameMap;
+  if (Array.isArray(frameMap) && frameMap.length > 0) {
+    return frameMap.length;
+  }
+  if (typeof frameMap === "object" && frameMap !== null) {
+    const frameMapEntries = Object.values(frameMap).filter((entry) => typeof entry === "object" && entry !== null);
+    if (frameMapEntries.length > 0) {
+      return frameMapEntries.length;
+    }
+  }
+  const framesObject = record.frames;
+  if (typeof framesObject === "object" && framesObject !== null && !Array.isArray(framesObject)) {
+    const frameEntries = Object.values(framesObject).filter((entry) => typeof entry === "object" && entry !== null);
+    if (frameEntries.length > 0) {
+      return frameEntries.length;
+    }
+  }
+  const frameOrder = record.frameOrder;
+  if (Array.isArray(frameOrder) && frameOrder.length > 0) {
+    return frameOrder.length;
+  }
+  const frameIds = record.frameIds;
+  if (Array.isArray(frameIds) && frameIds.length > 0) {
+    return frameIds.length;
+  }
+  const slideIds = record.slideIds;
+  if (Array.isArray(slideIds) && slideIds.length > 0) {
+    return slideIds.length;
+  }
+  const numericRootEntries = Object.entries(record).filter(
+    ([key, entry]) => /^\d+$/.test(key) && typeof entry === "object" && entry !== null
+  );
+  if (numericRootEntries.length > 0) {
+    return numericRootEntries.length;
+  }
+  const figmaNodeEntries = Object.entries(record).filter(
+    ([key, entry]) => /^\d+:\d+$/.test(key) && typeof entry === "object" && entry !== null
+  );
+  if (figmaNodeEntries.length > 0) {
+    return figmaNodeEntries.length;
   }
   return null;
 }
@@ -269,13 +319,11 @@ function hasDuplicatedDataUriPrefix(html: string): boolean {
 }
 
 function countManifestBackgroundEntries(manifestRaw: string): number {
-  return manifestRaw.match(/"backgroundImageBase64"\s*:\s*"/g)?.length ?? 0;
+  return manifestRaw.match(/"[^"]*(?:background|image)[^"]*"\s*:\s*"data:image\//gi)?.length ?? 0;
 }
 
 function countManifestBackgroundFileEntries(manifestRaw: string): number {
-  return (
-    manifestRaw.match(/"file"\s*:\s*"assets\/frame-[^"]+\.(?:png|jpe?g|webp|gif|svg)"/gi)?.length ?? 0
-  );
+  return manifestRaw.match(/"file"\s*:\s*"assets\/[^"]+\.(?:png|jpe?g|webp|gif|svg)"/gi)?.length ?? 0;
 }
 
 function countHtmlFileBackgroundReferences(html: string): number {
@@ -425,7 +473,8 @@ async function evaluateSlideCountContract(
       status: "fail",
       blocking: true,
       message: "frame-map.json does not include a valid frame count.",
-      details: "Expected one of: totalFrames, frameCount, slideCount, frames[], slides[], slideMap[]"
+      details:
+        "Expected one of: totalFrames, frameCount, slideCount, frames[], slides[], slideMap[], frameMap[], frameOrder[]"
     };
   }
 
@@ -716,7 +765,7 @@ function allowsCompleteWorkflowStatus(pattern: string): boolean {
 }
 
 function isLegacyRegexGateEvaluationEnabled(): boolean {
-  return process.env.FYREFLOW_ENABLE_LEGACY_REGEX_GATES === "1";
+  return process.env.FYREFLOW_ENABLE_LEGACY_REGEX_GATES !== "0";
 }
 
 export async function evaluateStepContracts(
@@ -874,8 +923,8 @@ export async function evaluatePipelineQualityGates(
           blocking: gate.blocking,
           message:
             gate.message ||
-            `Legacy regex gate "${gate.name}" skipped; strict JSON contracts are required unless debug mode is enabled.`,
-          details: "Set FYREFLOW_ENABLE_LEGACY_REGEX_GATES=1 to evaluate regex gates for debugging."
+            `Legacy regex gate "${gate.name}" skipped because legacy regex evaluation is disabled for this runtime.`,
+          details: "Set FYREFLOW_ENABLE_LEGACY_REGEX_GATES=1 (or unset) to evaluate regex gates."
         });
         continue;
       }
@@ -946,10 +995,6 @@ export async function evaluatePipelineQualityGates(
     }
 
     if (gate.kind === "json_field_exists") {
-      if (!cachedJson) {
-        cachedJson = parseJsonOutput(output);
-      }
-
       if (!gate.jsonPath || gate.jsonPath.trim().length === 0) {
         results.push({
           gateId: gate.id,
@@ -961,6 +1006,65 @@ export async function evaluatePipelineQualityGates(
           details: "Set jsonPath in gate configuration."
         });
         continue;
+      }
+
+      const artifactPathTemplate = gate.artifactPath?.trim() ?? "";
+      if (artifactPathTemplate.length > 0) {
+        const artifactCheck = await checkArtifactExists(artifactPathTemplate, storagePaths, runInputs);
+        if (!artifactCheck.exists || !artifactCheck.foundPath) {
+          results.push({
+            gateId: gate.id,
+            gateName: gate.name,
+            kind: gate.kind,
+            status: "fail",
+            blocking: gate.blocking,
+            message: gate.message || `JSON path "${gate.jsonPath}" is missing.`,
+            details: artifactCheck.disabledStorage
+              ? "Storage policy disabled the required artifact path."
+              : artifactCheck.paths.length > 0
+                ? `Artifact missing for json_field_exists. Checked paths: ${artifactCheck.paths.join(" | ")}`
+                : "Artifact path could not be resolved."
+          });
+          continue;
+        }
+
+        let artifactPayload: unknown;
+        try {
+          const artifactRaw = await fs.readFile(artifactCheck.foundPath, "utf8");
+          artifactPayload = JSON.parse(artifactRaw) as unknown;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "unknown parse error";
+          results.push({
+            gateId: gate.id,
+            gateName: gate.name,
+            kind: gate.kind,
+            status: "fail",
+            blocking: gate.blocking,
+            message: gate.message || `JSON path "${gate.jsonPath}" is missing.`,
+            details: `Artifact JSON parse failed (${artifactCheck.foundPath}): ${reason}`
+          });
+          continue;
+        }
+
+        const found = resolvePathValue(artifactPayload, gate.jsonPath).found;
+        results.push({
+          gateId: gate.id,
+          gateName: gate.name,
+          kind: gate.kind,
+          status: found ? "pass" : "fail",
+          blocking: gate.blocking,
+          message:
+            gate.message ||
+            (found
+              ? `JSON path "${gate.jsonPath}" exists.`
+              : `JSON path "${gate.jsonPath}" is missing.`),
+          details: `path=${gate.jsonPath} source=artifact file=${artifactCheck.foundPath}`
+        });
+        continue;
+      }
+
+      if (!cachedJson) {
+        cachedJson = parseJsonOutput(output);
       }
 
       const found = cachedJson ? resolvePathValue(cachedJson, gate.jsonPath).found : false;
@@ -975,7 +1079,7 @@ export async function evaluatePipelineQualityGates(
           (found
             ? `JSON path "${gate.jsonPath}" exists.`
             : `JSON path "${gate.jsonPath}" is missing.`),
-        details: cachedJson ? `path=${gate.jsonPath}` : "Output is not valid JSON."
+        details: cachedJson ? `path=${gate.jsonPath} source=output` : "Output is not valid JSON."
       });
       continue;
     }

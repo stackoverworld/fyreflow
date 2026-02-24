@@ -1,5 +1,5 @@
 import type { FlowNode, OrchestratorLaneMeta, Point, ReciprocalLaneMeta, RouteAxis } from "../types";
-import { nodeRect } from "../useNodeLayout";
+import { nodeSourceAnchorRect, nodeTargetAnchorRect } from "../useNodeLayout";
 import { preferredSide } from "./geometry";
 import { buildEdgeRoute as buildOrthogonalEdgeRoute } from "./path-builders/orthogonal";
 
@@ -15,7 +15,13 @@ export function simpleOrchestratorLaneMeta(
 
   const orchestratorNode = sourceIsOrchestrator ? sourceNode : targetNode;
   const otherNode = sourceIsOrchestrator ? targetNode : sourceNode;
-  const side = preferredSide(nodeRect(orchestratorNode), nodeRect(otherNode));
+  const orchestratorRect = sourceIsOrchestrator
+    ? nodeSourceAnchorRect(orchestratorNode)
+    : nodeTargetAnchorRect(orchestratorNode);
+  const otherRect = sourceIsOrchestrator
+    ? nodeTargetAnchorRect(otherNode)
+    : nodeSourceAnchorRect(otherNode);
+  const side = preferredSide(orchestratorRect, otherRect);
 
   return {
     orchestratorId: orchestratorNode.id,

@@ -6,7 +6,7 @@ import type {
   ReciprocalLaneMeta,
   RouteAxis
 } from "../../../types";
-import { expandRect, nodeRect } from "../../../useNodeLayout";
+import { expandRect, nodeRect, nodeSourceAnchorRect, nodeTargetAnchorRect } from "../../../useNodeLayout";
 import { DIRECT_AXIS_TOLERANCE, NEAR_DIRECT_GAP } from "../../styles";
 import {
   preferredSide,
@@ -64,8 +64,8 @@ export function buildEdgeRoute(
   reciprocalLane: ReciprocalLaneMeta | null,
   manualWaypoint: Point | null
 ): { route: Point[]; axis: RouteAxis | null } {
-  const sourceRect = nodeRect(sourceNode);
-  const targetRect = nodeRect(targetNode);
+  const sourceRect = nodeSourceAnchorRect(sourceNode);
+  const targetRect = nodeTargetAnchorRect(targetNode);
   const sourceCenter = rectCenter(sourceRect);
   const targetCenter = rectCenter(targetRect);
   const obstacles = allNodes

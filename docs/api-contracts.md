@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-02-23
+- Last reviewed: 2026-02-24
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -21,6 +21,7 @@
 ## File Manager Scope API (2026-02-23)
 - `GET /api/files` lists files inside a storage scope owned by the selected pipeline.
 - `GET /api/files/content` returns safe text preview content for a file inside the same scope.
+- `GET /api/files/raw/:scope/:pipelineId/:runId/*` returns raw file bytes for scoped HTML assets (images/css/fonts/etc).
 - Required query params:
 - `pipelineId`: pipeline id in dashboard state.
 - `scope`: `shared | isolated | runs`.
@@ -28,6 +29,13 @@
 - Optional query param: `path` (relative path inside scope root).
 - Required query param for content endpoint: `path` (must point to a file).
 - Optional query param for content endpoint: `maxBytes` (default `262144`, max `1048576`).
+- Raw endpoint path rules:
+- `scope`: `shared | isolated | runs`
+- `pipelineId`: selected pipeline id
+- `runId`: use `-` for `shared/isolated`; required real run id for `runs`
+- `*`: relative file path inside scoped root
+- Optional raw query param:
+- `api_token` is accepted only on raw route as an alternative bearer token (for iframe asset requests that cannot set headers).
 - `DELETE /api/files` deletes a file or folder inside the same scoped roots.
 - Required body fields:
 - `pipelineId`, `scope`, `path`.
@@ -86,7 +94,13 @@
 - `questions` shape: `[{ id, question, options: [{ label, value, description? }] }]`.
 - Clarification is additive and backward-compatible: `action` remains `answer | update_current_flow | replace_flow`.
 - When `questions` are present, clients may offer one-click replies by sending `options[].value` as the next user message.
+- `POST /api/flow-builder/generate` accepts `prompt` up to `64_000` chars.
+- `POST /api/flow-builder/generate` accepts each `history[*].content` up to `64_000` chars.
 - `POST /api/flow-builder/generate` request history accepts larger transcripts (`history` up to 240 messages), and server-side prompt assembly compacts older turns into a summary block when context budget is exceeded.
+- Server-side chat planner assembly now keeps up to `120_000` chars of combined history before compaction.
+- `POST /api/flow-builder/generate` accepts optional `requestId` (`string`, max 120 chars) for idempotent retries.
+- When `requestId` repeats with the same request payload, server returns or awaits the same generation result instead of re-running provider work.
+- Reusing the same `requestId` with a different payload is rejected with `409`.
 
 ## Subagent Execution Semantics (2026-02-21)
 - `PipelineStep.enableDelegation` and `PipelineStep.delegationCount` drive real runtime parallelism in the run executor.
@@ -113,9 +127,23 @@
 - Legacy text markers (for example `WORKFLOW_STATUS: PASS`) remain parseable for diagnostics but no longer satisfy strict contract validation on those steps.
 
 ## Gate Reliability Updates (2026-02-23)
-- Runtime regex quality gates are now debug-only and skipped by default; set `FYREFLOW_ENABLE_LEGACY_REGEX_GATES=1` to re-enable regex evaluation for diagnostics.
+- Runtime regex quality gates are evaluated by default; set `FYREFLOW_ENABLE_LEGACY_REGEX_GATES=0` to disable legacy regex evaluation for diagnostic isolation.
+- `json_field_exists` gates now evaluate `jsonPath` against `artifactPath` JSON when `artifactPath` is set; otherwise they continue to evaluate against step output JSON.
 - `workflow_status: "COMPLETE"` now requires explicit metadata in strict GateResult JSON:
 - `stage: "final"`
 - `step_role: "delivery"`
 - `gate_target: "delivery"`
 - Runtime enforces that `COMPLETE` can only pass on a terminal `executor` step (no outgoing links), preventing premature delivery completion on intermediate stages.
+
+## Runtime Hardening Updates (2026-02-24)
+- Run-input summaries now redact sensitive values (`token`, `secret`, `password`, `credential`, `api_key`, and `*_key`) before prompt/context composition.
+- Persisted step `inputContext` is redacted before writing run state, reducing secret exposure in local run history storage.
+- OpenAI API JSON-mode steps now attach provider-level `response_format` contracts; gate-result JSON uses strict `json_schema`.
+- Claude API JSON-mode gate-result steps now attach provider-level `output_config.format` JSON schema contract.
+- API-path MCP routing now uses provider-native tool calls (`mcp_call`) for OpenAI and Claude, with strict schema on tool inputs and server-id allowlisting from step config.
+- MCP call extraction now accepts only strict top-level JSON payloads (no fenced/prose/partial-object salvage), reducing accidental tool dispatch from free-form text.
+- Delivery completion gates are no longer auto-retargeted at runtime; misconfigured gates now fail the run early and require explicit `targetStepId` pointing to the terminal delivery step.
+- Flow-builder quality-gate mapping no longer silently retargets unresolved delivery completion gate targets; unresolved targets stay `any_step` and are rejected by runtime validation.
+- Relative artifact templates may still use `output_dir`, but resolution is now confined to the run storage root to prevent path escape outside pipeline storage.
+- Provider SSE readers now enforce idle timeout via `LLM_STREAM_IDLE_TIMEOUT_MS` (default 90s, min 1s, max 10m) and fail stalled streams deterministically.
+- Claude CLI dangerous permission bypass is now opt-in (`CLAUDE_CLI_SKIP_PERMISSIONS` defaults to `0`).

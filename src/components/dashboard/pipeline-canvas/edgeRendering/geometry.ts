@@ -217,11 +217,15 @@ export function normalizeRoute(points: Point[]): Point[] {
       const b = compact[index + 1];
       const c = compact[index + 2];
       const d = compact[index + 3];
+      const touchesRouteStart = index === 0;
+      const touchesRouteEnd = index + 3 === compact.length - 1;
 
       const bridgeHorizontal = b.y === c.y && Math.abs(c.x - b.x) <= TIGHT_HOOK_MAX_BRIDGE;
       const bridgeVertical = b.x === c.x && Math.abs(c.y - b.y) <= TIGHT_HOOK_MAX_BRIDGE;
 
-      if (bridgeHorizontal && a.x === b.x && c.x === d.x) {
+      // Avoid collapsing tight hooks when they touch either endpoint.
+      // Endpoint rewrites can create tiny visible doglegs right at the node anchor.
+      if (!touchesRouteStart && !touchesRouteEnd && bridgeHorizontal && a.x === b.x && c.x === d.x) {
         const inSign = Math.sign(b.y - a.y);
         const outSign = Math.sign(d.y - c.y);
         if (inSign !== 0 && outSign !== 0 && inSign !== outSign) {
@@ -233,7 +237,7 @@ export function normalizeRoute(points: Point[]): Point[] {
         }
       }
 
-      if (bridgeVertical && a.y === b.y && c.y === d.y) {
+      if (!touchesRouteStart && !touchesRouteEnd && bridgeVertical && a.y === b.y && c.y === d.y) {
         const inSign = Math.sign(b.x - a.x);
         const outSign = Math.sign(d.x - c.x);
         if (inSign !== 0 && outSign !== 0 && inSign !== outSign) {

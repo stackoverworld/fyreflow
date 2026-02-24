@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -221,6 +221,16 @@ describe("design asset manifest contract guard", () => {
     sizeBytes
   });
 
+  const createFrameMapSnapshot = (foundPath: string, sizeBytes: number): ArtifactStateCheck => ({
+    template: "{{shared_storage_path}}/frame-map.json",
+    disabledStorage: false,
+    paths: [foundPath],
+    foundPath,
+    exists: true,
+    mtimeMs: Date.now(),
+    sizeBytes
+  });
+
   it("fails when assets-manifest is oversized", async () => {
     const step = createDesignAssetStep();
     const tempDir = await mkdtemp(path.join(tmpdir(), "fyreflow-design-manifest-"));
@@ -239,7 +249,7 @@ describe("design asset manifest contract guard", () => {
     }
   });
 
-  it("fails when assets-manifest contains inline base64 payloads", async () => {
+  it("normalizes inline base64 manifest payloads into file-backed assets", async () => {
     const step = createDesignAssetStep();
     const tempDir = await mkdtemp(path.join(tmpdir(), "fyreflow-design-manifest-"));
     const manifestPath = path.join(tempDir, "assets-manifest.json");
@@ -251,9 +261,34 @@ describe("design asset manifest contract guard", () => {
       const results = await buildProfileArtifactContractResults(step, [
         createManifestSnapshot(manifestPath, Buffer.byteLength(inlineManifest))
       ]);
-      expect(results).toHaveLength(1);
-      expect(results[0]?.status).toBe("fail");
-      expect(results[0]?.message).toContain("Inline data URIs");
+      expect(results).toHaveLength(0);
+      const normalizedManifest = await readFile(manifestPath, "utf8");
+      expect(normalizedManifest).not.toContain("backgroundImageBase64");
+      expect(normalizedManifest).toContain("\"file\": \"assets/frame-inline-1.png\"");
+      const writtenAsset = await stat(path.join(tempDir, "assets", "frame-inline-1.png"));
+      expect(writtenAsset.size).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when frame-map still has no recoverable frame count", async () => {
+    const step = createDesignAssetStep();
+    const tempDir = await mkdtemp(path.join(tmpdir(), "fyreflow-design-manifest-"));
+    const manifestPath = path.join(tempDir, "assets-manifest.json");
+    const frameMapPath = path.join(tempDir, "frame-map.json");
+    const manifest = JSON.stringify({
+      frames: [{ frameId: "frame-1", background: { file: "assets/frame-1.png", mime: "image/png" } }]
+    });
+    const frameMap = JSON.stringify({ metadata: { source: "figma" } });
+    try {
+      await Promise.all([writeFile(manifestPath, manifest, "utf8"), writeFile(frameMapPath, frameMap, "utf8")]);
+      const results = await buildProfileArtifactContractResults(step, [
+        createManifestSnapshot(manifestPath, Buffer.byteLength(manifest)),
+        createFrameMapSnapshot(frameMapPath, Buffer.byteLength(frameMap))
+      ]);
+      expect(results.some((result) => result.gateName === "Design frame map includes frame count")).toBe(true);
+      expect(results.some((result) => result.status === "fail")).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

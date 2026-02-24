@@ -1,6 +1,7 @@
 import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/cn";
+import { DROPDOWN_MENU_CONTENT_CLASS } from "@/components/optics/overlay-classes";
 
 const CloseContext = createContext<() => void>(() => {});
 
@@ -53,7 +54,7 @@ export function DropdownMenu({ trigger, children, align = "right", className }: 
               exit={{ opacity: 0, y: -4, scale: 0.96 }}
               transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
               className={cn(
-                "absolute top-full z-50 mt-1.5 min-w-[200px] rounded-xl border border-ink-700/50 bg-[var(--surface-overlay)] p-1 shadow-xl",
+                DROPDOWN_MENU_CONTENT_CLASS,
                 align === "right" ? "right-0" : "left-0"
               )}
             >

@@ -5,6 +5,7 @@ export type ClaudeEffort = "low" | "medium" | "high";
 export interface ClaudeApiOptions {
   disable1MContext?: boolean;
   disableEffort?: boolean;
+  disableOutputFormat?: boolean;
 }
 
 export interface CommandResult {
@@ -17,6 +18,7 @@ export interface ProviderExecutionInput {
   step: PipelineStep;
   context: string;
   task: string;
+  mcpServerIds?: string[];
   stageTimeoutMs?: number;
   log?: (message: string) => void;
   outputMode?: "markdown" | "json";

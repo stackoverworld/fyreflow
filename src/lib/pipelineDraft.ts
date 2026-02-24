@@ -42,6 +42,14 @@ export function createDraftWorkflowKey(): string {
   return `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+export function clonePipelinePayload(draft: PipelinePayload): PipelinePayload {
+  if (typeof structuredClone === "function") {
+    return structuredClone(draft);
+  }
+
+  return JSON.parse(JSON.stringify(draft)) as PipelinePayload;
+}
+
 export function defaultStepPosition(index: number): { x: number; y: number } {
   return {
     x: 80 + index * 280,

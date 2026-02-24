@@ -1,5 +1,5 @@
 import { preferredSide, rectCenter } from "./edgeRendering";
-import { nodeRect } from "./useNodeLayout";
+import { nodeSourceAnchorRect, nodeTargetAnchorRect } from "./useNodeLayout";
 import {
   type AnchorSide,
   type FlowLink,
@@ -62,8 +62,14 @@ export function buildOrchestratorLaneByLinkId({ links, nodeById }: OrchestratorL
 
     const orchestratorNode = sourceIsOrchestrator ? sourceNode : targetNode;
     const otherNode = sourceIsOrchestrator ? targetNode : sourceNode;
-    const side = preferredSide(nodeRect(orchestratorNode), nodeRect(otherNode));
-    const otherCenter = rectCenter(nodeRect(otherNode));
+    const orchestratorRect = sourceIsOrchestrator
+      ? nodeSourceAnchorRect(orchestratorNode)
+      : nodeTargetAnchorRect(orchestratorNode);
+    const otherRect = sourceIsOrchestrator
+      ? nodeTargetAnchorRect(otherNode)
+      : nodeSourceAnchorRect(otherNode);
+    const side = preferredSide(orchestratorRect, otherRect);
+    const otherCenter = rectCenter(otherRect);
     const sortKey = side === "left" || side === "right" ? otherCenter.y : otherCenter.x;
     const key = `${orchestratorNode.id}:${side}`;
 

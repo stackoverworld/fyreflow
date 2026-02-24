@@ -84,6 +84,31 @@ function applyStoragePathTokens(template: string, storagePaths: StepStoragePaths
   return path.resolve(storagePaths.runStoragePath, rendered);
 }
 
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const candidate = path.resolve(candidatePath);
+  const root = path.resolve(rootPath);
+  const relative = path.relative(root, candidate);
+  return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveSafeOutputDirArtifactPath(
+  outputDirRaw: string,
+  relativeTemplate: string,
+  runStoragePath: string
+): string | null {
+  const runRoot = path.resolve(runStoragePath);
+  const outputDirTrimmed = outputDirRaw.trim();
+  if (outputDirTrimmed.length === 0) {
+    return null;
+  }
+
+  const outputBase = path.isAbsolute(outputDirTrimmed)
+    ? path.resolve(outputDirTrimmed)
+    : path.resolve(runRoot, outputDirTrimmed);
+  const candidate = path.resolve(outputBase, relativeTemplate);
+  return isPathWithinRoot(candidate, runRoot) ? candidate : null;
+}
+
 export function resolveArtifactCandidatePaths(
   template: string,
   storagePaths: StepStoragePaths,
@@ -118,7 +143,10 @@ export function resolveArtifactCandidatePaths(
   if (!usesStoragePlaceholder && isRelativeTemplate) {
     const outputDir = getRunInputValue(runInputs, "output_dir");
     if (outputDir && outputDir.trim().length > 0) {
-      addPath(path.resolve(outputDir, templateTrimmed));
+      const safeCandidate = resolveSafeOutputDirArtifactPath(outputDir, templateTrimmed, storagePaths.runStoragePath);
+      if (safeCandidate) {
+        addPath(safeCandidate);
+      }
     }
   }
 

@@ -20,8 +20,9 @@ function isDeckHtmlSynthesisStep(input: ProviderExecutionInput): boolean {
 export function composeCliPrompt(input: ProviderExecutionInput): string {
   const outputInstruction =
     input.outputMode === "json"
-      ? "Return STRICT JSON only. No markdown fences. No prose before or after the JSON object."
+      ? "Return STRICT JSON only. No markdown fences. No prose before or after the JSON object. All human-readable summary fields must be in English."
       : "Return only the step output in concise markdown.";
+  const summaryLanguageInstruction = "Language requirement: any summary or status summary text must be written in English.";
   const scopeInstruction =
     input.step.role === "orchestrator"
       ? [
@@ -65,6 +66,7 @@ export function composeCliPrompt(input: ProviderExecutionInput): string {
 
   sections.push("", `Execution discipline:\n${toolDisciplineInstruction}`);
   sections.push("", `Artifact contract:\n${immutableArtifactInstruction}`);
+  sections.push("", summaryLanguageInstruction);
   if (isDeckHtmlSynthesisStep(input)) {
     sections.push(
       "",
@@ -102,6 +104,8 @@ export function buildClaudeSystemPrompt(
   if (outputMode === "json") {
     notes.push("Output must be STRICT JSON only, as a single object, with no markdown fences or extra narration.");
   }
+
+  notes.push("Language requirement: any summary or status-summary text must be in English.");
 
   return notes.join("\n\n");
 }

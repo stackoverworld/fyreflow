@@ -85,7 +85,17 @@ export function createApiAuthMiddleware(apiAuthToken: string) {
     );
     const headerToken =
       typeof request.headers["x-api-token"] === "string" ? request.headers["x-api-token"].trim() : "";
-    const candidate = bearerToken || headerToken;
+    const rawQueryToken =
+      request.query && typeof request.query === "object"
+        ? (request.query as Record<string, unknown>).api_token
+        : undefined;
+    const queryToken =
+      request.method === "GET" &&
+      request.path.startsWith("/api/files/raw/") &&
+      typeof rawQueryToken === "string"
+        ? rawQueryToken.trim()
+        : "";
+    const candidate = bearerToken || headerToken || queryToken;
 
     if (candidate.length === 0 || !constantTimeEquals(candidate, trimmedToken)) {
       response.status(401).json({ error: "Unauthorized" });

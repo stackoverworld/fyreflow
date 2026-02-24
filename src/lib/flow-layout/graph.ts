@@ -23,11 +23,61 @@ import {
   ROUTE_PATH_EXTRA_LIMIT,
   ROUTE_PATH_STRETCH_LIMIT
 } from "./constants";
+import { layoutNodeVisualHeight } from "./nodeDimensions";
 import { computeAutoLayoutPositions } from "./layout";
 import { buildElkGraph, buildElkRouteGraph, getElkInstance } from "./graphMutations";
 import { routeFromElkSections } from "./graphTraversal";
 
 export { buildElkGraph } from "./graphMutations";
+
+function layoutBoundsById(
+  positions: Record<string, Position>,
+  stepIds: string[],
+  heightByStepId: ReadonlyMap<string, number>
+): { width: number; height: number } {
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const stepId of stepIds) {
+    const position = positions[stepId];
+    if (!position) {
+      continue;
+    }
+    const stepHeight = heightByStepId.get(stepId) ?? DEFAULT_NODE_HEIGHT;
+    minX = Math.min(minX, position.x);
+    maxX = Math.max(maxX, position.x + DEFAULT_NODE_WIDTH);
+    minY = Math.min(minY, position.y);
+    maxY = Math.max(maxY, position.y + stepHeight);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+    return { width: 0, height: 0 };
+  }
+
+  return {
+    width: maxX - minX,
+    height: maxY - minY
+  };
+}
+
+function shouldPreferCompactFallback(
+  elkPositions: Record<string, Position>,
+  fallbackPositions: Record<string, Position>,
+  stepIds: string[],
+  heightByStepId: ReadonlyMap<string, number>
+): boolean {
+  const elkBounds = layoutBoundsById(elkPositions, stepIds, heightByStepId);
+  const fallbackBounds = layoutBoundsById(fallbackPositions, stepIds, heightByStepId);
+  if (elkBounds.width <= 0 || fallbackBounds.width <= 0) {
+    return false;
+  }
+
+  const elkAspect = elkBounds.width / Math.max(1, elkBounds.height);
+  const isOverlyWide = elkBounds.width > fallbackBounds.width * 1.14;
+  return isOverlyWide && elkBounds.width > 1600 && elkAspect > 2;
+}
 
 export async function computeEdgeRoutesSmart(
   nodes: RouteNodeInput[],
@@ -146,13 +196,16 @@ export async function computeAutoLayoutPositionsSmart(
     return {};
   }
 
+  const visualHeightByStepId = new Map(steps.map((step) => [step.id, layoutNodeVisualHeight(step)]));
+  const fallbackPositions = computeAutoLayoutPositions(steps, links, options);
+
   try {
     const graph = buildElkGraph(steps, links, options);
     const elk = await getElkInstance();
     const layout = await elk.layout(graph);
     const laidOutNodes = layout.children ?? [];
     if (laidOutNodes.length === 0) {
-      return computeAutoLayoutPositions(steps, links, options);
+      return fallbackPositions;
     }
 
     const xValues = laidOutNodes
@@ -166,7 +219,7 @@ export async function computeAutoLayoutPositionsSmart(
       .filter((value): value is number => typeof value === "number");
 
     if (xValues.length === 0 || yTopValues.length === 0 || yBottomValues.length === 0) {
-      return computeAutoLayoutPositions(steps, links, options);
+      return fallbackPositions;
     }
 
     const minX = Math.min(...xValues);
@@ -174,7 +227,7 @@ export async function computeAutoLayoutPositionsSmart(
     const maxY = Math.max(...yBottomValues);
     const startX = Math.round(options.startX ?? DEFAULT_START_X);
     const existingCenterY = average(
-      steps.map((step) => (step.position?.y ?? DEFAULT_CENTER_Y) + DEFAULT_NODE_HEIGHT / 2)
+      steps.map((step) => (step.position?.y ?? DEFAULT_CENTER_Y) + (visualHeightByStepId.get(step.id) ?? DEFAULT_NODE_HEIGHT) / 2)
     );
     const centerY = options.centerY ?? existingCenterY;
     const layoutCenterY = (minY + maxY) / 2;
@@ -194,11 +247,16 @@ export async function computeAutoLayoutPositionsSmart(
     }
 
     if (Object.keys(positionById).length === 0) {
-      return computeAutoLayoutPositions(steps, links, options);
+      return fallbackPositions;
+    }
+
+    const stepIds = steps.map((step) => step.id);
+    if (shouldPreferCompactFallback(positionById, fallbackPositions, stepIds, visualHeightByStepId)) {
+      return fallbackPositions;
     }
 
     return positionById;
   } catch {
-    return computeAutoLayoutPositions(steps, links, options);
+    return fallbackPositions;
   }
 }

@@ -24,6 +24,7 @@ export interface FlowBuilderQuestion {
 }
 
 export interface FlowBuilderRequest {
+  requestId?: string;
   prompt: string;
   providerId: ProviderId;
   model: string;

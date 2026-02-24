@@ -91,6 +91,7 @@ describe("API runner streaming mode", () => {
     expect(output).toBe("Hello world");
     expect(logs.some((line) => line.includes("OpenAI request id: req_test_123"))).toBe(true);
     expect(logs.some((line) => line.includes("OpenAI stream event: response.output_text.delta"))).toBe(true);
+    expect(logs.some((line) => line.includes("Model summary:"))).toBe(true);
   });
 
   it("parses Claude SSE content deltas and logs ping heartbeat", async () => {
@@ -111,5 +112,6 @@ describe("API runner streaming mode", () => {
     expect(output).toBe("PASS");
     expect(logs.some((line) => line.includes("Claude request id: req_test_123"))).toBe(true);
     expect(logs.some((line) => line.includes("Claude stream event: ping"))).toBe(true);
+    expect(logs.some((line) => line.includes("Model summary:"))).toBe(true);
   });
 });

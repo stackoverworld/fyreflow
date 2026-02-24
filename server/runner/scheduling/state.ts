@@ -1,4 +1,5 @@
 import type { LocalStore } from "../../storage.js";
+import { isSensitiveRunInputKey, type RunInputs } from "../../runInputs.js";
 import { normalizeStepLabel } from "../../stepLabel.js";
 import type {
   PipelineRun,
@@ -9,6 +10,42 @@ import type {
   WorkflowOutcome
 } from "../../types.js";
 import { nowIso } from "./time.js";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactSensitiveRunInputValues(context: string, runInputs: RunInputs | undefined): string {
+  if (!runInputs || Object.keys(runInputs).length === 0) {
+    return context;
+  }
+
+  let redacted = context;
+  for (const [key, value] of Object.entries(runInputs)) {
+    if (!isSensitiveRunInputKey(key)) {
+      continue;
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+
+    redacted = redacted.replace(new RegExp(escapeRegExp(trimmed), "g"), "[REDACTED]");
+  }
+
+  return redacted;
+}
+
+export function redactContextForRunState(context: string, runInputs?: RunInputs): string {
+  const redacted = redactSensitiveRunInputValues(context, runInputs);
+  const maxChars = 24_000;
+  if (redacted.length <= maxChars) {
+    return redacted;
+  }
+
+  return `${redacted.slice(0, maxChars)}\n\n[Context truncated for run state persistence]`;
+}
 
 function createRunStep(step: PipelineStep): StepRun {
   return {
@@ -137,6 +174,7 @@ export function markStepRunning(
   step: PipelineStep,
   context: string,
   attempt: number,
+  runInputs?: RunInputs,
   triggeredByStepId?: string,
   triggeredByReason?: StepTriggerReason
 ): void {
@@ -148,7 +186,7 @@ export function markStepRunning(
       attempts: attempt,
       triggeredByStepId,
       triggeredByReason,
-      inputContext: context,
+      inputContext: redactContextForRunState(context, runInputs),
       error: undefined,
       qualityGateResults: [],
       startedAt: nowIso()

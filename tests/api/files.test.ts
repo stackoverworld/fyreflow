@@ -27,6 +27,7 @@ describe("File Manager Routes", () => {
       await mkdir(path.join(sharedRoot, "docs"), { recursive: true });
       await writeFile(path.join(sharedRoot, "readme.txt"), "hello", "utf8");
       await writeFile(path.join(sharedRoot, "docs", "guide.md"), "# guide", "utf8");
+      await writeFile(path.join(sharedRoot, "docs", "logo.png"), Buffer.from([137, 80, 78, 71]), "binary");
 
       store.updateStorageConfig({
         enabled: true,
@@ -77,6 +78,21 @@ describe("File Manager Routes", () => {
       expect(contentPayload.name).toBe("readme.txt");
       expect(contentPayload.previewKind).toBe("text");
       expect(contentPayload.content).toBe("hello");
+
+      const rawHandler = route("GET", "/api/files/raw/:scope/:pipelineId/:runId/*");
+      const rawResponse = await invokeRoute(rawHandler, {
+        method: "GET",
+        path: `/api/files/raw/shared/${pipeline.id}/-/docs/logo.png`,
+        params: {
+          scope: "shared",
+          pipelineId: pipeline.id,
+          runId: "-",
+          "0": "docs/logo.png"
+        }
+      });
+      expect(rawResponse.statusCode).toBe(200);
+      expect(rawResponse.getHeader("content-type")).toBe("image/png");
+      expect(rawResponse.body).toBeInstanceOf(Buffer);
 
       const deleteHandler = route("DELETE", "/api/files");
       const deleteResponse = await invokeRoute(deleteHandler, {
@@ -151,6 +167,19 @@ describe("File Manager Routes", () => {
         }
       });
       expect(contentTraversalResponse.statusCode).toBe(400);
+
+      const rawHandler = route("GET", "/api/files/raw/:scope/:pipelineId/:runId/*");
+      const rawTraversalResponse = await invokeRoute(rawHandler, {
+        method: "GET",
+        path: `/api/files/raw/shared/${pipeline.id}/-/../outside.txt`,
+        params: {
+          scope: "shared",
+          pipelineId: pipeline.id,
+          runId: "-",
+          "0": "../outside.txt"
+        }
+      });
+      expect(rawTraversalResponse.statusCode).toBe(400);
 
       const deleteHandler = route("DELETE", "/api/files");
       const deleteTraversalResponse = await invokeRoute(deleteHandler, {
@@ -254,6 +283,19 @@ describe("File Manager Routes", () => {
         }
       });
       expect(foreignRunContentResponse.statusCode).toBe(404);
+
+      const rawHandler = route("GET", "/api/files/raw/:scope/:pipelineId/:runId/*");
+      const foreignRunRawResponse = await invokeRoute(rawHandler, {
+        method: "GET",
+        path: `/api/files/raw/runs/${pipeline.id}/${foreignRun.id}/report.md`,
+        params: {
+          scope: "runs",
+          pipelineId: pipeline.id,
+          runId: foreignRun.id,
+          "0": "report.md"
+        }
+      });
+      expect(foreignRunRawResponse.statusCode).toBe(404);
     } finally {
       await rm(storageRoot, { recursive: true, force: true });
       await cleanup();

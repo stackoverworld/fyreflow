@@ -259,9 +259,12 @@ export const secureInputsDeleteSchema = z.object({
   keys: z.array(z.string().min(1).max(160)).max(120).optional()
 });
 
+const FLOW_BUILDER_PROMPT_MAX_CHARS = 64_000;
+const FLOW_BUILDER_HISTORY_MESSAGE_MAX_CHARS = 64_000;
+
 const flowBuilderMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
-  content: z.string().min(1).max(12000)
+  content: z.string().min(1).max(FLOW_BUILDER_HISTORY_MESSAGE_MAX_CHARS)
 });
 
 const flowBuilderDraftSchema = z.object({
@@ -291,7 +294,8 @@ const flowBuilderDraftSchema = z.object({
 });
 
 export const flowBuilderRequestSchema = z.object({
-  prompt: z.string().min(2).max(16000),
+  requestId: z.string().min(1).max(120).optional(),
+  prompt: z.string().min(2).max(FLOW_BUILDER_PROMPT_MAX_CHARS),
   providerId: z.enum(["openai", "claude"]),
   model: z.string().min(1),
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),

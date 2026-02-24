@@ -1,5 +1,17 @@
 import { average, type FlowLayoutOptions, type LayoutLink, type LayoutStep } from "./normalize";
-import { DEFAULT_CENTER_Y, DEFAULT_LAYER_GAP, DEFAULT_ROW_GAP, DEFAULT_START_X, rolePriority } from "./constants";
+import {
+  DEFAULT_CENTER_Y,
+  DEFAULT_LAYER_GAP,
+  DEFAULT_NODE_HEIGHT,
+  DEFAULT_NODE_WIDTH,
+  DEFAULT_ROW_GAP,
+  DEFAULT_START_X,
+  rolePriority
+} from "./constants";
+import { layoutNodeVisualHeight } from "./nodeDimensions";
+
+const DENSE_GRAPH_BASE_DEGREE = 3;
+const DENSE_GRAPH_ROW_GAP_STEP = 12;
 
 export function stableUniqueLinks(steps: LayoutStep[], links: LayoutLink[]): Array<{ source: string; target: string }> {
   const stepIds = new Set(steps.map((step) => step.id));
@@ -153,6 +165,96 @@ function assignLayers(
   return layers;
 }
 
+function compactLinearLayers(
+  steps: LayoutStep[],
+  layerById: Map<string, number>,
+  outgoing: Map<string, string[]>,
+  incoming: Map<string, string[]>
+): Map<string, number> {
+  const compacted = new Map(layerById);
+  if (steps.length < 3) {
+    return compacted;
+  }
+
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const rootIds = new Set(orderedRootIds(steps, incoming));
+  const orderedStepIds = [...steps]
+    .sort((left, right) => {
+      const leftLayer = compacted.get(left.id) ?? 0;
+      const rightLayer = compacted.get(right.id) ?? 0;
+      if (leftLayer !== rightLayer) {
+        return leftLayer - rightLayer;
+      }
+
+      const leftY = left.position?.y ?? 0;
+      const rightY = right.position?.y ?? 0;
+      if (leftY !== rightY) {
+        return leftY - rightY;
+      }
+
+      return left.id.localeCompare(right.id);
+    })
+    .map((step) => step.id);
+
+  for (const stepId of orderedStepIds) {
+    const predecessors = incoming.get(stepId) ?? [];
+    if (predecessors.length !== 1) {
+      continue;
+    }
+
+    const predecessorId = predecessors[0];
+    const stepLayer = compacted.get(stepId) ?? 0;
+    const predecessorLayer = compacted.get(predecessorId);
+    if (predecessorLayer === undefined || predecessorLayer >= stepLayer) {
+      continue;
+    }
+
+    if (rootIds.has(stepId) || rootIds.has(predecessorId)) {
+      continue;
+    }
+
+    const predecessorIncomingCount = incoming.get(predecessorId)?.length ?? 0;
+    const predecessorOutgoingCount = outgoing.get(predecessorId)?.length ?? 0;
+    const stepIncomingCount = incoming.get(stepId)?.length ?? 0;
+    const stepOutgoingCount = outgoing.get(stepId)?.length ?? 0;
+    const predecessorRolePriority = rolePriority[stepById.get(predecessorId)?.role ?? "executor"] ?? 99;
+    const stepRolePriority = rolePriority[stepById.get(stepId)?.role ?? "executor"] ?? 99;
+
+    const hasLinearShape =
+      predecessorIncomingCount > 0 &&
+      predecessorOutgoingCount <= 1 &&
+      stepIncomingCount <= 1 &&
+      stepOutgoingCount <= 1 &&
+      stepRolePriority >= predecessorRolePriority;
+    if (!hasLinearShape) {
+      continue;
+    }
+
+    compacted.set(stepId, predecessorLayer);
+  }
+
+  const orderedLayerValues = [...new Set(compacted.values())].sort((a, b) => a - b);
+  const normalizedLayerByValue = new Map(orderedLayerValues.map((layer, index) => [layer, index]));
+  const normalized = new Map<string, number>();
+
+  for (const [stepId, layer] of compacted) {
+    normalized.set(stepId, normalizedLayerByValue.get(layer) ?? 0);
+  }
+
+  return normalized;
+}
+
+function resolveLayerGap(baseLayerGap: number, layerCount: number, stepCount: number): number {
+  const minLayerGap = DEFAULT_NODE_WIDTH + 64;
+  if (layerCount <= 1) {
+    return Math.max(minLayerGap, baseLayerGap);
+  }
+
+  const maxCanvasSpan = Math.max(1200, Math.min(2100, stepCount * 270));
+  const adaptiveGap = Math.round(maxCanvasSpan / (layerCount - 1));
+  return Math.max(minLayerGap, Math.min(baseLayerGap, adaptiveGap));
+}
+
 function sortWithinLayers(
   steps: LayoutStep[],
   layerById: Map<string, number>,
@@ -270,30 +372,45 @@ export function computeAutoLayoutPositions(
     return {};
   }
 
-  const layerGap = Math.max(300, options.layerGap ?? DEFAULT_LAYER_GAP);
-  const rowGap = Math.max(170, options.rowGap ?? DEFAULT_ROW_GAP);
+  const baseLayerGap = Math.max(300, options.layerGap ?? DEFAULT_LAYER_GAP);
   const startX = Math.round(options.startX ?? DEFAULT_START_X);
-  const existingCenterY = Math.round(average(steps.map((step) => step.position?.y ?? DEFAULT_CENTER_Y)));
+  const existingCenterY = Math.round(
+    average(steps.map((step) => (step.position?.y ?? DEFAULT_CENTER_Y) + layoutNodeVisualHeight(step) / 2))
+  );
   const centerY = Math.round(options.centerY ?? existingCenterY);
 
   const linksForLayout = stableUniqueLinks(steps, links);
   const { outgoing, incoming } = buildAdjacency(steps, linksForLayout);
-  const layerById = assignLayers(steps, outgoing, incoming);
+  const maxIncidentDegree = steps.reduce((maxDegree, step) => {
+    const out = outgoing.get(step.id)?.length ?? 0;
+    const incomingCount = incoming.get(step.id)?.length ?? 0;
+    return Math.max(maxDegree, out + incomingCount);
+  }, 0);
+  const denseGraphRowBoost = Math.max(0, maxIncidentDegree - DENSE_GRAPH_BASE_DEGREE) * DENSE_GRAPH_ROW_GAP_STEP;
+  const rowGap = Math.max(170, (options.rowGap ?? DEFAULT_ROW_GAP) + denseGraphRowBoost);
+  const interNodeGap = Math.max(24, rowGap - DEFAULT_NODE_HEIGHT);
+  const layered = assignLayers(steps, outgoing, incoming);
+  const layerById = compactLinearLayers(steps, layered, outgoing, incoming);
   const grouped = sortWithinLayers(steps, layerById, outgoing, incoming);
   const orderedLayers = [...grouped.keys()].sort((a, b) => a - b);
+  const layerGap = resolveLayerGap(baseLayerGap, orderedLayers.length, steps.length);
+  const stepById = new Map(steps.map((step) => [step.id, step]));
 
   const positions: Record<string, { x: number; y: number }> = {};
 
   for (const layer of orderedLayers) {
     const ids = grouped.get(layer) ?? [];
-    const totalHeight = Math.max(0, (ids.length - 1) * rowGap);
-    const startY = centerY - totalHeight / 2;
+    const heights = ids.map((id) => layoutNodeVisualHeight(stepById.get(id) ?? {}));
+    const columnHeight =
+      heights.reduce((sum, height) => sum + height, 0) + Math.max(0, ids.length - 1) * interNodeGap;
+    let nextY = centerY - columnHeight / 2;
 
     ids.forEach((id, index) => {
       positions[id] = {
         x: Math.round(startX + layer * layerGap),
-        y: Math.round(startY + index * rowGap)
+        y: Math.round(nextY)
       };
+      nextY += heights[index] + interNodeGap;
     });
   }
 

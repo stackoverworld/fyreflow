@@ -594,7 +594,8 @@ export async function executeStep(
       ? [
           "MCP tools are available for this step.",
           `Allowed MCP server ids: ${availableServers.map((server) => server.id).join(", ")}`,
-          "To request MCP tool execution, return STRICT JSON:",
+          "When native tool-calling is available, invoke tool mcp_call with {server_id, tool, arguments}.",
+          "Fallback only (for non-tool runtimes): return STRICT JSON:",
           '{ "mcp_calls": [ { "server_id": "server-id", "tool": "tool_name", "arguments": { } } ] }',
           "If you can finish without MCP calls, return the final step output directly."
         ].join("\n")
@@ -618,6 +619,7 @@ export async function executeStep(
     "    }",
     "  ]",
     "}",
+    'The "summary" field must always be written in English.',
     "Secret requests (type=secret) are persisted in secure per-pipeline storage for future runs.",
     "Use input_requests only when blocked and additional user data is required."
   ].join("\n");
@@ -637,6 +639,7 @@ export async function executeStep(
           '    { "code": "machine_code", "message": "human-readable reason", "severity": "critical|high|medium|low" }',
           "  ]",
           "}",
+          'The "summary" and each "reasons[*].message" value must be in English.',
           "When workflow_status is COMPLETE, set stage=final, step_role=delivery, and gate_target=delivery.",
           "Do not output markdown fences when output mode is JSON."
         ].join("\n")
@@ -675,6 +678,7 @@ export async function executeStep(
         step: executableStep,
         context: workingContext,
         task,
+        mcpServerIds: [...allowedServerIds],
         stageTimeoutMs: effectiveStageTimeoutMs,
         outputMode,
         log,
@@ -744,7 +748,7 @@ export async function executeStep(
       `MCP round ${round + 1} results:`,
       formatMcpToolResults(results),
       "",
-      "Use these MCP results to continue. If more MCP calls are required, return updated mcp_calls JSON.",
+      "Use these MCP results to continue. If more MCP calls are required, invoke mcp_call again (or return updated mcp_calls JSON on fallback runtimes).",
       "Otherwise return final output for this step."
     ].join("\n");
   }

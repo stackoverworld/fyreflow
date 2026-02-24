@@ -17,11 +17,17 @@ import type {
   StorageFileContentResponse,
   StorageFileDeletePayload,
   StorageFileListQuery,
-  StorageFileListResponse
+  StorageFileListResponse,
+  StorageFilesScope
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 const API_TOKEN = (import.meta.env.VITE_DASHBOARD_API_TOKEN ?? "").trim();
+const FLOW_BUILDER_GENERATE_PATH = "/api/flow-builder/generate";
+const FLOW_BUILDER_RETRY_ATTEMPTS = 2;
+const FLOW_BUILDER_RETRY_DELAY_MS = 250;
+const DEFAULT_API_REQUEST_TIMEOUT_MS = 120_000;
+const FLOW_BUILDER_REQUEST_TIMEOUT_MS = 480_000;
 
 interface SseEventChunk {
   event: string;
@@ -101,6 +107,24 @@ function extractFirstFailure(payload: Record<string, unknown>): string | null {
   return null;
 }
 
+function resolveRequestTimeoutMs(path: string): number {
+  return path === FLOW_BUILDER_GENERATE_PATH ? FLOW_BUILDER_REQUEST_TIMEOUT_MS : DEFAULT_API_REQUEST_TIMEOUT_MS;
+}
+
+function resolveAbortReason(signal: AbortSignal | undefined): string | null {
+  if (!signal?.aborted) {
+    return null;
+  }
+  const reason = signal.reason;
+  if (typeof reason === "string" && reason.trim().length > 0) {
+    return reason.trim();
+  }
+  if (reason instanceof Error && reason.message.trim().length > 0) {
+    return reason.message.trim();
+  }
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   headers.set("Content-Type", "application/json");
@@ -109,15 +133,56 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const method = (init?.method ?? "GET").toUpperCase();
+  const timeoutMs = resolveRequestTimeoutMs(path);
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort(`Request timed out after ${timeoutMs}ms`);
+  }, timeoutMs);
+
+  const cleanupSignalForwarding = (() => {
+    if (!init?.signal) {
+      return () => {};
+    }
+
+    const relayAbort = () => {
+      const reason = resolveAbortReason(init.signal);
+      timeoutController.abort(reason ?? "Request aborted");
+    };
+    if (init.signal.aborted) {
+      relayAbort();
+      return () => {};
+    }
+
+    init.signal.addEventListener("abort", relayAbort, { once: true });
+    return () => {
+      init.signal?.removeEventListener("abort", relayAbort);
+    };
+  })();
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers
+      headers,
+      signal: timeoutController.signal
     });
   } catch (error) {
+    if (timedOut) {
+      throw new Error(`Network timeout (${method} ${path}): Request timed out after ${timeoutMs}ms`);
+    }
+
+    const abortReason = resolveAbortReason(init?.signal) ?? resolveAbortReason(timeoutController.signal);
+    if (abortReason) {
+      throw new Error(`Network error (${method} ${path}): ${abortReason}`);
+    }
+
     const reason = error instanceof Error && error.message.trim().length > 0 ? error.message.trim() : "Network request failed";
     throw new Error(`Network error (${method} ${path}): ${reason}`);
+  } finally {
+    clearTimeout(timeout);
+    cleanupSignalForwarding();
   }
 
   if (!response.ok) {
@@ -139,6 +204,51 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+function waitForRetry(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+function isNetworkRequestError(path: string, method: string, error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.startsWith(`Network error (${method.toUpperCase()} ${path}):`);
+}
+
+async function requestWithRetry<T>(
+  path: string,
+  init: RequestInit,
+  options: {
+    attempts: number;
+    delayMs: number;
+    shouldRetry: (error: unknown) => boolean;
+  }
+): Promise<T> {
+  const attempts = Math.max(1, Math.trunc(options.attempts));
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await request<T>(path, init);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !options.shouldRetry(error)) {
+        throw error;
+      }
+      await waitForRetry(options.delayMs);
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error(`Request failed after ${attempts} attempts`);
 }
 
 async function consumeSseStream(
@@ -267,6 +377,80 @@ function createFilesQueryString(query: StorageFileListQuery): string {
     search.set("path", query.path.trim());
   }
   return search.toString();
+}
+
+function normalizeStoragePath(pathValue: string): string {
+  return pathValue
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .join("/");
+}
+
+function buildStorageRawUrl(options: {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string | null;
+  path: string;
+  directory: boolean;
+}): string {
+  const pipelineId = options.pipelineId.trim();
+  if (pipelineId.length === 0) {
+    throw new Error("pipelineId is required");
+  }
+
+  const normalizedPath = normalizeStoragePath(options.path);
+  const runId =
+    options.scope === "runs"
+      ? (options.runId ?? "").trim()
+      : "-";
+  if (options.scope === "runs" && runId.length === 0) {
+    throw new Error("runId is required for runs scope");
+  }
+
+  const pathSegments = [
+    "api",
+    "files",
+    "raw",
+    options.scope,
+    encodeURIComponent(pipelineId),
+    encodeURIComponent(runId.length > 0 ? runId : "-")
+  ];
+
+  if (normalizedPath.length > 0) {
+    pathSegments.push(...normalizedPath.split("/").map((segment) => encodeURIComponent(segment)));
+  }
+
+  const trailingSlash = options.directory ? "/" : "";
+  const url = new URL(`/${pathSegments.join("/")}${trailingSlash}`, `${API_BASE.replace(/\/+$/, "")}/`);
+  if (API_TOKEN.length > 0) {
+    url.searchParams.set("api_token", API_TOKEN);
+  }
+  return url.toString();
+}
+
+export function buildStorageRawFileUrl(options: {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string | null;
+  path: string;
+}): string {
+  return buildStorageRawUrl({
+    ...options,
+    directory: false
+  });
+}
+
+export function buildStorageRawDirectoryUrl(options: {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string | null;
+  path: string;
+}): string {
+  return buildStorageRawUrl({
+    ...options,
+    directory: true
+  });
 }
 
 export async function listStorageFiles(query: StorageFileListQuery) {
@@ -473,8 +657,13 @@ export function subscribeRunEvents(runId: string, options: SubscribeRunEventsOpt
 }
 
 export async function generateFlowDraft(payload: FlowBuilderRequest) {
-  return request<FlowBuilderResponse>("/api/flow-builder/generate", {
-    method: "POST",
+  const method = "POST";
+  return requestWithRetry<FlowBuilderResponse>(FLOW_BUILDER_GENERATE_PATH, {
+    method,
     body: JSON.stringify(payload)
+  }, {
+    attempts: FLOW_BUILDER_RETRY_ATTEMPTS,
+    delayMs: FLOW_BUILDER_RETRY_DELAY_MS,
+    shouldRetry: (error) => isNetworkRequestError(FLOW_BUILDER_GENERATE_PATH, method, error)
   });
 }
