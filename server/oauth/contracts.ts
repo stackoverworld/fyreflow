@@ -40,6 +40,8 @@ export interface ProviderOAuthLoginResult {
   providerId: ProviderId;
   command: string;
   message: string;
+  authUrl?: string;
+  authCode?: string;
 }
 
 export interface ProviderOAuthSyncResult {

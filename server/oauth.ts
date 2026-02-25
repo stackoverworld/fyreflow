@@ -25,6 +25,8 @@ export async function startProviderOAuthLogin(providerId: ProviderId): Promise<{
   providerId: ProviderId;
   command: string;
   message: string;
+  authUrl?: string;
+  authCode?: string;
 }> {
   if (providerId === "openai") {
     return startOpenAiOAuthLogin(providerId);

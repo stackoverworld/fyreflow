@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { execFileAsync, isCommandAvailable, launchDetached } from "../commandUtils.js";
+import { execFileAsync, isCommandAvailable, launchDetachedAndCapture } from "../commandUtils.js";
 import { CODEX_AUTH_PATH, CODEX_CLI_COMMAND } from "../config.js";
 import type {
   ProviderOAuthLoginResult,
@@ -7,6 +7,7 @@ import type {
   ProviderOAuthStatusOptions,
   ProviderOAuthSyncResult
 } from "../contracts.js";
+import { extractDeviceCode, extractFirstAuthUrl } from "../loginOutputParser.js";
 import { probeOpenAiRuntime } from "../runtimeProbe.js";
 import { nowIso } from "../time.js";
 
@@ -51,12 +52,23 @@ export async function startOpenAiOAuthLogin(providerId: "openai"): Promise<Provi
     throw new Error(`Codex CLI command "${CODEX_CLI_COMMAND}" is not installed. Install Codex CLI first, then retry.`);
   }
 
-  launchDetached(CODEX_CLI_COMMAND, ["login", "--device-auth"]);
+  const launchResult = await launchDetachedAndCapture(CODEX_CLI_COMMAND, ["login", "--device-auth"]);
+  const authUrl = extractFirstAuthUrl(launchResult.capturedOutput);
+  const authCode = extractDeviceCode(launchResult.capturedOutput);
+
+  const messageParts = [
+    "Codex browser login started.",
+    authUrl ? `Open ${authUrl}.` : "",
+    authCode ? `Use code ${authCode}.` : "",
+    "If the browser did not open, run `codex login --device-auth` in your terminal."
+  ].filter((value) => value.length > 0);
+
   return {
     providerId,
     command: `${CODEX_CLI_COMMAND} login --device-auth`,
-    message:
-      "Codex browser login started. Complete login in the opened page. If the browser did not open, run `codex login --device-auth` in your terminal."
+    message: messageParts.join(" "),
+    authUrl,
+    authCode
   };
 }
 
@@ -79,7 +91,7 @@ export async function getOpenAiOAuthStatus(
     canUseCli: loggedIn,
     checkedAt: nowIso(),
     message: !cliAvailable
-      ? "Codex CLI not found."
+      ? "Codex CLI not found on this server. Install Codex CLI on backend and set CODEX_CLI_PATH if needed."
       : loggedIn && tokenAvailable
         ? "Logged in via ChatGPT. Cached access token is available for import."
         : loggedIn

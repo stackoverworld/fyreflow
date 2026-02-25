@@ -1031,7 +1031,7 @@ export async function getProviderOAuthStatus(
 }
 
 export async function startProviderOAuthLogin(providerId: ProviderId) {
-  return request<{ result: { message: string; command: string }; status: ProviderOAuthStatus }>(
+  return request<{ result: { message: string; command: string; authUrl?: string; authCode?: string }; status: ProviderOAuthStatus }>(
     `/api/providers/${providerId}/oauth/start`,
     {
       method: "POST"

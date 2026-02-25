@@ -16,6 +16,13 @@ import {
   oauthStatusLine,
   shouldAutoSwitchToOAuth
 } from "./provider-settings/validation";
+import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
+import {
+  buildProviderOAuthStartErrorMessage,
+  buildProviderOAuthStartMessage,
+  resolveProviderOAuthLoginUrl,
+  shouldOpenProviderOAuthBrowser
+} from "./providerOauthConnectModel";
 
 interface ProviderSettingsProps {
   providers: Record<ProviderId, ProviderConfig>;
@@ -195,12 +202,80 @@ export function ProviderSettings({
 
   const handleStartOAuthLogin = useCallback(
     async (providerId: ProviderId) => {
+      const connection = getActiveConnectionSettings();
+      const shouldOpenBrowser = shouldOpenProviderOAuthBrowser(connection.mode);
+      const isElectronDesktop = window.desktop?.isElectron === true;
+      let pendingWindow: Window | null = null;
+
+      const openBrowserUrl = (url: string) => {
+        if (url.trim().length === 0) {
+          return;
+        }
+
+        if (pendingWindow && !pendingWindow.closed) {
+          try {
+            pendingWindow.location.href = url;
+            return;
+          } catch {
+            // Ignore and fallback to a new window attempt.
+          }
+        }
+
+        const openedWindow = window.open(url, "_blank", "noopener,noreferrer");
+        pendingWindow = openedWindow;
+        if (!openedWindow && !isElectronDesktop) {
+          // Fallback for environments that block window.open but still allow synthetic anchor navigation.
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.style.display = "none";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        }
+      };
+
+      if (shouldOpenBrowser) {
+        pendingWindow = window.open("about:blank", "_blank");
+      }
+
       setOauthBusyId(providerId);
+
       try {
         const response = await startProviderOAuthLogin(providerId);
-        onOAuthMessageChange(providerId, response.result.message);
+        const loginUrl = shouldOpenBrowser
+          ? resolveProviderOAuthLoginUrl(providerId, response.result.authUrl)
+          : "";
+        openBrowserUrl(loginUrl);
+
+        onOAuthMessageChange(
+          providerId,
+          buildProviderOAuthStartMessage({
+            connectionMode: connection.mode,
+            providerId,
+            apiMessage: response.result.message,
+            command: response.result.command,
+            authUrl: response.result.authUrl,
+            authCode: response.result.authCode
+          })
+        );
         await pollOAuthStatus(providerId);
         await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+      } catch (error) {
+        onOAuthMessageChange(
+          providerId,
+          buildProviderOAuthStartErrorMessage({
+            connectionMode: connection.mode,
+            providerId,
+            errorMessage: error instanceof Error ? error.message : "Failed to start OAuth login."
+          })
+        );
+
+        if (shouldOpenBrowser) {
+          openBrowserUrl(resolveProviderOAuthLoginUrl(providerId));
+        }
+        await loadOAuthStatus(providerId);
       } finally {
         setOauthBusyId(null);
       }

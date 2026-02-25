@@ -136,6 +136,16 @@
 - Client messages: `subscribe_pairing` (`{ type: "subscribe_pairing", sessionId: string }`), `unsubscribe_pairing`.
 - Server messages: `pairing_subscribed`, `pairing_status`, `pairing_not_found`, `pairing_unsubscribed`.
 
+## Provider OAuth Contract (2026-02-25)
+- `GET /api/providers/:providerId/oauth/status` -> `{ status }` where status includes login source, cli availability, login state, token availability, and runtime probe details.
+- `POST /api/providers/:providerId/oauth/start` -> `{ result, status }`.
+- `result` fields:
+- `providerId`, `command`, `message`
+- optional `authUrl`: provider/device pairing URL extracted from CLI output when available.
+- optional `authCode`: one-time user/device code extracted from CLI output when available.
+- Client behavior should prefer `result.authUrl` for opening browser in remote mode and fall back to provider defaults only when missing.
+- `POST /api/providers/:providerId/oauth/sync-token` -> `{ provider, result }` where `result` includes sync message, optional token, and latest OAuth status.
+
 ## Error Model
 - Provide stable machine-readable error codes.
 - Separate user-safe messages from internal diagnostics.

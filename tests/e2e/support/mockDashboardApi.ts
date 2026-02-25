@@ -15,6 +15,7 @@ interface MockDashboardApiOptions {
   aiGeneratedFlowNames?: string[];
   defaultStepIsolatedStorage?: boolean;
   defaultStepSharedStorage?: boolean;
+  defaultProviderAuthMode?: "api_key" | "oauth";
 }
 
 interface MockDashboardApiContext {
@@ -90,14 +91,18 @@ function createDefaultPipeline(
 }
 
 function createInitialState(
-  options: Pick<MockDashboardApiOptions, "defaultStepIsolatedStorage" | "defaultStepSharedStorage"> = {}
+  options: Pick<
+    MockDashboardApiOptions,
+    "defaultStepIsolatedStorage" | "defaultStepSharedStorage" | "defaultProviderAuthMode"
+  > = {}
 ): DashboardState {
+  const authMode = options.defaultProviderAuthMode ?? "api_key";
   return {
     providers: {
       openai: {
         id: "openai",
         label: "OpenAI / Codex",
-        authMode: "api_key",
+        authMode,
         apiKey: "",
         oauthToken: "",
         baseUrl: "https://api.openai.com/v1",
@@ -107,7 +112,7 @@ function createInitialState(
       claude: {
         id: "claude",
         label: "Anthropic",
-        authMode: "api_key",
+        authMode,
         apiKey: "",
         oauthToken: "",
         baseUrl: "https://api.anthropic.com/v1",
@@ -562,6 +567,11 @@ export async function mockDashboardApi(
     const providerStartMatch = pathname.match(/^\/api\/providers\/(openai|claude)\/oauth\/start$/);
     if (providerStartMatch && method === "POST") {
       const providerId = providerStartMatch[1] as ProviderId;
+      const authUrl =
+        providerId === "claude"
+          ? "https://claude.ai/device?pairing=mock-session"
+          : "https://chatgpt.com/device?pairing=mock-session";
+      const authCode = providerId === "openai" ? "OPEN-AI-MOCK" : "CLAUDE-MOCK";
       oauthByProvider[providerId] = {
         ...oauthByProvider[providerId],
         loggedIn: true,
@@ -571,7 +581,12 @@ export async function mockDashboardApi(
         checkedAt: isoAt(Date.now() - BASE_TIME)
       };
       await fulfillJson(route, 202, {
-        result: { message: "Mock OAuth browser flow started.", command: oauthByProvider[providerId].cliCommand },
+        result: {
+          message: "Mock OAuth browser flow started.",
+          command: oauthByProvider[providerId].cliCommand,
+          authUrl,
+          authCode
+        },
         status: oauthByProvider[providerId]
       });
       return;

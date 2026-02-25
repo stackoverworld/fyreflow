@@ -274,6 +274,11 @@ Default context policy:
 5. For OpenAI/Codex, click **Import Codex token**.
 6. Click **Save provider**.
 
+Remote mode note:
+- The dashboard opens the provider pairing/login URL returned by backend OAuth start (when available), with provider-homepage fallback.
+- OAuth CLI login runs on the remote engine host (backend), not on your local desktop. If `CLI unavailable` or `not installed` appears, install CLI on backend and/or set `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH`.
+- If status remains pending, run the shown CLI command (`codex login --device-auth` or `claude auth login`) directly on the remote server terminal.
+
 For Claude, this is expected:
 - OAuth token input does not auto-fill.
 - Status should show **Connected** and **CLI ready**.

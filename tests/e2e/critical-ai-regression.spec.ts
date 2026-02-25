@@ -6,6 +6,15 @@ function runToolbarPrimaryButton(page: Page) {
   return page.getByRole("button", { name: /Smart Run|Quick Run|Run/ }).first();
 }
 
+const REMOTE_CONNECTION_SETTINGS = {
+  mode: "remote",
+  localApiBaseUrl: "http://localhost:8787",
+  remoteApiBaseUrl: "https://remote.example.com",
+  apiToken: "remote-token",
+  realtimePath: "/api/ws",
+  deviceToken: ""
+} as const;
+
 test.describe("Critical AI Regression Flows", () => {
   test("AI builder can update the active flow draft", async ({ page }) => {
     await mockDashboardApi(page, {
@@ -130,6 +139,32 @@ test.describe("Critical AI Regression Flows", () => {
     await openAiSection.getByRole("button", { name: "Save" }).click();
 
     await expect(page.getByText("OpenAI / Codex settings saved.")).toBeVisible();
+  });
+
+  test("provider connect opens a pairing link in remote mode", async ({ page, context }) => {
+    await page.addInitScript((connectionSettings) => {
+      window.localStorage.setItem("fyreflow:connection-settings", JSON.stringify(connectionSettings));
+    }, REMOTE_CONNECTION_SETTINGS);
+
+    await mockDashboardApi(page, {
+      defaultProviderAuthMode: "oauth"
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    await page.getByRole("button", { name: "Provider Auth" }).click();
+
+    const popupPromise = context.waitForEvent("page");
+    const claudeSection = page.locator("section", { hasText: "Anthropic" }).first();
+    await claudeSection.getByRole("button", { name: "Connect", exact: true }).click();
+
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    await expect(popup).toHaveURL(/claude\.ai\/device\?pairing=mock-session/i);
+    await popup.close();
   });
 
   test("new flow can be created and deleted through the left panel", async ({ page }) => {

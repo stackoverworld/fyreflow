@@ -1,4 +1,4 @@
-import { execFileAsync, isCommandAvailable, launchDetached } from "../commandUtils.js";
+import { execFileAsync, isCommandAvailable, launchDetachedAndCapture } from "../commandUtils.js";
 import { CLAUDE_CLI_COMMAND } from "../config.js";
 import type {
   ClaudeStatusJson,
@@ -7,6 +7,7 @@ import type {
   ProviderOAuthStatusOptions,
   ProviderOAuthSyncResult
 } from "../contracts.js";
+import { extractDeviceCode, extractFirstAuthUrl } from "../loginOutputParser.js";
 import { probeClaudeRuntime } from "../runtimeProbe.js";
 import { nowIso } from "../time.js";
 
@@ -29,12 +30,23 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  launchDetached(CLAUDE_CLI_COMMAND, ["auth", "login"]);
+  const launchResult = await launchDetachedAndCapture(CLAUDE_CLI_COMMAND, ["auth", "login"]);
+  const authUrl = extractFirstAuthUrl(launchResult.capturedOutput);
+  const authCode = extractDeviceCode(launchResult.capturedOutput);
+
+  const messageParts = [
+    "Claude browser login started.",
+    authUrl ? `Open ${authUrl}.` : "",
+    authCode ? `Use code ${authCode}.` : "",
+    "If the browser did not open, run `claude auth login` in your terminal."
+  ].filter((value) => value.length > 0);
+
   return {
     providerId,
     command: `${CLAUDE_CLI_COMMAND} auth login`,
-    message:
-      "Claude browser login started. Complete login in the opened page. If the browser did not open, run `claude auth login` in your terminal."
+    message: messageParts.join(" "),
+    authUrl,
+    authCode
   };
 }
 
@@ -57,7 +69,7 @@ export async function getClaudeOAuthStatus(
     canUseCli: loggedIn,
     checkedAt: nowIso(),
     message: !cliAvailable
-      ? "Claude CLI not found."
+      ? "Claude CLI not found on this server. Install Claude Code CLI on backend and set CLAUDE_CLI_PATH if needed."
       : loggedIn
         ? "Logged in with Claude Code. OAuth credentials are managed by Claude CLI."
         : "Not logged in. Start browser login."
