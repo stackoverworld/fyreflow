@@ -114,7 +114,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runt
       ? env.FYREFLOW_WS_PATH.trim()
       : defaultRealtimeSocketPath;
 
-  return {
+  const config: RuntimeConfig = {
     mode,
     port: resolvePort(env.PORT),
     apiAuthToken: (env.DASHBOARD_API_TOKEN ?? "").trim(),
@@ -145,4 +145,10 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runt
       120_000
     )
   };
+
+  if (config.mode === "remote" && config.apiAuthToken.length === 0) {
+    throw new Error("DASHBOARD_API_TOKEN is required when FYREFLOW_RUNTIME_MODE=remote.");
+  }
+
+  return config;
 }

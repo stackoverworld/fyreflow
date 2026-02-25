@@ -44,7 +44,7 @@ function createAuthMiddleware(authToken: string) {
     }
 
     if (expected.length === 0) {
-      next();
+      response.status(503).json({ error: "Updater auth token is not configured." });
       return;
     }
 

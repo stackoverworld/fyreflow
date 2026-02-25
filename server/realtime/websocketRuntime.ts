@@ -10,6 +10,8 @@ const WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const DEFAULT_WS_PATH = "/api/ws";
 const DEFAULT_RUN_POLL_INTERVAL_MS = 400;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const REALTIME_PROTOCOL = "fyreflow.realtime.v1";
+const AUTH_PROTOCOL_PREFIX = "fyreflow-auth.";
 
 interface ClientRunSubscription {
   cursor: number;
@@ -75,10 +77,68 @@ function extractBearerToken(value: string | undefined): string {
   return trimmed;
 }
 
+function parseOfferedSubprotocols(rawHeader: string | undefined): string[] {
+  if (!rawHeader) {
+    return [];
+  }
+
+  return rawHeader
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function decodeAuthProtocolToken(protocolValue: string): string {
+  const rawPayload = protocolValue.slice(AUTH_PROTOCOL_PREFIX.length).trim();
+  if (rawPayload.length === 0) {
+    return "";
+  }
+
+  try {
+    const decoded = Buffer.from(rawPayload, "base64url").toString("utf8").trim();
+    return decoded;
+  } catch {
+    return "";
+  }
+}
+
+function extractProtocolToken(offeredProtocols: string[]): string {
+  for (const protocol of offeredProtocols) {
+    if (!protocol.toLowerCase().startsWith(AUTH_PROTOCOL_PREFIX)) {
+      continue;
+    }
+
+    const token = decodeAuthProtocolToken(protocol);
+    if (token.length > 0) {
+      return token;
+    }
+  }
+
+  return "";
+}
+
+function selectAcceptedSubprotocol(offeredProtocols: string[]): string | null {
+  if (offeredProtocols.length === 0) {
+    return null;
+  }
+
+  const realtime = offeredProtocols.find((protocol) => protocol === REALTIME_PROTOCOL);
+  if (realtime) {
+    return realtime;
+  }
+
+  const nonAuth = offeredProtocols.find((protocol) => !protocol.toLowerCase().startsWith(AUTH_PROTOCOL_PREFIX));
+  if (nonAuth) {
+    return nonAuth;
+  }
+
+  return null;
+}
+
 function isAuthorizedRequest(
   request: IncomingMessage,
   apiAuthToken: string,
-  url: URL,
+  offeredProtocols: string[],
   isAdditionalTokenValid?: (token: string) => boolean
 ): boolean {
   const expected = apiAuthToken.trim();
@@ -90,9 +150,9 @@ function isAuthorizedRequest(
     typeof request.headers.authorization === "string" ? request.headers.authorization : undefined;
   const xApiTokenHeader =
     typeof request.headers["x-api-token"] === "string" ? request.headers["x-api-token"] : undefined;
-  const queryToken = url.searchParams.get("api_token")?.trim() ?? "";
+  const protocolToken = extractProtocolToken(offeredProtocols);
   const bearer = extractBearerToken(authorizationHeader);
-  const candidate = bearer || (xApiTokenHeader?.trim() ?? "") || queryToken;
+  const candidate = bearer || (xApiTokenHeader?.trim() ?? "") || protocolToken;
 
   if (candidate.length === 0) {
     return false;
@@ -450,7 +510,13 @@ export function createRealtimeRuntime(options: RealtimeRuntimeOptions): Realtime
       return;
     }
 
-    if (!isAuthorizedRequest(request, options.apiAuthToken, url, options.isAdditionalTokenValid)) {
+    const offeredProtocols = parseOfferedSubprotocols(
+      typeof request.headers["sec-websocket-protocol"] === "string"
+        ? request.headers["sec-websocket-protocol"]
+        : undefined
+    );
+
+    if (!isAuthorizedRequest(request, options.apiAuthToken, offeredProtocols, options.isAdditionalTokenValid)) {
       writeUpgradeError(socket, 401, "Unauthorized");
       return;
     }
@@ -468,11 +534,13 @@ export function createRealtimeRuntime(options: RealtimeRuntimeOptions): Realtime
     }
 
     const accept = makeWebSocketAcceptKey(key.trim());
+    const acceptedSubprotocol = selectAcceptedSubprotocol(offeredProtocols);
     const responseHeaders = [
       "HTTP/1.1 101 Switching Protocols",
       "Upgrade: websocket",
       "Connection: Upgrade",
       `Sec-WebSocket-Accept: ${accept}`,
+      ...(acceptedSubprotocol ? [`Sec-WebSocket-Protocol: ${acceptedSubprotocol}`] : []),
       "",
       ""
     ].join("\r\n");
@@ -490,7 +558,7 @@ export function createRealtimeRuntime(options: RealtimeRuntimeOptions): Realtime
 
     sendJson(socket, {
       type: "hello",
-      protocol: "fyreflow.realtime.v1",
+      protocol: REALTIME_PROTOCOL,
       clientId: state.id,
       now: new Date().toISOString()
     });

@@ -196,6 +196,20 @@ export function registerPairingRoutes(app: Express, deps: PairingRouteContext): 
       sendPairingError(error, response);
     }
   });
+
+  app.post("/api/pairing/sessions/:sessionId/revoke", (request: Request, response: Response) => {
+    if (!requirePairingAdminAuth(request, response, deps)) {
+      return;
+    }
+
+    try {
+      const sessionId = firstParam(request.params.sessionId);
+      const session = deps.pairingService.revokeDeviceToken(sessionId);
+      response.json({ session });
+    } catch (error) {
+      sendPairingError(error, response);
+    }
+  });
 }
 
 export type PairingRouteDependencies = PairingRouteContext;

@@ -21,9 +21,9 @@ export const CLAUDE_CLI_SETTING_SOURCES = (
   process.env.CLAUDE_CLI_SETTING_SOURCES ?? DEFAULT_CLAUDE_CLI_SETTING_SOURCES
 ).trim();
 export const CLAUDE_CLI_PERMISSION_MODE = (() => {
-  const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "bypassPermissions").trim();
+  const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "default").trim();
   const allowed = new Set(["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"]);
-  return allowed.has(candidate) ? candidate : "bypassPermissions";
+  return allowed.has(candidate) ? candidate : "default";
 })();
 
 export const CLAUDE_PROBE_TIMEOUT_MS = (() => {

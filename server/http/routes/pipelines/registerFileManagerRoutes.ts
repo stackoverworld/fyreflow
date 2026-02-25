@@ -1,15 +1,30 @@
 import fs from "node:fs/promises";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import path from "node:path";
 import type { Express, Request, Response } from "express";
 import type { PipelineRouteContext } from "./contracts.js";
 import { firstParam, sendZodError } from "./helpers.js";
-import { filesContentQuerySchema, filesDeleteSchema, filesListQuerySchema } from "./schemas.js";
+import {
+  filesContentQuerySchema,
+  filesDeleteSchema,
+  filesImportUrlSchema,
+  filesListQuerySchema,
+  filesUploadChunkSchema
+} from "./schemas.js";
 import type { DashboardState, StorageConfig } from "../../../types.js";
 
 const MAX_DIRECTORY_ENTRIES = 500;
 const MAX_FILE_PREVIEW_BYTES_DEFAULT = 256 * 1024;
 const MAX_FILE_PREVIEW_BYTES_LIMIT = 1024 * 1024;
 const TEXT_PREVIEW_SAMPLE_BYTES = 4096;
+const MAX_FILE_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_BYTES = 512 * 1024;
+const MAX_URL_IMPORT_BYTES = 25 * 1024 * 1024;
+const URL_IMPORT_TIMEOUT_MS = 30_000;
+const URL_IMPORT_MAX_REDIRECTS = 5;
+const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
 
 type FilesScope = "shared" | "isolated" | "runs";
 type FilePreviewKind = "text" | "html";
@@ -42,6 +57,24 @@ interface FilePreviewPayload {
   sizeBytes: number;
   truncated: boolean;
 }
+
+interface UploadSession {
+  key: string;
+  pipelineId: string;
+  scope: FilesScope;
+  runId: string | null;
+  destinationPath: string;
+  targetPath: string;
+  tempPath: string;
+  totalChunks: number;
+  totalSizeBytes: number;
+  nextChunkIndex: number;
+  receivedBytes: number;
+  overwrite: boolean;
+  expiresAt: number;
+}
+
+const uploadSessions = new Map<string, UploadSession>();
 
 function safeStorageSegment(value: string): string {
   const trimmed = value.trim();
@@ -114,7 +147,14 @@ function resolvePathWithinRoot(rootPath: string, relativePath: string): string {
 async function assertRealPathInsideRoot(rootPath: string, candidatePath: string): Promise<void> {
   const resolvedRoot = path.resolve(rootPath);
   const rootRealPath = await fs.realpath(resolvedRoot).catch(() => resolvedRoot);
-  const candidateRealPath = await fs.realpath(candidatePath).catch(() => path.resolve(candidatePath));
+  const resolvedCandidate = path.resolve(candidatePath);
+  const candidateRealPath = await fs.realpath(resolvedCandidate).catch(() => {
+    const relativeToRoot = path.relative(resolvedRoot, resolvedCandidate);
+    if (relativeToRoot === "" || (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot))) {
+      return path.resolve(rootRealPath, relativeToRoot);
+    }
+    return resolvedCandidate;
+  });
 
   if (!isPathWithinRoot(rootRealPath, candidateRealPath)) {
     throw new FileManagerRouteError(400, "Path escapes the allowed storage scope.");
@@ -319,6 +359,407 @@ async function readFilePreview(targetPath: string, maxBytes: number): Promise<Fi
   }
 }
 
+function toContentDispositionFilename(fileName: string): string {
+  return fileName.replace(/[\r\n"]/g, "_");
+}
+
+function isTruthyQueryFlag(raw: string | undefined): boolean {
+  if (!raw) {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function normalizeUploadId(uploadId: string): string {
+  const normalized = safeStorageSegment(uploadId).slice(0, 120);
+  if (normalized.length === 0) {
+    throw new FileManagerRouteError(400, "uploadId must include valid characters.");
+  }
+  return normalized;
+}
+
+function uploadSessionKey(input: {
+  pipelineId: string;
+  scope: FilesScope;
+  runId?: string;
+  uploadId: string;
+}): string {
+  return `${input.pipelineId}::${input.scope}::${input.runId ?? "-"}::${input.uploadId}`;
+}
+
+function parseBase64Chunk(value: string): Buffer {
+  const normalized = value.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 !== 0) {
+    throw new FileManagerRouteError(400, "chunkBase64 must be valid base64.");
+  }
+  return Buffer.from(normalized, "base64");
+}
+
+function isPrivateIpv4Address(hostname: string): boolean {
+  const segments = hostname.split(".");
+  if (segments.length !== 4) {
+    return false;
+  }
+
+  const bytes = segments.map((segment) => Number.parseInt(segment, 10));
+  if (bytes.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+    return false;
+  }
+
+  if (bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 0) {
+    return true;
+  }
+  if (bytes[0] === 169 && bytes[1] === 254) {
+    return true;
+  }
+  if (bytes[0] === 192 && bytes[1] === 168) {
+    return true;
+  }
+  if (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeHostnameForNetworkChecks(hostname: string): string {
+  const normalized = hostname.trim().toLowerCase();
+  const withoutBrackets =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1).trim() : normalized;
+  return withoutBrackets.replace(/\.+$/, "");
+}
+
+function parseIpv4Address(hostname: string): number[] | null {
+  const segments = hostname.split(".");
+  if (segments.length !== 4) {
+    return null;
+  }
+
+  const bytes = segments.map((segment) => Number.parseInt(segment, 10));
+  if (bytes.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
+    return null;
+  }
+
+  return bytes;
+}
+
+function decodeMappedIpv4FromIpv6(hostname: string): string | null {
+  const dottedMatch = hostname.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dottedMatch?.[1]) {
+    const bytes = parseIpv4Address(dottedMatch[1]);
+    return bytes ? bytes.join(".") : null;
+  }
+
+  const hexMatch = hostname.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexMatch?.[1] || !hexMatch[2]) {
+    return null;
+  }
+
+  const high = Number.parseInt(hexMatch[1], 16);
+  const low = Number.parseInt(hexMatch[2], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) {
+    return null;
+  }
+
+  const a = (high >> 8) & 0xff;
+  const b = high & 0xff;
+  const c = (low >> 8) & 0xff;
+  const d = low & 0xff;
+  return `${a}.${b}.${c}.${d}`;
+}
+
+function isPrivateIpv6Address(hostname: string): boolean {
+  const normalized = normalizeHostnameForNetworkChecks(hostname).split("%")[0] ?? "";
+  if (normalized === "::1" || normalized === "::" || normalized.startsWith("fe80:")) {
+    return true;
+  }
+
+  const mappedIpv4 = decodeMappedIpv4FromIpv6(normalized);
+  if (mappedIpv4 && isPrivateIpv4Address(mappedIpv4)) {
+    return true;
+  }
+
+  return normalized.startsWith("fc") || normalized.startsWith("fd");
+}
+
+function assertImportUrlAllowed(sourceUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch {
+    throw new FileManagerRouteError(400, "sourceUrl must be a valid URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new FileManagerRouteError(400, "Only http/https source URLs are allowed.");
+  }
+
+  const host = normalizeHostnameForNetworkChecks(parsed.hostname);
+  if (host.length === 0) {
+    throw new FileManagerRouteError(400, "sourceUrl must include a hostname.");
+  }
+  if (host === "localhost" || host.endsWith(".localhost")) {
+    throw new FileManagerRouteError(400, "Localhost URLs are not allowed.");
+  }
+  if (
+    host.endsWith(".local") ||
+    host.endsWith(".localdomain") ||
+    host.endsWith(".internal")
+  ) {
+    throw new FileManagerRouteError(400, "Private network hostnames are not allowed.");
+  }
+
+  const ipVersion = isIP(host);
+  if (ipVersion === 4 && isPrivateIpv4Address(host)) {
+    throw new FileManagerRouteError(400, "Private network URLs are not allowed.");
+  }
+  if (ipVersion === 6 && isPrivateIpv6Address(host)) {
+    throw new FileManagerRouteError(400, "Private network URLs are not allowed.");
+  }
+
+  return parsed;
+}
+
+function isDnsValidationDisabled(): boolean {
+  const raw = (process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function isRedirectStatus(statusCode: number): boolean {
+  return statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307 || statusCode === 308;
+}
+
+async function assertResolvedAddressAllowed(hostname: string): Promise<void> {
+  if (isDnsValidationDisabled()) {
+    return;
+  }
+
+  const normalizedHost = normalizeHostnameForNetworkChecks(hostname);
+  if (isIP(normalizedHost) !== 0) {
+    return;
+  }
+
+  let resolved: Array<{ address: string; family: number }>;
+  try {
+    resolved = await dnsLookup(normalizedHost, { all: true, verbatim: true });
+  } catch {
+    throw new FileManagerRouteError(400, "sourceUrl hostname could not be resolved.");
+  }
+
+  if (!Array.isArray(resolved) || resolved.length === 0) {
+    throw new FileManagerRouteError(400, "sourceUrl hostname could not be resolved.");
+  }
+
+  for (const address of resolved) {
+    if (address.family === 4 && isPrivateIpv4Address(address.address)) {
+      throw new FileManagerRouteError(400, "Private network URLs are not allowed.");
+    }
+    if (address.family === 6 && isPrivateIpv6Address(address.address)) {
+      throw new FileManagerRouteError(400, "Private network URLs are not allowed.");
+    }
+  }
+}
+
+function deriveDestinationPathFromUrl(sourceUrl: URL): string {
+  const fileNameRaw = sourceUrl.pathname.split("/").at(-1) ?? "";
+  if (fileNameRaw.trim().length === 0) {
+    throw new FileManagerRouteError(400, "destinationPath is required when URL does not contain a file name.");
+  }
+
+  let decodedName = fileNameRaw;
+  try {
+    decodedName = decodeURIComponent(fileNameRaw);
+  } catch {
+    decodedName = fileNameRaw;
+  }
+
+  const normalized = normalizeRelativePath(decodedName);
+  if (normalized.length === 0) {
+    throw new FileManagerRouteError(400, "Could not derive a valid destinationPath from sourceUrl.");
+  }
+  return normalized;
+}
+
+function buildUploadTempPath(targetPath: string, uploadId: string): string {
+  const parentDir = path.dirname(targetPath);
+  const baseName = path.basename(targetPath);
+  return path.join(parentDir, `.${baseName}.upload-${uploadId}-${randomUUID()}.part`);
+}
+
+async function cleanupExpiredUploadSessions(now = Date.now()): Promise<void> {
+  const expiredTempPaths: string[] = [];
+
+  for (const [key, session] of uploadSessions.entries()) {
+    if (session.expiresAt > now) {
+      continue;
+    }
+    uploadSessions.delete(key);
+    expiredTempPaths.push(session.tempPath);
+  }
+
+  if (expiredTempPaths.length === 0) {
+    return;
+  }
+
+  await Promise.all(expiredTempPaths.map((tempPath) => fs.rm(tempPath, { force: true }).catch(() => undefined)));
+}
+
+async function ensureTargetCanBeWritten(targetPath: string, overwrite: boolean): Promise<void> {
+  const existing = await fs.lstat(targetPath).catch((error) => {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  });
+
+  if (!existing) {
+    return;
+  }
+  if (existing.isSymbolicLink()) {
+    throw new FileManagerRouteError(400, "Symbolic links are not supported.");
+  }
+  if (!existing.isFile()) {
+    throw new FileManagerRouteError(400, "Destination path must point to a file.");
+  }
+  if (!overwrite) {
+    throw new FileManagerRouteError(409, "Destination file already exists.");
+  }
+}
+
+async function ensureParentDirectory(rootPath: string, targetPath: string): Promise<void> {
+  const parentDir = path.dirname(targetPath);
+  await fs.mkdir(parentDir, { recursive: true });
+  await assertRealPathInsideRoot(rootPath, parentDir);
+}
+
+async function finalizeUploadedFile(session: UploadSession): Promise<void> {
+  if (session.receivedBytes !== session.totalSizeBytes) {
+    throw new FileManagerRouteError(
+      400,
+      `Upload size mismatch: expected ${session.totalSizeBytes} bytes, received ${session.receivedBytes}.`
+    );
+  }
+
+  if (session.overwrite) {
+    await fs.rm(session.targetPath, { force: true }).catch((error) => {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    });
+  }
+
+  await fs.rename(session.tempPath, session.targetPath);
+}
+
+async function downloadRemoteFileToTemp(sourceUrl: URL, tempPath: string): Promise<number> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort("timeout");
+  }, URL_IMPORT_TIMEOUT_MS);
+
+  let handle: fs.FileHandle | null = null;
+
+  try {
+    let response: Response | null = null;
+    let currentUrl = new URL(sourceUrl.toString());
+    let redirectCount = 0;
+
+    while (true) {
+      await assertResolvedAddressAllowed(currentUrl.hostname.trim().toLowerCase());
+
+      response = await fetch(currentUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "fyreflow-file-manager/1.0"
+        }
+      });
+
+      if (!isRedirectStatus(response.status)) {
+        break;
+      }
+
+      if (redirectCount >= URL_IMPORT_MAX_REDIRECTS) {
+        throw new FileManagerRouteError(400, "URL import failed: too many redirects.");
+      }
+
+      const location = response.headers.get("location")?.trim();
+      if (!location) {
+        throw new FileManagerRouteError(400, "URL import failed: redirect location is missing.");
+      }
+
+      currentUrl = assertImportUrlAllowed(new URL(location, currentUrl).toString());
+      redirectCount += 1;
+    }
+
+    if (!response.ok) {
+      throw new FileManagerRouteError(400, `URL import failed: upstream returned HTTP ${response.status}.`);
+    }
+
+    const contentLengthHeader = response.headers.get("content-length");
+    if (contentLengthHeader) {
+      const parsedLength = Number.parseInt(contentLengthHeader, 10);
+      if (Number.isFinite(parsedLength) && parsedLength > MAX_URL_IMPORT_BYTES) {
+        throw new FileManagerRouteError(
+          413,
+          `URL import exceeds ${Math.trunc(MAX_URL_IMPORT_BYTES / (1024 * 1024))} MB limit.`
+        );
+      }
+    }
+
+    if (!response.body) {
+      throw new FileManagerRouteError(502, "URL import failed: response body is empty.");
+    }
+
+    handle = await fs.open(tempPath, "wx");
+    const reader = response.body.getReader();
+    let totalBytes = 0;
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+
+      const bytes = chunk.value ?? new Uint8Array(0);
+      if (bytes.length === 0) {
+        continue;
+      }
+
+      totalBytes += bytes.length;
+      if (totalBytes > MAX_URL_IMPORT_BYTES) {
+        throw new FileManagerRouteError(
+          413,
+          `URL import exceeds ${Math.trunc(MAX_URL_IMPORT_BYTES / (1024 * 1024))} MB limit.`
+        );
+      }
+
+      await handle.write(bytes);
+    }
+
+    return totalBytes;
+  } catch (error) {
+    if (error instanceof FileManagerRouteError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new FileManagerRouteError(408, "URL import timed out.");
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown import error.";
+    throw new FileManagerRouteError(502, `Failed to import URL: ${message}`);
+  } finally {
+    clearTimeout(timeout);
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
+  }
+}
+
 function toQueryParam(raw: unknown): string | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -386,6 +827,78 @@ function parseDeleteBody(request: Request): {
     runId: parsed.runId?.trim(),
     path: parsed.path,
     recursive: parsed.recursive
+  };
+}
+
+function parseUploadChunkBody(request: Request): {
+  pipelineId: string;
+  scope: FilesScope;
+  runId?: string;
+  destinationPath: string;
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  totalSizeBytes: number;
+  chunk: Buffer;
+  overwrite: boolean;
+} {
+  const parsed = filesUploadChunkSchema.parse(request.body ?? {});
+  const destinationPath = normalizeRelativePath(parsed.destinationPath);
+  if (destinationPath.length === 0) {
+    throw new FileManagerRouteError(400, "destinationPath is required.");
+  }
+
+  const uploadId = normalizeUploadId(parsed.uploadId.trim());
+  const chunk = parseBase64Chunk(parsed.chunkBase64);
+  if (chunk.length > MAX_UPLOAD_CHUNK_BYTES) {
+    throw new FileManagerRouteError(
+      413,
+      `Upload chunk exceeds ${Math.trunc(MAX_UPLOAD_CHUNK_BYTES / 1024)} KB limit.`
+    );
+  }
+  if (parsed.totalSizeBytes > MAX_FILE_UPLOAD_BYTES) {
+    throw new FileManagerRouteError(
+      413,
+      `Upload exceeds ${Math.trunc(MAX_FILE_UPLOAD_BYTES / (1024 * 1024))} MB limit.`
+    );
+  }
+
+  return {
+    pipelineId: parsed.pipelineId.trim(),
+    scope: parsed.scope,
+    runId: parsed.runId?.trim(),
+    destinationPath,
+    uploadId,
+    chunkIndex: parsed.chunkIndex,
+    totalChunks: parsed.totalChunks,
+    totalSizeBytes: parsed.totalSizeBytes,
+    chunk,
+    overwrite: parsed.overwrite
+  };
+}
+
+function parseImportUrlBody(request: Request): {
+  pipelineId: string;
+  scope: FilesScope;
+  runId?: string;
+  sourceUrl: URL;
+  destinationPath?: string;
+  overwrite: boolean;
+} {
+  const parsed = filesImportUrlSchema.parse(request.body ?? {});
+  const destinationPathRaw = parsed.destinationPath?.trim() ?? "";
+  const destinationPath = destinationPathRaw.length > 0 ? normalizeRelativePath(destinationPathRaw) : undefined;
+  if (destinationPathRaw.length > 0 && (!destinationPath || destinationPath.length === 0)) {
+    throw new FileManagerRouteError(400, "destinationPath is invalid.");
+  }
+
+  return {
+    pipelineId: parsed.pipelineId.trim(),
+    scope: parsed.scope,
+    runId: parsed.runId?.trim(),
+    sourceUrl: assertImportUrlAllowed(parsed.sourceUrl),
+    destinationPath,
+    overwrite: parsed.overwrite
   };
 }
 
@@ -600,10 +1113,244 @@ export function registerFileManagerRoutes(app: Express, deps: PipelineRouteConte
       }
 
       const content = await fs.readFile(targetPath);
-      response.setHeader("Content-Type", inferMimeType(targetPath));
+      const mimeType = inferMimeType(targetPath);
+      response.setHeader("Content-Type", mimeType);
       response.setHeader("Content-Length", String(content.length));
       response.setHeader("Cache-Control", "no-store");
+      const shouldDownload = isTruthyQueryFlag(toQueryParam(request.query.download));
+      if (shouldDownload) {
+        const fileName = path.basename(targetPath);
+        const safeFileName = toContentDispositionFilename(fileName);
+        response.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+        );
+      }
       response.send(content);
+    } catch (error) {
+      sendFileManagerError(error, response);
+    }
+  });
+
+  app.post("/api/files/upload", async (request: Request, response: Response) => {
+    try {
+      await cleanupExpiredUploadSessions();
+      const input = parseUploadChunkBody(request);
+      const pipeline = deps.store.getPipeline(input.pipelineId);
+      if (!pipeline) {
+        response.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      const state = deps.store.getState();
+      const scope = resolveScopeRoot(state, state.storage, input.pipelineId, input.scope, input.runId);
+      await fs.mkdir(scope.rootPath, { recursive: true });
+
+      const targetPath = resolvePathWithinRoot(scope.rootPath, input.destinationPath);
+      await ensureParentDirectory(scope.rootPath, targetPath);
+      await assertRealPathInsideRoot(scope.rootPath, targetPath);
+
+      const sessionKey = uploadSessionKey({
+        pipelineId: input.pipelineId,
+        scope: input.scope,
+        runId: input.runId,
+        uploadId: input.uploadId
+      });
+      const now = Date.now();
+      const runId = input.runId ?? null;
+
+      if (input.chunkIndex === 0) {
+        const existing = uploadSessions.get(sessionKey);
+        if (existing) {
+          uploadSessions.delete(sessionKey);
+          await fs.rm(existing.tempPath, { force: true }).catch(() => undefined);
+        }
+
+        await ensureTargetCanBeWritten(targetPath, input.overwrite);
+        const tempPath = buildUploadTempPath(targetPath, input.uploadId);
+        const handle = await fs.open(tempPath, "wx");
+        try {
+          if (input.chunk.length > 0) {
+            await handle.write(input.chunk);
+          }
+        } finally {
+          await handle.close();
+        }
+
+        const session: UploadSession = {
+          key: sessionKey,
+          pipelineId: input.pipelineId,
+          scope: input.scope,
+          runId,
+          destinationPath: input.destinationPath,
+          targetPath,
+          tempPath,
+          totalChunks: input.totalChunks,
+          totalSizeBytes: input.totalSizeBytes,
+          nextChunkIndex: 1,
+          receivedBytes: input.chunk.length,
+          overwrite: input.overwrite,
+          expiresAt: now + UPLOAD_SESSION_TTL_MS
+        };
+
+        if (session.receivedBytes > session.totalSizeBytes) {
+          uploadSessions.delete(sessionKey);
+          await fs.rm(session.tempPath, { force: true }).catch(() => undefined);
+          throw new FileManagerRouteError(400, "Upload chunk exceeds declared totalSizeBytes.");
+        }
+
+        if (session.totalChunks === 1) {
+          try {
+            await finalizeUploadedFile(session);
+          } catch (error) {
+            await fs.rm(session.tempPath, { force: true }).catch(() => undefined);
+            throw error;
+          }
+          response.status(201).json({
+            pipelineId: input.pipelineId,
+            scope: input.scope,
+            runId,
+            path: input.destinationPath,
+            sizeBytes: session.receivedBytes,
+            status: "completed"
+          });
+          return;
+        }
+
+        uploadSessions.set(sessionKey, session);
+        response.status(202).json({
+          pipelineId: input.pipelineId,
+          scope: input.scope,
+          runId,
+          path: input.destinationPath,
+          chunkIndex: input.chunkIndex,
+          totalChunks: session.totalChunks,
+          receivedBytes: session.receivedBytes,
+          status: "chunk_received"
+        });
+        return;
+      }
+
+      const session = uploadSessions.get(sessionKey);
+      if (!session) {
+        throw new FileManagerRouteError(409, "Upload session not found or expired. Restart upload from chunk 0.");
+      }
+      if (
+        session.pipelineId !== input.pipelineId ||
+        session.scope !== input.scope ||
+        session.runId !== runId ||
+        session.destinationPath !== input.destinationPath ||
+        session.totalChunks !== input.totalChunks ||
+        session.totalSizeBytes !== input.totalSizeBytes
+      ) {
+        throw new FileManagerRouteError(409, "Upload session payload does not match the original upload.");
+      }
+      if (session.nextChunkIndex !== input.chunkIndex) {
+        throw new FileManagerRouteError(
+          409,
+          `Unexpected chunkIndex ${input.chunkIndex}. Expected ${session.nextChunkIndex}.`
+        );
+      }
+
+      const handle = await fs.open(session.tempPath, "a");
+      try {
+        if (input.chunk.length > 0) {
+          await handle.write(input.chunk);
+        }
+      } finally {
+        await handle.close();
+      }
+
+      session.receivedBytes += input.chunk.length;
+      if (session.receivedBytes > session.totalSizeBytes) {
+        uploadSessions.delete(sessionKey);
+        await fs.rm(session.tempPath, { force: true }).catch(() => undefined);
+        throw new FileManagerRouteError(400, "Upload chunks exceed declared totalSizeBytes.");
+      }
+
+      session.nextChunkIndex += 1;
+      session.expiresAt = now + UPLOAD_SESSION_TTL_MS;
+
+      if (session.nextChunkIndex >= session.totalChunks) {
+        uploadSessions.delete(sessionKey);
+        try {
+          await finalizeUploadedFile(session);
+        } catch (error) {
+          await fs.rm(session.tempPath, { force: true }).catch(() => undefined);
+          throw error;
+        }
+        response.status(201).json({
+          pipelineId: input.pipelineId,
+          scope: input.scope,
+          runId,
+          path: input.destinationPath,
+          sizeBytes: session.receivedBytes,
+          status: "completed"
+        });
+        return;
+      }
+
+      uploadSessions.set(sessionKey, session);
+      response.status(202).json({
+        pipelineId: input.pipelineId,
+        scope: input.scope,
+        runId,
+        path: input.destinationPath,
+        chunkIndex: input.chunkIndex,
+        totalChunks: session.totalChunks,
+        receivedBytes: session.receivedBytes,
+        status: "chunk_received"
+      });
+    } catch (error) {
+      sendFileManagerError(error, response);
+    }
+  });
+
+  app.post("/api/files/import-url", async (request: Request, response: Response) => {
+    try {
+      const input = parseImportUrlBody(request);
+      const pipeline = deps.store.getPipeline(input.pipelineId);
+      if (!pipeline) {
+        response.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      const state = deps.store.getState();
+      const scope = resolveScopeRoot(state, state.storage, input.pipelineId, input.scope, input.runId);
+      await fs.mkdir(scope.rootPath, { recursive: true });
+
+      const destinationPath = input.destinationPath ?? deriveDestinationPathFromUrl(input.sourceUrl);
+      const targetPath = resolvePathWithinRoot(scope.rootPath, destinationPath);
+      await ensureParentDirectory(scope.rootPath, targetPath);
+      await assertRealPathInsideRoot(scope.rootPath, targetPath);
+      await ensureTargetCanBeWritten(targetPath, input.overwrite);
+
+      const tempPath = buildUploadTempPath(targetPath, "url-import");
+      let downloadedBytes = 0;
+      try {
+        downloadedBytes = await downloadRemoteFileToTemp(input.sourceUrl, tempPath);
+        if (input.overwrite) {
+          await fs.rm(targetPath, { force: true }).catch((error) => {
+            const code = (error as NodeJS.ErrnoException | undefined)?.code;
+            if (code !== "ENOENT") {
+              throw error;
+            }
+          });
+        }
+        await fs.rename(tempPath, targetPath);
+      } catch (error) {
+        await fs.rm(tempPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+
+      response.status(201).json({
+        pipelineId: input.pipelineId,
+        scope: input.scope,
+        runId: input.runId ?? null,
+        path: destinationPath,
+        sizeBytes: downloadedBytes,
+        sourceUrl: input.sourceUrl.toString()
+      });
     } catch (error) {
       sendFileManagerError(error, response);
     }

@@ -27,9 +27,9 @@ const CLAUDE_CLI_DEBUG = (process.env.CLAUDE_CLI_DEBUG ?? "0").trim() !== "0";
 const CLAUDE_CLI_DEBUG_FILTER = (process.env.CLAUDE_CLI_DEBUG_FILTER ?? "").trim();
 
 const CLAUDE_CLI_PERMISSION_MODE = (() => {
-  const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "bypassPermissions").trim();
+  const candidate = (process.env.CLAUDE_CLI_PERMISSION_MODE ?? "default").trim();
   const allowed = new Set(["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"]);
-  return allowed.has(candidate) ? candidate : "bypassPermissions";
+  return allowed.has(candidate) ? candidate : "default";
 })();
 
 export function applyClaudeNonInteractiveFlags(args: string[]): void {

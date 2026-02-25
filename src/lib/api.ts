@@ -1,4 +1,5 @@
 import type {
+  ApiHealthStatus,
   DashboardState,
   FlowBuilderRequest,
   FlowBuilderResponse,
@@ -19,8 +20,11 @@ import type {
   StorageFileContentQuery,
   StorageFileContentResponse,
   StorageFileDeletePayload,
+  StorageFileImportUrlPayload,
+  StorageFileImportUrlResponse,
   StorageFileListQuery,
   StorageFileListResponse,
+  StorageFileUploadResponse,
   StorageFilesScope,
   UpdateServiceStatus
 } from "./types";
@@ -30,6 +34,10 @@ const FLOW_BUILDER_RETRY_ATTEMPTS = 2;
 const FLOW_BUILDER_RETRY_DELAY_MS = 250;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 120_000;
 const FLOW_BUILDER_REQUEST_TIMEOUT_MS = 480_000;
+const STORAGE_UPLOAD_CHUNK_BYTES = 512 * 1024;
+export const STORAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const WS_PROTOCOL = "fyreflow.realtime.v1";
+const WS_AUTH_PROTOCOL_PREFIX = "fyreflow-auth.";
 
 interface SseEventChunk {
   event: string;
@@ -353,11 +361,46 @@ function resolveRealtimeWsUrl(): string {
         ? basePath
         : "/";
 
-  const endpoint = httpBase;
-  if (connection.apiToken.length > 0) {
-    endpoint.searchParams.set("api_token", connection.apiToken);
+  return httpBase.toString();
+}
+
+function encodeWsTokenProtocol(token: string): string | null {
+  const trimmed = token.trim();
+  if (trimmed.length === 0) {
+    return null;
   }
-  return endpoint.toString();
+
+  const textBytes = new TextEncoder().encode(trimmed);
+  let binary = "";
+  const batchSize = 0x8000;
+  for (let index = 0; index < textBytes.length; index += batchSize) {
+    const slice = textBytes.subarray(index, index + batchSize);
+    binary += String.fromCharCode(...slice);
+  }
+
+  const base64 = typeof btoa === "function"
+    ? btoa(binary)
+    : (typeof Buffer !== "undefined" ? Buffer.from(binary, "binary").toString("base64") : "");
+  if (base64.length === 0) {
+    return null;
+  }
+
+  const encoded = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  if (encoded.length === 0) {
+    return null;
+  }
+
+  return `${WS_AUTH_PROTOCOL_PREFIX}${encoded}`;
+}
+
+function resolveRealtimeWsProtocols(): string[] {
+  const connection = getActiveConnectionSettings();
+  const protocols = [WS_PROTOCOL];
+  const authProtocol = encodeWsTokenProtocol(connection.apiToken);
+  if (authProtocol) {
+    protocols.push(authProtocol);
+  }
+  return protocols;
 }
 
 function parseRealtimePayload(raw: unknown): RealtimeWsEventPayload | null {
@@ -417,7 +460,8 @@ function parsePairingSessionSummary(value: unknown): PairingSessionSummary | nul
     updatedAt: payload.updatedAt,
     expiresAt: payload.expiresAt,
     ...(typeof payload.approvedAt === "string" ? { approvedAt: payload.approvedAt } : {}),
-    ...(typeof payload.claimedAt === "string" ? { claimedAt: payload.claimedAt } : {})
+    ...(typeof payload.claimedAt === "string" ? { claimedAt: payload.claimedAt } : {}),
+    ...(typeof payload.deviceTokenExpiresAt === "string" ? { deviceTokenExpiresAt: payload.deviceTokenExpiresAt } : {})
   };
 }
 
@@ -442,6 +486,10 @@ function parsePairingStatusPayload(raw: unknown): {
 
 export async function getState(): Promise<DashboardState> {
   return request<DashboardState>("/api/state");
+}
+
+export async function getHealth(): Promise<ApiHealthStatus> {
+  return request<ApiHealthStatus>("/api/health");
 }
 
 export interface UpdaterClientConfig {
@@ -699,12 +747,56 @@ function normalizeStoragePath(pathValue: string): string {
     .join("/");
 }
 
+function resolveScopeRunId(scope: StorageFilesScope, runId?: string | null): string {
+  if (scope !== "runs") {
+    return "-";
+  }
+
+  const normalized = (runId ?? "").trim();
+  if (normalized.length === 0) {
+    throw new Error("runId is required for runs scope");
+  }
+  return normalized;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  if (bytes.length === 0) {
+    return "";
+  }
+
+  let binary = "";
+  const batchSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += batchSize) {
+    const slice = bytes.subarray(index, index + batchSize);
+    binary += String.fromCharCode(...slice);
+  }
+
+  if (typeof btoa === "function") {
+    return btoa(binary);
+  }
+
+  throw new Error("Base64 encoder is unavailable in this environment.");
+}
+
+async function blobChunkToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  return bytesToBase64(new Uint8Array(buffer));
+}
+
+function createUploadId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `upload-${Date.now()}-${Math.trunc(Math.random() * 1_000_000)}`;
+}
+
 function buildStorageRawUrl(options: {
   pipelineId: string;
   scope: StorageFilesScope;
   runId?: string | null;
   path: string;
   directory: boolean;
+  download?: boolean;
 }): string {
   const connection = getActiveConnectionSettings();
   const pipelineId = options.pipelineId.trim();
@@ -713,13 +805,7 @@ function buildStorageRawUrl(options: {
   }
 
   const normalizedPath = normalizeStoragePath(options.path);
-  const runId =
-    options.scope === "runs"
-      ? (options.runId ?? "").trim()
-      : "-";
-  if (options.scope === "runs" && runId.length === 0) {
-    throw new Error("runId is required for runs scope");
-  }
+  const runId = resolveScopeRunId(options.scope, options.runId);
 
   const pathSegments = [
     "api",
@@ -736,10 +822,50 @@ function buildStorageRawUrl(options: {
 
   const trailingSlash = options.directory ? "/" : "";
   const url = new URL(`/${pathSegments.join("/")}${trailingSlash}`, `${connection.apiBaseUrl.replace(/\/+$/, "")}/`);
-  if (connection.apiToken.length > 0) {
-    url.searchParams.set("api_token", connection.apiToken);
+  if (options.download) {
+    url.searchParams.set("download", "1");
   }
   return url.toString();
+}
+
+export async function fetchStorageRawFileBlob(options: {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string | null;
+  path: string;
+  download?: boolean;
+  signal?: AbortSignal;
+}): Promise<Blob> {
+  const connection = getActiveConnectionSettings();
+  const headers = new Headers();
+  if (connection.apiToken.length > 0) {
+    headers.set("Authorization", `Bearer ${connection.apiToken}`);
+  }
+
+  const response = await fetch(
+    buildStorageRawUrl({
+      pipelineId: options.pipelineId,
+      scope: options.scope,
+      runId: options.runId,
+      path: options.path,
+      directory: false,
+      download: options.download
+    }),
+    {
+      method: "GET",
+      headers,
+      signal: options.signal
+    }
+  );
+
+  if (!response.ok) {
+    const text = (await response.text()).trim();
+    const payload = tryParseJsonObject(text);
+    const message = payload ? extractApiErrorMessage(payload) ?? text : text;
+    throw new Error(message || `Failed to fetch file (${response.status})`);
+  }
+
+  return response.blob();
 }
 
 export function buildStorageRawFileUrl(options: {
@@ -763,6 +889,19 @@ export function buildStorageRawDirectoryUrl(options: {
   return buildStorageRawUrl({
     ...options,
     directory: true
+  });
+}
+
+export function buildStorageDownloadFileUrl(options: {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string | null;
+  path: string;
+}): string {
+  return buildStorageRawUrl({
+    ...options,
+    directory: false,
+    download: true
   });
 }
 
@@ -790,6 +929,94 @@ export async function deleteStorageFilePath(payload: StorageFileDeletePayload) {
   return request<{ deletedPath: string; type: "directory" | "file" }>("/api/files", {
     method: "DELETE",
     body: JSON.stringify(payload)
+  });
+}
+
+export interface UploadStorageFileOptions {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  destinationPath: string;
+  file: File;
+  overwrite?: boolean;
+  onProgress?: (payload: {
+    uploadedBytes: number;
+    totalBytes: number;
+    chunkIndex: number;
+    totalChunks: number;
+  }) => void;
+}
+
+export async function uploadStorageFile(options: UploadStorageFileOptions): Promise<StorageFileUploadResponse> {
+  const normalizedPath = normalizeStoragePath(options.destinationPath);
+  if (normalizedPath.length === 0) {
+    throw new Error("destinationPath is required");
+  }
+
+  const runId = options.scope === "runs" ? resolveScopeRunId(options.scope, options.runId) : undefined;
+  const totalSizeBytes = options.file.size;
+  if (totalSizeBytes > STORAGE_UPLOAD_MAX_BYTES) {
+    throw new Error(`File exceeds ${Math.trunc(STORAGE_UPLOAD_MAX_BYTES / (1024 * 1024))} MB upload limit.`);
+  }
+
+  const totalChunks = Math.max(1, Math.ceil(totalSizeBytes / STORAGE_UPLOAD_CHUNK_BYTES));
+  const uploadId = createUploadId();
+  let uploadedBytes = 0;
+  let lastResponse: StorageFileUploadResponse | null = null;
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * STORAGE_UPLOAD_CHUNK_BYTES;
+    const end = Math.min(totalSizeBytes, start + STORAGE_UPLOAD_CHUNK_BYTES);
+    const chunk = options.file.slice(start, end);
+    const chunkBase64 = await blobChunkToBase64(chunk);
+
+    lastResponse = await request<StorageFileUploadResponse>("/api/files/upload", {
+      method: "POST",
+      body: JSON.stringify({
+        pipelineId: options.pipelineId,
+        scope: options.scope,
+        runId,
+        destinationPath: normalizedPath,
+        uploadId,
+        chunkIndex,
+        totalChunks,
+        totalSizeBytes,
+        chunkBase64,
+        overwrite: options.overwrite ?? false
+      })
+    });
+
+    uploadedBytes = end;
+    options.onProgress?.({
+      uploadedBytes,
+      totalBytes: totalSizeBytes,
+      chunkIndex: chunkIndex + 1,
+      totalChunks
+    });
+  }
+
+  if (!lastResponse || lastResponse.status !== "completed") {
+    throw new Error("Upload did not complete.");
+  }
+
+  return lastResponse;
+}
+
+export async function importStorageFileFromUrl(
+  payload: StorageFileImportUrlPayload
+): Promise<StorageFileImportUrlResponse> {
+  const destinationPath = payload.destinationPath ? normalizeStoragePath(payload.destinationPath) : undefined;
+  if (payload.destinationPath && !destinationPath) {
+    throw new Error("destinationPath is invalid");
+  }
+
+  return request<StorageFileImportUrlResponse>("/api/files/import-url", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      runId: payload.scope === "runs" ? resolveScopeRunId(payload.scope, payload.runId) : undefined,
+      destinationPath
+    })
   });
 }
 
@@ -990,7 +1217,7 @@ export function subscribeRunEvents(runId: string, options: SubscribeRunEventsOpt
     startSseFallback();
   } else {
     try {
-      websocket = new WebSocket(resolveRealtimeWsUrl());
+      websocket = new WebSocket(resolveRealtimeWsUrl(), resolveRealtimeWsProtocols());
 
       websocket.addEventListener("open", () => {
         if (controller.signal.aborted || settled) {
@@ -1203,7 +1430,7 @@ export function subscribePairingSessionStatus(
   }
 
   try {
-    websocket = new WebSocket(resolveRealtimeWsUrl());
+    websocket = new WebSocket(resolveRealtimeWsUrl(), resolveRealtimeWsProtocols());
   } catch (error) {
     cleanupSignalForwarding();
     const message = error instanceof Error ? error.message : "Failed to open websocket connection.";

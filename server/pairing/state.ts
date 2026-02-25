@@ -18,6 +18,7 @@ export interface PairingSessionSnapshot {
   approvedAt?: string;
   claimedAt?: string;
   deviceToken?: string;
+  deviceTokenExpiresAt?: string;
 }
 
 export interface PairingStateSnapshot {
@@ -87,6 +88,7 @@ function normalizeSessionSnapshot(value: unknown): PairingSessionSnapshot | null
   const deviceToken = typeof value.deviceToken === "string" && value.deviceToken.trim().length > 0
     ? value.deviceToken.trim()
     : undefined;
+  const deviceTokenExpiresAt = normalizeIsoDate(value.deviceTokenExpiresAt);
 
   return {
     id,
@@ -100,7 +102,8 @@ function normalizeSessionSnapshot(value: unknown): PairingSessionSnapshot | null
     expiresAt,
     ...(approvedAt ? { approvedAt } : {}),
     ...(claimedAt ? { claimedAt } : {}),
-    ...(deviceToken ? { deviceToken } : {})
+    ...(deviceToken ? { deviceToken } : {}),
+    ...(deviceTokenExpiresAt ? { deviceTokenExpiresAt } : {})
   };
 }
 
@@ -187,6 +190,14 @@ export function savePairingState(
   };
 
   const dirPath = path.dirname(statePath);
-  fs.mkdirSync(dirPath, { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(payload, null, 2), "utf8");
+  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(statePath, JSON.stringify(payload, null, 2), {
+    encoding: "utf8",
+    mode: 0o600
+  });
+  try {
+    fs.chmodSync(statePath, 0o600);
+  } catch {
+    // Ignore chmod errors on non-POSIX filesystems.
+  }
 }

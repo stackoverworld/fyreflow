@@ -55,7 +55,7 @@ export function createCorsMiddleware(config: CorsConfig) {
       callback(null, false);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-token"],
     credentials: false,
     maxAge: 600
   });
@@ -90,17 +90,7 @@ export function createApiAuthMiddleware(apiAuthToken: string, options: ApiAuthMi
     );
     const headerToken =
       typeof request.headers["x-api-token"] === "string" ? request.headers["x-api-token"].trim() : "";
-    const rawQueryToken =
-      request.query && typeof request.query === "object"
-        ? (request.query as Record<string, unknown>).api_token
-        : undefined;
-    const queryToken =
-      request.method === "GET" &&
-      request.path.startsWith("/api/files/raw/") &&
-      typeof rawQueryToken === "string"
-        ? rawQueryToken.trim()
-        : "";
-    const candidate = bearerToken || headerToken || queryToken;
+    const candidate = bearerToken || headerToken;
 
     const isStaticTokenValid = candidate.length > 0 && constantTimeEquals(candidate, trimmedToken);
     const isAdditionalTokenValid =

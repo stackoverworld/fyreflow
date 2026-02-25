@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -367,6 +367,240 @@ describe("File Manager Routes", () => {
       });
       expect(binaryResponse.statusCode).toBe(415);
     } finally {
+      await rm(storageRoot, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
+
+  it("uploads chunked files and returns attachment headers on raw download", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "fyreflow-files-"));
+
+    try {
+      registerFileManagerRoutes(app as never, { store } as never);
+      const pipeline = store.listPipelines()[0];
+      const safePipelineId = safeStorageSegment(pipeline.id);
+      const sharedRoot = path.join(storageRoot, "shared", safePipelineId);
+
+      await mkdir(sharedRoot, { recursive: true });
+      store.updateStorageConfig({
+        enabled: true,
+        rootPath: storageRoot,
+        sharedFolder: "shared",
+        isolatedFolder: "isolated",
+        runsFolder: "runs"
+      });
+
+      const uploadHandler = route("POST", "/api/files/upload");
+      const firstChunk = Buffer.from("hello ");
+      const secondChunk = Buffer.from("world");
+      const totalSize = firstChunk.length + secondChunk.length;
+
+      const uploadPartOne = await invokeRoute(uploadHandler, {
+        method: "POST",
+        path: "/api/files/upload",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          destinationPath: "docs/note.txt",
+          uploadId: "upload-1",
+          chunkIndex: 0,
+          totalChunks: 2,
+          totalSizeBytes: totalSize,
+          chunkBase64: firstChunk.toString("base64")
+        }
+      });
+      expect(uploadPartOne.statusCode).toBe(202);
+
+      const uploadPartTwo = await invokeRoute(uploadHandler, {
+        method: "POST",
+        path: "/api/files/upload",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          destinationPath: "docs/note.txt",
+          uploadId: "upload-1",
+          chunkIndex: 1,
+          totalChunks: 2,
+          totalSizeBytes: totalSize,
+          chunkBase64: secondChunk.toString("base64")
+        }
+      });
+      expect(uploadPartTwo.statusCode).toBe(201);
+
+      const uploadedContent = await readFile(path.join(sharedRoot, "docs", "note.txt"), "utf8");
+      expect(uploadedContent).toBe("hello world");
+
+      const rawHandler = route("GET", "/api/files/raw/:scope/:pipelineId/:runId/*");
+      const rawResponse = await invokeRoute(rawHandler, {
+        method: "GET",
+        path: `/api/files/raw/shared/${pipeline.id}/-/docs/note.txt`,
+        params: {
+          scope: "shared",
+          pipelineId: pipeline.id,
+          runId: "-",
+          "0": "docs/note.txt"
+        },
+        query: {
+          download: "1"
+        }
+      });
+      expect(rawResponse.statusCode).toBe(200);
+      expect(String(rawResponse.getHeader("content-disposition"))).toContain("attachment;");
+      expect(String(rawResponse.getHeader("content-disposition"))).toContain("note.txt");
+    } finally {
+      await rm(storageRoot, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
+
+  it("imports files from URL and blocks localhost sources", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "fyreflow-files-"));
+    const originalFetch = global.fetch;
+    const previousDnsValidationFlag = process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION;
+
+    try {
+      process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION = "1";
+      registerFileManagerRoutes(app as never, { store } as never);
+      const pipeline = store.listPipelines()[0];
+      const safePipelineId = safeStorageSegment(pipeline.id);
+      const sharedRoot = path.join(storageRoot, "shared", safePipelineId);
+      await mkdir(sharedRoot, { recursive: true });
+
+      store.updateStorageConfig({
+        enabled: true,
+        rootPath: storageRoot,
+        sharedFolder: "shared",
+        isolatedFolder: "isolated",
+        runsFolder: "runs"
+      });
+
+      global.fetch = async () =>
+        new Response("remote body", {
+          status: 200,
+          headers: {
+            "content-type": "text/plain"
+          }
+        });
+
+      const importHandler = route("POST", "/api/files/import-url");
+      const importResponse = await invokeRoute(importHandler, {
+        method: "POST",
+        path: "/api/files/import-url",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          sourceUrl: "https://example.com/assets/readme.txt"
+        }
+      });
+
+      expect(importResponse.statusCode).toBe(201);
+      const importedContent = await readFile(path.join(sharedRoot, "readme.txt"), "utf8");
+      expect(importedContent).toBe("remote body");
+
+      const blockedResponse = await invokeRoute(importHandler, {
+        method: "POST",
+        path: "/api/files/import-url",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          sourceUrl: "http://localhost:8080/internal.txt",
+          destinationPath: "internal.txt"
+        }
+      });
+      expect(blockedResponse.statusCode).toBe(400);
+
+      const blockedMappedIpv6Response = await invokeRoute(importHandler, {
+        method: "POST",
+        path: "/api/files/import-url",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          sourceUrl: "http://[::ffff:127.0.0.1]/internal.txt",
+          destinationPath: "internal-ipv6.txt"
+        }
+      });
+      expect(blockedMappedIpv6Response.statusCode).toBe(400);
+
+      const blockedLocalhostDotResponse = await invokeRoute(importHandler, {
+        method: "POST",
+        path: "/api/files/import-url",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          sourceUrl: "http://localhost./internal.txt",
+          destinationPath: "internal-localhost-dot.txt"
+        }
+      });
+      expect(blockedLocalhostDotResponse.statusCode).toBe(400);
+    } finally {
+      if (typeof previousDnsValidationFlag === "string") {
+        process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION = previousDnsValidationFlag;
+      } else {
+        delete process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION;
+      }
+      global.fetch = originalFetch;
+      await rm(storageRoot, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
+
+  it("blocks URL imports that redirect to private hosts", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "fyreflow-files-"));
+    const originalFetch = global.fetch;
+    const previousDnsValidationFlag = process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION;
+
+    try {
+      process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION = "1";
+      registerFileManagerRoutes(app as never, { store } as never);
+      const pipeline = store.listPipelines()[0];
+      const safePipelineId = safeStorageSegment(pipeline.id);
+      const sharedRoot = path.join(storageRoot, "shared", safePipelineId);
+      await mkdir(sharedRoot, { recursive: true });
+
+      store.updateStorageConfig({
+        enabled: true,
+        rootPath: storageRoot,
+        sharedFolder: "shared",
+        isolatedFolder: "isolated",
+        runsFolder: "runs"
+      });
+
+      global.fetch = async () =>
+        new Response(null, {
+          status: 302,
+          headers: {
+            location: "http://localhost:8080/private.txt"
+          }
+        });
+
+      const importHandler = route("POST", "/api/files/import-url");
+      const response = await invokeRoute(importHandler, {
+        method: "POST",
+        path: "/api/files/import-url",
+        body: {
+          pipelineId: pipeline.id,
+          scope: "shared",
+          sourceUrl: "https://example.com/public.txt"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toMatchObject({
+        error: "Localhost URLs are not allowed."
+      });
+    } finally {
+      if (typeof previousDnsValidationFlag === "string") {
+        process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION = previousDnsValidationFlag;
+      } else {
+        delete process.env.FYREFLOW_DISABLE_URL_IMPORT_DNS_VALIDATION;
+      }
+      global.fetch = originalFetch;
       await rm(storageRoot, { recursive: true, force: true });
       await cleanup();
     }

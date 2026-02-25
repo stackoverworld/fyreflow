@@ -51,6 +51,11 @@ function createUpgradeRequest(path: string, headers: Record<string, string>): In
   } as IncomingMessage;
 }
 
+function buildWsAuthProtocolHeader(token: string): string {
+  const encoded = Buffer.from(token, "utf8").toString("base64url");
+  return `fyreflow.realtime.v1, fyreflow-auth.${encoded}`;
+}
+
 function maskFrameForClient(frame: Buffer): Buffer {
   const firstByte = frame[0];
   const secondByte = frame[1];
@@ -141,9 +146,10 @@ describe("websocket runtime", () => {
 
     server.emit(
       "upgrade",
-      createUpgradeRequest("/api/ws?api_token=secret-token", {
+      createUpgradeRequest("/api/ws", {
         upgrade: "websocket",
-        "sec-websocket-key": "test-key"
+        "sec-websocket-key": "test-key",
+        "sec-websocket-protocol": buildWsAuthProtocolHeader("secret-token")
       }),
       socket as unknown as Socket
     );
@@ -224,9 +230,10 @@ describe("websocket runtime", () => {
     const socket = new FakeSocket();
     server.emit(
       "upgrade",
-      createUpgradeRequest("/api/ws?api_token=device-token", {
+      createUpgradeRequest("/api/ws", {
         upgrade: "websocket",
-        "sec-websocket-key": "test-key"
+        "sec-websocket-key": "test-key",
+        "sec-websocket-protocol": buildWsAuthProtocolHeader("device-token")
       }),
       socket as unknown as Socket
     );
@@ -234,6 +241,36 @@ describe("websocket runtime", () => {
     const combined = Buffer.concat(socket.writes).toString("utf8");
     expect(combined).toContain("101 Switching Protocols");
     expect(socket.destroyed).toBe(false);
+  });
+
+  it("never echoes auth subprotocol in handshake response", async () => {
+    const { store, cleanup: cleanupStore } = await createTempStore();
+    cleanups.push(cleanupStore);
+
+    const runtime = createRealtimeRuntime({
+      store,
+      apiAuthToken: "secret-token"
+    });
+    cleanups.push(() => runtime.dispose());
+
+    const server = new FakeServer();
+    runtime.attachServer(server as unknown as HttpServer);
+
+    const tokenOnlyProtocol = `fyreflow-auth.${Buffer.from("secret-token", "utf8").toString("base64url")}`;
+    const socket = new FakeSocket();
+    server.emit(
+      "upgrade",
+      createUpgradeRequest("/api/ws", {
+        upgrade: "websocket",
+        "sec-websocket-key": "test-key",
+        "sec-websocket-protocol": tokenOnlyProtocol
+      }),
+      socket as unknown as Socket
+    );
+
+    const handshake = socket.writes[0]?.toString("utf8") ?? "";
+    expect(handshake).toContain("101 Switching Protocols");
+    expect(handshake).not.toContain("Sec-WebSocket-Protocol: fyreflow-auth.");
   });
 
   it("streams pairing status updates to subscribed clients", async () => {

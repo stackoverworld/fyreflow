@@ -85,4 +85,12 @@ describe("runtime config", () => {
       "https://b.example.com"
     ]);
   });
+
+  it("requires DASHBOARD_API_TOKEN in remote mode", () => {
+    expect(() =>
+      resolveRuntimeConfig({
+        FYREFLOW_RUNTIME_MODE: "remote"
+      })
+    ).toThrow("DASHBOARD_API_TOKEN is required when FYREFLOW_RUNTIME_MODE=remote.");
+  });
 });

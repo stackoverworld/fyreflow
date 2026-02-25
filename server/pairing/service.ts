@@ -17,6 +17,7 @@ interface PairingSessionRecord {
   approvedAt?: string;
   claimedAt?: string;
   deviceToken?: string;
+  deviceTokenExpiresAt?: string;
 }
 
 export interface PairingSessionSummary {
@@ -30,6 +31,7 @@ export interface PairingSessionSummary {
   expiresAt: string;
   approvedAt?: string;
   claimedAt?: string;
+  deviceTokenExpiresAt?: string;
 }
 
 export interface CreatePairingSessionInput {
@@ -61,6 +63,7 @@ const MAX_TTL_SECONDS = 30 * 60;
 const MAX_ACTIVE_SESSIONS = 300;
 const MAX_CODE_ATTEMPTS = 8;
 const RETIRED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEVICE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -90,6 +93,10 @@ function generateSessionId(): string {
 
 function generateDeviceToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+function resolveDeviceTokenExpiresAt(fromMs = Date.now()): string {
+  return new Date(fromMs + DEVICE_TOKEN_TTL_MS).toISOString();
 }
 
 function normalizeTtlSeconds(value: number | undefined): number {
@@ -127,7 +134,8 @@ function toSummary(record: PairingSessionRecord): PairingSessionSummary {
     updatedAt: record.updatedAt,
     expiresAt: record.expiresAt,
     ...(record.approvedAt ? { approvedAt: record.approvedAt } : {}),
-    ...(record.claimedAt ? { claimedAt: record.claimedAt } : {})
+    ...(record.claimedAt ? { claimedAt: record.claimedAt } : {}),
+    ...(record.deviceTokenExpiresAt ? { deviceTokenExpiresAt: record.deviceTokenExpiresAt } : {})
   };
 }
 
@@ -214,6 +222,7 @@ export class PairingService {
       record.status = "approved";
       record.approvedAt = now;
       record.deviceToken = generateDeviceToken();
+      record.deviceTokenExpiresAt = undefined;
     }
 
     record.label = (labelInput ?? "").trim().slice(0, 120);
@@ -248,6 +257,7 @@ export class PairingService {
     record.status = "claimed";
     record.claimedAt = nowIso();
     record.updatedAt = record.claimedAt;
+    record.deviceTokenExpiresAt = resolveDeviceTokenExpiresAt();
     this.persist();
 
     return {
@@ -267,6 +277,22 @@ export class PairingService {
     record.status = "cancelled";
     record.updatedAt = nowIso();
     record.deviceToken = undefined;
+    record.deviceTokenExpiresAt = undefined;
+    this.persist();
+    return toSummary(record);
+  }
+
+  revokeDeviceToken(sessionId: string): PairingSessionSummary {
+    const record = this.getRecordOrThrow(sessionId);
+    this.ensureActive(record);
+
+    if (record.status !== "claimed" || !record.deviceToken) {
+      throw new PairingError("pairing_token_not_claimed", 409, "Pairing session does not have an active device token.");
+    }
+
+    record.deviceToken = undefined;
+    record.deviceTokenExpiresAt = undefined;
+    record.updatedAt = nowIso();
     this.persist();
     return toSummary(record);
   }
@@ -277,14 +303,30 @@ export class PairingService {
       return false;
     }
 
+    let changed = false;
     for (const session of this.sessions.values()) {
       if (session.status !== "claimed" || !session.deviceToken) {
         continue;
       }
 
+      if (session.deviceTokenExpiresAt && Date.now() > Date.parse(session.deviceTokenExpiresAt)) {
+        session.deviceToken = undefined;
+        session.deviceTokenExpiresAt = undefined;
+        session.updatedAt = nowIso();
+        changed = true;
+        continue;
+      }
+
       if (constantTimeEquals(session.deviceToken, candidate)) {
+        if (changed) {
+          this.persist();
+        }
         return true;
       }
+    }
+
+    if (changed) {
+      this.persist();
     }
 
     return false;
@@ -331,6 +373,7 @@ export class PairingService {
     record.status = "expired";
     record.updatedAt = nowIso();
     record.deviceToken = undefined;
+    record.deviceTokenExpiresAt = undefined;
     return true;
   }
 

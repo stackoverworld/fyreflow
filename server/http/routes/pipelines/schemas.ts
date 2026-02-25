@@ -220,6 +220,49 @@ export const filesDeleteSchema = baseFilesSchema
     }
   });
 
+export const filesUploadChunkSchema = baseFilesSchema
+  .extend({
+    destinationPath: z.string().min(1).max(4000),
+    uploadId: z.string().min(1).max(160),
+    chunkIndex: z.number().int().min(0).max(10000),
+    totalChunks: z.number().int().min(1).max(10000),
+    totalSizeBytes: z.number().int().min(0).max(40 * 1024 * 1024),
+    chunkBase64: z.string().max(1024 * 1024),
+    overwrite: z.boolean().optional().default(false)
+  })
+  .superRefine((value, context) => {
+    if (value.scope === "runs" && (!value.runId || value.runId.trim().length === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required when scope is runs."
+      });
+    }
+    if (value.chunkIndex >= value.totalChunks) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["chunkIndex"],
+        message: "chunkIndex must be less than totalChunks."
+      });
+    }
+  });
+
+export const filesImportUrlSchema = baseFilesSchema
+  .extend({
+    sourceUrl: z.string().url().max(4000),
+    destinationPath: z.string().min(1).max(4000).optional(),
+    overwrite: z.boolean().optional().default(false)
+  })
+  .superRefine((value, context) => {
+    if (value.scope === "runs" && (!value.runId || value.runId.trim().length === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["runId"],
+        message: "runId is required when scope is runs."
+      });
+    }
+  });
+
 const runInputsRecordSchema = z
   .record(z.string())
   .refine((value) => !value || Object.keys(value).length <= 120, {

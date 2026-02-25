@@ -10,6 +10,7 @@ import {
   cancelPairingSession,
   claimPairingSession,
   createPairingSession,
+  getHealth,
   getPairingSession,
   getState,
   subscribePairingSessionStatus
@@ -26,6 +27,7 @@ import type { PairingSessionCreated, PairingSessionStatus, PairingSessionSummary
 import {
   getActiveApiBaseUrlField,
   getApiTokenSourceHint,
+  getRemoteAuthErrorMessage,
   getPairingRealtimeErrorMessage
 } from "@/components/dashboard/remotePairingSettingsModel";
 
@@ -88,6 +90,11 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
     : "Action failed.";
+}
+
+function isUnauthorizedMessage(rawMessage: string): boolean {
+  const normalized = rawMessage.trim().toLowerCase();
+  return normalized === "unauthorized" || normalized.includes("401");
 }
 
 function sameConnectionSettings(left: ConnectionSettings, right: ConnectionSettings): boolean {
@@ -166,9 +173,10 @@ export function RemotePairingSettings() {
     try {
       await callback();
     } catch (nextError) {
+      const message = toErrorMessage(nextError);
       setConnectionFeedback({
         tone: "error",
-        message: toErrorMessage(nextError)
+        message: getRemoteAuthErrorMessage(message, "connection")
       });
     } finally {
       setBusyAction(null);
@@ -181,9 +189,11 @@ export function RemotePairingSettings() {
     try {
       await callback();
     } catch (nextError) {
+      const message = toErrorMessage(nextError);
+      const authContext = action === "approve_pairing" || action === "cancel_pairing" ? "pairingAdmin" : "connection";
       setPairingFeedback({
         tone: "error",
-        message: toErrorMessage(nextError)
+        message: getRemoteAuthErrorMessage(message, authContext)
       });
     } finally {
       setBusyAction(null);
@@ -209,7 +219,35 @@ export function RemotePairingSettings() {
         throw new Error("Save connection settings before validation.");
       }
 
-      const state = await getState();
+      let state;
+      try {
+        state = await getState();
+      } catch (error) {
+        const message = toErrorMessage(error);
+        if (
+          connectionDraft.mode === "remote" &&
+          savedConnection.apiToken.trim().length === 0 &&
+          isUnauthorizedMessage(message)
+        ) {
+          await getHealth();
+          setConnectionFeedback({
+            tone: "success",
+            message: "Backend is reachable. Authorization is required for full access. Start pairing or paste DASHBOARD_API_TOKEN."
+          });
+          return;
+        }
+
+        if (
+          connectionDraft.mode === "remote" &&
+          savedConnection.apiToken.trim().length > 0 &&
+          isUnauthorizedMessage(message)
+        ) {
+          throw new Error("Authorization failed. Check \"Connection auth token\" in Settings > Remote.");
+        }
+
+        throw error;
+      }
+
       setConnectionFeedback({
         tone: "success",
         message: `Connection OK: ${state.pipelines.length} pipelines, ${state.runs.length} runs.`
@@ -251,7 +289,7 @@ export function RemotePairingSettings() {
       setDeviceLabel("");
       setPairingFeedback({
         tone: "success",
-        message: "Pairing session started. Next: 1) Approve Device, 2) Claim Token. No extra link required."
+        message: "Pairing session started. Next: 1) Approve (Owner), 2) Claim Device Token. No extra link required."
       });
     });
   };
@@ -436,7 +474,7 @@ export function RemotePairingSettings() {
         </label>
 
         <label className="block space-y-1.5">
-          <span className="text-xs text-ink-400">API token</span>
+          <span className="text-xs text-ink-400">Connection auth token</span>
           <Input
             type="password"
             value={connectionDraft.apiToken}
@@ -446,8 +484,28 @@ export function RemotePairingSettings() {
                 apiToken: event.target.value
               }))
             }
-            placeholder="Optional if backend auth is disabled"
+            placeholder="Paste DASHBOARD_API_TOKEN (owner) or a claimed Device Token"
           />
+          <p className="text-[11px] text-ink-600">
+            Owner token is required for Validate and for pairing admin actions (Approve/Cancel). Device token works for normal app access after claim.
+          </p>
+          {connectionDraft.deviceToken.trim().length > 0 ? (
+            <div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px]"
+                onClick={() =>
+                  setConnectionDraft((current) => ({
+                    ...current,
+                    apiToken: current.deviceToken
+                  }))
+                }
+              >
+                Use saved Device Token
+              </Button>
+            </div>
+          ) : null}
         </label>
 
         <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
@@ -466,7 +524,7 @@ export function RemotePairingSettings() {
                 ({apiTokenSourceHint})
               </p>
               <p className="text-[11px] text-ink-500">
-                No token yet? Use Remote Pairing below and click <span className="font-medium text-ink-300">Claim Token</span>.
+                No token yet? Use Remote Pairing below and click <span className="font-medium text-ink-300">Claim Device Token</span>.
               </p>
             </div>
           </div>
@@ -543,12 +601,13 @@ export function RemotePairingSettings() {
         <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">How To Pair</p>
           <p className="mt-1 text-[11px] text-ink-500">1. Click Start Pairing.</p>
-          <p className="text-[11px] text-ink-500">2. Click 1. Approve Device.</p>
-          <p className="text-[11px] text-ink-500">3. Click 2. Claim Token.</p>
+          <p className="text-[11px] text-ink-500">2. Put owner token (`DASHBOARD_API_TOKEN`) into Connection auth token and click Save Connection.</p>
+          <p className="text-[11px] text-ink-500">3. Click 1. Approve (Owner).</p>
+          <p className="text-[11px] text-ink-500">4. Click 2. Claim Device Token.</p>
           <p className="text-[11px] text-ink-500">No external page or link is required.</p>
           {requiresPairingAdminToken ? (
             <p className="mt-1 text-[11px] text-amber-400">
-              Remote mode: Approve/Cancel require admin API token (`DASHBOARD_API_TOKEN`).
+              Remote mode: Approve/Cancel require owner token (`DASHBOARD_API_TOKEN`) in Connection auth token.
             </p>
           ) : null}
         </div>
@@ -626,12 +685,12 @@ export function RemotePairingSettings() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" disabled={busyAction !== null || !canApprove} onClick={handleApprove}>
                 {busyAction === "approve_pairing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                1. Approve Device
+                1. Approve (Owner)
               </Button>
 
               <Button size="sm" variant="secondary" disabled={busyAction !== null || !canClaim} onClick={handleClaim}>
                 {busyAction === "claim_pairing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                2. Claim Token
+                2. Claim Device Token
               </Button>
 
               <Button size="sm" variant="ghost" disabled={busyAction !== null || !canCancel} onClick={handleCancel}>

@@ -109,7 +109,7 @@ export function resolveUpdaterRuntimeConfig(env: NodeJS.ProcessEnv = process.env
   const githubOwner = normalizeOwner(env.UPDATER_GITHUB_OWNER ?? env.GITHUB_REPOSITORY_OWNER);
   const githubRepo = normalizeRepo(env.UPDATER_GITHUB_REPO ?? env.GITHUB_REPOSITORY?.split("/")[1]);
 
-  return {
+  const config: UpdaterRuntimeConfig = {
     port: parsePort(env.UPDATER_PORT),
     authToken: (env.UPDATER_AUTH_TOKEN ?? "").trim(),
     corsOrigins,
@@ -129,4 +129,10 @@ export function resolveUpdaterRuntimeConfig(env: NodeJS.ProcessEnv = process.env
     releaseTimeoutMs: parseIntEnv(env.UPDATER_RELEASE_TIMEOUT_MS, 10_000, 2_000, 120_000),
     autoCheckIntervalMs: parseIntEnv(env.UPDATER_AUTO_CHECK_INTERVAL_MS, 300_000, 30_000, 86_400_000)
   };
+
+  if (config.authToken.length === 0) {
+    throw new Error("UPDATER_AUTH_TOKEN is required for updater service.");
+  }
+
+  return config;
 }

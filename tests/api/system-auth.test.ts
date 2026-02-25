@@ -207,7 +207,8 @@ describe("System and Auth Routes", () => {
         rawQueryNextCalled = true;
       }
     );
-    expect(rawQueryNextCalled).toBe(true);
+    expect(rawQueryNextCalled).toBe(false);
+    expect(rawQueryResponse.statusCode).toBe(401);
 
     const stateQueryResponse = createMockResponse();
     let stateQueryNextCalled = false;

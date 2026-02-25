@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getActiveApiBaseUrlField,
   getApiTokenSourceHint,
+  getRemoteAuthErrorMessage,
   getPairingRealtimeErrorMessage
 } from "../../src/components/dashboard/remotePairingSettingsModel";
 
@@ -34,6 +35,13 @@ describe("remote pairing settings model", () => {
   it("provides token source hint per mode", () => {
     expect(getApiTokenSourceHint("local")).toContain(".env");
     expect(getApiTokenSourceHint("remote")).toContain("Railway");
+    expect(getApiTokenSourceHint("remote")).toContain("DASHBOARD_API_TOKEN");
+  });
+
+  it("maps unauthorized errors to actionable auth guidance", () => {
+    expect(getRemoteAuthErrorMessage("Unauthorized", "connection")).toContain("Connection auth token");
+    expect(getRemoteAuthErrorMessage("401 Unauthorized", "pairingAdmin")).toContain("step 1 (Approve)");
+    expect(getRemoteAuthErrorMessage("Network error", "connection")).toBe("Network error");
   });
 
   it("normalizes realtime close errors into actionable text", () => {

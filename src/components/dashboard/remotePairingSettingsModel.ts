@@ -28,10 +28,24 @@ export function getActiveApiBaseUrlField(settings: {
 
 export function getApiTokenSourceHint(mode: RuntimeConnectionMode): string {
   if (mode === "remote") {
-    return "set in Railway/service environment variables";
+    return "set in Railway/service environment variables (DASHBOARD_API_TOKEN)";
   }
 
   return "set in local API environment (.env)";
+}
+
+export function getRemoteAuthErrorMessage(rawMessage: string, context: "connection" | "pairingAdmin"): string {
+  const normalized = rawMessage.trim().toLowerCase();
+  const isUnauthorized = normalized === "unauthorized" || normalized.includes("401");
+  if (!isUnauthorized) {
+    return rawMessage;
+  }
+
+  if (context === "pairingAdmin") {
+    return "Unauthorized. For step 1 (Approve), paste DASHBOARD_API_TOKEN into \"Connection auth token\", click Save Connection, then retry.";
+  }
+
+  return "Unauthorized. Paste DASHBOARD_API_TOKEN (owner) or a claimed Device Token into \"Connection auth token\", then click Save Connection.";
 }
 
 export function getPairingRealtimeErrorMessage(rawMessage: string): string {

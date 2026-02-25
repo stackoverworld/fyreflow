@@ -25,6 +25,7 @@ describe("PairingService", () => {
     const claimed = service.claimSession(created.id, created.code);
     expect(claimed.session.status).toBe("claimed");
     expect(claimed.session.claimedAt).toBeDefined();
+    expect(claimed.session.deviceTokenExpiresAt).toBeDefined();
     expect(claimed.deviceToken.length).toBeGreaterThan(20);
     expect(service.isDeviceTokenValid(claimed.deviceToken)).toBe(true);
     expect(service.isDeviceTokenValid("invalid-token")).toBe(false);
@@ -92,8 +93,38 @@ describe("PairingService", () => {
       const restored = secondService.getSession(created.id);
       expect(restored?.status).toBe("claimed");
       expect(restored?.claimedAt).toBeDefined();
+      expect(restored?.deviceTokenExpiresAt).toBeDefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("revokes claimed device tokens", () => {
+    const service = new PairingService();
+    const created = service.createSession();
+    service.approveSession(created.id, created.code, "Workstation");
+    const claimed = service.claimSession(created.id, created.code);
+    expect(service.isDeviceTokenValid(claimed.deviceToken)).toBe(true);
+
+    const revoked = service.revokeDeviceToken(created.id);
+    expect(revoked.status).toBe("claimed");
+    expect(revoked.deviceTokenExpiresAt).toBeUndefined();
+    expect(service.isDeviceTokenValid(claimed.deviceToken)).toBe(false);
+  });
+
+  it("invalidates expired device tokens", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-24T00:00:00.000Z"));
+    try {
+      const service = new PairingService();
+      const created = service.createSession();
+      service.approveSession(created.id, created.code, "Workstation");
+      const claimed = service.claimSession(created.id, created.code);
+
+      vi.advanceTimersByTime(31 * 24 * 60 * 60 * 1000);
+      expect(service.isDeviceTokenValid(claimed.deviceToken)).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

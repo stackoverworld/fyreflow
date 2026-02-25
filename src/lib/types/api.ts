@@ -73,6 +73,19 @@ export interface DashboardState {
   storage: StorageConfig;
 }
 
+export interface ApiHealthStatus {
+  ok: boolean;
+  now: string;
+  version?: string;
+  realtime?: {
+    enabled: boolean;
+    path: string;
+  };
+  updater?: {
+    configured: boolean;
+  };
+}
+
 export type PairingSessionStatus =
   | "pending"
   | "approved"
@@ -91,6 +104,7 @@ export interface PairingSessionSummary {
   expiresAt: string;
   approvedAt?: string;
   claimedAt?: string;
+  deviceTokenExpiresAt?: string;
 }
 
 export interface PairingSessionCreated extends PairingSessionSummary {
@@ -254,4 +268,47 @@ export interface StorageFileDeletePayload {
   runId?: string;
   path: string;
   recursive?: boolean;
+}
+
+export interface StorageFileUploadChunkPayload {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  destinationPath: string;
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  totalSizeBytes: number;
+  chunkBase64: string;
+  overwrite?: boolean;
+}
+
+export interface StorageFileUploadResponse {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId: string | null;
+  path: string;
+  sizeBytes?: number;
+  chunkIndex?: number;
+  totalChunks?: number;
+  receivedBytes?: number;
+  status: "chunk_received" | "completed";
+}
+
+export interface StorageFileImportUrlPayload {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId?: string;
+  sourceUrl: string;
+  destinationPath?: string;
+  overwrite?: boolean;
+}
+
+export interface StorageFileImportUrlResponse {
+  pipelineId: string;
+  scope: StorageFilesScope;
+  runId: string | null;
+  path: string;
+  sizeBytes: number;
+  sourceUrl: string;
 }

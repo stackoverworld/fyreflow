@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronRight,
+  Download,
   File,
   FileArchive,
   FileCode2,
@@ -14,9 +15,11 @@ import {
   History,
   Image,
   Layers,
+  Link2,
   Loader2,
   Maximize2,
   RefreshCw,
+  Upload,
   Trash2
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -28,9 +31,18 @@ import type {
   StorageFileListResponse,
   StorageFilesScope
 } from "@/lib/types";
-import { buildStorageRawFileUrl, deleteStorageFilePath, getStorageFileContent, listStorageFiles } from "@/lib/api";
+import {
+  STORAGE_UPLOAD_MAX_BYTES,
+  deleteStorageFilePath,
+  fetchStorageRawFileBlob,
+  getStorageFileContent,
+  importStorageFileFromUrl,
+  listStorageFiles,
+  uploadStorageFile
+} from "@/lib/api";
 import { useIconSpin } from "@/lib/useIconSpin";
 import { Button } from "@/components/optics/button";
+import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
 import { Tooltip } from "@/components/optics/tooltip";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
@@ -92,6 +104,32 @@ function splitPath(pathValue: string): string[] {
     .filter((segment) => segment.length > 0);
 }
 
+function joinStoragePath(basePath: string, name: string): string {
+  const base = splitPath(basePath);
+  const leaf = name
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  return [...base, ...leaf].join("/");
+}
+
+function inferFileNameFromUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    const fileName = parsed.pathname.split("/").at(-1)?.trim() ?? "";
+    if (fileName.length === 0) {
+      return null;
+    }
+    try {
+      return decodeURIComponent(fileName);
+    } catch {
+      return fileName;
+    }
+  } catch {
+    return null;
+  }
+}
+
 const EXT_ICON_MAP: Record<string, LucideIcon> = {
   html: Globe,
   htm: Globe,
@@ -141,7 +179,9 @@ export function FilesPanel({
   storageConfig,
   onNotice
 }: FilesPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const previewRequestCounterRef = useRef(0);
+  const previewObjectUrlRef = useRef<string | null>(null);
   const [scope, setScope] = useState<StorageFilesScope>("shared");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [currentPath, setCurrentPath] = useState("");
@@ -156,11 +196,27 @@ export function FilesPanel({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ uploadedBytes: number; totalBytes: number } | null>(null);
+  const [showImportForm, setShowImportForm] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importFileName, setImportFileName] = useState("");
+  const [importingUrl, setImportingUrl] = useState(false);
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const closePreviewModal = useCallback(() => {
     setModalOpen(false);
   }, []);
 
+  const releasePreviewObjectUrl = useCallback(() => {
+    if (!previewObjectUrlRef.current) {
+      return;
+    }
+    URL.revokeObjectURL(previewObjectUrlRef.current);
+    previewObjectUrlRef.current = null;
+  }, []);
+
   const clearPreview = () => {
+    releasePreviewObjectUrl();
     setPreviewPath(null);
     setPreview(null);
     setPreviewError(null);
@@ -168,6 +224,12 @@ export function FilesPanel({
     setModalOpen(false);
     previewRequestCounterRef.current += 1;
   };
+
+  useEffect(() => {
+    return () => {
+      releasePreviewObjectUrl();
+    };
+  }, [releasePreviewObjectUrl]);
 
   const scopedRuns = useMemo(() => {
     if (!selectedPipeline) {
@@ -191,6 +253,10 @@ export function FilesPanel({
     setListing(null);
     setLoadError(null);
     clearPreview();
+    setUploadProgress(null);
+    setShowImportForm(false);
+    setImportUrl("");
+    setImportFileName("");
   }, [scope, selectedPipeline?.id, selectedRunId]);
 
   useEffect(() => {
@@ -279,6 +345,7 @@ export function FilesPanel({
 
   const canRenderBrowser = Boolean(selectedPipeline) && storageConfig?.enabled === true;
   const needsRunSelection = canRenderBrowser && scope === "runs" && runOptions.length === 0;
+  const activeRunId = scope === "runs" ? selectedRunId : undefined;
 
   const refreshListing = () => setRefreshToken((current) => current + 1);
 
@@ -290,13 +357,159 @@ export function FilesPanel({
     setCurrentPath(entry.path);
   };
 
+  const openFilePicker = () => {
+    if (uploading || importingUrl) {
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleLocalFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !selectedPipeline) {
+      return;
+    }
+    if (file.size > STORAGE_UPLOAD_MAX_BYTES) {
+      onNotice?.(`File is too large. Limit: ${formatSize(STORAGE_UPLOAD_MAX_BYTES)}.`);
+      return;
+    }
+
+    const destinationPath = joinStoragePath(currentPath, file.name);
+    if (destinationPath.length === 0) {
+      onNotice?.("Could not resolve destination path for upload.");
+      return;
+    }
+
+    const existingEntry = listing?.entries.find((entry) => entry.path === destinationPath && entry.type === "file");
+    const overwrite = existingEntry
+      ? window.confirm(`File "${existingEntry.name}" already exists. Overwrite it?`)
+      : false;
+    if (existingEntry && !overwrite) {
+      return;
+    }
+
+    setUploading(true);
+    setUploadProgress({ uploadedBytes: 0, totalBytes: file.size });
+    setLoadError(null);
+
+    try {
+      await uploadStorageFile({
+        pipelineId: selectedPipeline.id,
+        scope,
+        runId: activeRunId,
+        destinationPath,
+        file,
+        overwrite,
+        onProgress: ({ uploadedBytes, totalBytes }) => {
+          setUploadProgress({ uploadedBytes, totalBytes });
+        }
+      });
+
+      onNotice?.(`Uploaded "${file.name}".`);
+      refreshListing();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed";
+      onNotice?.(message);
+      setLoadError(message);
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
+    }
+  };
+
+  const handleImportUrl = async () => {
+    if (!selectedPipeline || importingUrl || uploading) {
+      return;
+    }
+
+    const sourceUrl = importUrl.trim();
+    if (sourceUrl.length === 0) {
+      onNotice?.("Enter a source URL first.");
+      return;
+    }
+
+    const candidateFileName = importFileName.trim() || inferFileNameFromUrl(sourceUrl) || "";
+    const destinationPath = candidateFileName.length > 0 ? joinStoragePath(currentPath, candidateFileName) : undefined;
+    const existingEntry =
+      destinationPath && listing?.entries.find((entry) => entry.path === destinationPath && entry.type === "file");
+    const overwrite = existingEntry
+      ? window.confirm(`File "${existingEntry.name}" already exists. Overwrite it?`)
+      : false;
+    if (existingEntry && !overwrite) {
+      return;
+    }
+
+    setImportingUrl(true);
+    setLoadError(null);
+    try {
+      const imported = await importStorageFileFromUrl({
+        pipelineId: selectedPipeline.id,
+        scope,
+        runId: activeRunId,
+        sourceUrl,
+        destinationPath,
+        overwrite
+      });
+
+      setImportUrl("");
+      setImportFileName("");
+      setShowImportForm(false);
+      onNotice?.(`Imported "${imported.path}".`);
+      refreshListing();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "URL import failed";
+      onNotice?.(message);
+      setLoadError(message);
+    } finally {
+      setImportingUrl(false);
+    }
+  };
+
+  const handleDownloadEntry = async (entry: StorageFileEntry) => {
+    if (!selectedPipeline || entry.type !== "file") {
+      return;
+    }
+
+    setDownloadingPath(entry.path);
+    try {
+      const blob = await fetchStorageRawFileBlob({
+        pipelineId: selectedPipeline.id,
+        scope,
+        runId: activeRunId,
+        path: entry.path,
+        download: true
+      });
+
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = entry.name;
+      anchor.style.display = "none";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Download failed";
+      onNotice?.(message);
+      setLoadError(message);
+    } finally {
+      window.setTimeout(() => {
+        setDownloadingPath((current) => (current === entry.path ? null : current));
+      }, 500);
+    }
+  };
+
   const openFilePreview = async (entry: StorageFileEntry) => {
     if (!selectedPipeline || entry.type !== "file") {
       return;
     }
 
-    const runId = scope === "runs" ? selectedRunId : undefined;
-    const runIdValue = runId ?? null;
+    const runId = activeRunId;
+    const runIdValue = activeRunId ?? null;
     const classification = classifyFilePreviewByName(entry.name);
     const sizeBytes = entry.sizeBytes ?? 0;
     const requestId = previewRequestCounterRef.current + 1;
@@ -330,16 +543,21 @@ export function FilesPanel({
           return;
         }
 
-        const rawUrl = buildStorageRawFileUrl({
+        const blob = await fetchStorageRawFileBlob({
           pipelineId: selectedPipeline.id,
           scope,
           runId,
           path: entry.path
         });
+        const rawUrl = URL.createObjectURL(blob);
 
         if (previewRequestCounterRef.current !== requestId) {
+          URL.revokeObjectURL(rawUrl);
           return;
         }
+
+        releasePreviewObjectUrl();
+        previewObjectUrlRef.current = rawUrl;
 
         setPreview({
           pipelineId: selectedPipeline.id,
@@ -348,8 +566,8 @@ export function FilesPanel({
           kind: classification.kind,
           name: entry.name,
           path: entry.path,
-          mimeType: classification.mimeType,
-          sizeBytes,
+          mimeType: blob.type || classification.mimeType,
+          sizeBytes: blob.size || sizeBytes,
           rawUrl
         });
         setModalOpen(true);
@@ -458,7 +676,7 @@ export function FilesPanel({
       await deleteStorageFilePath({
         pipelineId: selectedPipeline.id,
         scope,
-        runId: scope === "runs" ? selectedRunId : undefined,
+        runId: activeRunId,
         path: entry.path,
         recursive
       });
@@ -555,6 +773,26 @@ export function FilesPanel({
                   size="sm"
                   variant="ghost"
                   className="shrink-0 whitespace-nowrap"
+                  disabled={uploading || importingUrl}
+                  onClick={openFilePicker}
+                >
+                  {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  Upload
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 whitespace-nowrap"
+                  disabled={uploading || importingUrl}
+                  onClick={() => setShowImportForm((current) => !current)}
+                >
+                  {importingUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                  Import URL
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 whitespace-nowrap"
                   disabled={loading}
                   onClick={() => { triggerRefreshSpin(); refreshListing(); }}
                 >
@@ -563,6 +801,15 @@ export function FilesPanel({
                 </Button>
               </div>
             </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                void handleLocalFileSelected(event);
+              }}
+            />
 
             {/* Breadcrumb */}
             <div className="flex items-start gap-1.5 text-[11px] text-ink-500">
@@ -598,6 +845,70 @@ export function FilesPanel({
                 </div>
               </div>
             </div>
+
+            {uploadProgress ? (
+              <div className="rounded-lg bg-[var(--surface-raised)] px-3 py-2 text-[11px] text-ink-500">
+                Uploading {formatSize(uploadProgress.uploadedBytes)} / {formatSize(uploadProgress.totalBytes)}
+              </div>
+            ) : null}
+
+            {showImportForm ? (
+              <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
+                <div className="space-y-2">
+                  <label className="block space-y-1">
+                    <span className="text-[11px] text-ink-500">Source URL</span>
+                    <Input
+                      type="url"
+                      className="h-8 rounded-md border-ink-800/50 bg-[var(--surface-inset)] px-2 text-xs"
+                      placeholder="https://example.com/files/report.pdf"
+                      value={importUrl}
+                      onChange={(event) => setImportUrl(event.target.value)}
+                      disabled={importingUrl}
+                    />
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className="text-[11px] text-ink-500">File name (optional)</span>
+                    <Input
+                      type="text"
+                      className="h-8 rounded-md border-ink-800/50 bg-[var(--surface-inset)] px-2 text-xs"
+                      placeholder="Leave empty to use the name from URL"
+                      value={importFileName}
+                      onChange={(event) => setImportFileName(event.target.value)}
+                      disabled={importingUrl}
+                    />
+                  </label>
+
+                  <div className="flex items-center justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0 whitespace-nowrap"
+                      disabled={importingUrl}
+                      onClick={() => {
+                        setShowImportForm(false);
+                        setImportUrl("");
+                        setImportFileName("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0 whitespace-nowrap"
+                      disabled={importingUrl}
+                      onClick={() => {
+                        void handleImportUrl();
+                      }}
+                    >
+                      {importingUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                      Import
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <div className="my-5 h-px bg-[var(--divider)]" />
@@ -673,17 +984,39 @@ export function FilesPanel({
                         </span>
                       </button>
 
-                      <Tooltip content="Delete" side="left">
-                        <button
-                          type="button"
-                          className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-ink-500 transition-colors hover:text-red-400 disabled:opacity-50"
-                          disabled={deleting}
-                          onClick={() => void handleDeleteEntry(entry)}
-                          aria-label={`Delete ${entry.name}`}
-                        >
-                          {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                        </button>
-                      </Tooltip>
+                      <div className="flex items-center gap-0.5">
+                        {entry.type === "file" ? (
+                          <Tooltip content="Download" side="left">
+                            <button
+                              type="button"
+                              className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-ink-500 transition-colors hover:text-ink-200 disabled:opacity-50"
+                              disabled={downloadingPath === entry.path || deleting}
+                              onClick={() => {
+                                void handleDownloadEntry(entry);
+                              }}
+                              aria-label={`Download ${entry.name}`}
+                            >
+                              {downloadingPath === entry.path ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          </Tooltip>
+                        ) : null}
+
+                        <Tooltip content="Delete" side="left">
+                          <button
+                            type="button"
+                            className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-ink-500 transition-colors hover:text-red-400 disabled:opacity-50"
+                            disabled={deleting || downloadingPath === entry.path}
+                            onClick={() => void handleDeleteEntry(entry)}
+                            aria-label={`Delete ${entry.name}`}
+                          >
+                            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          </button>
+                        </Tooltip>
+                      </div>
                     </div>
                   );
                 })}

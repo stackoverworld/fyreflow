@@ -1,4 +1,5 @@
 import { getState, getSmartRunPlan } from "@/lib/api";
+import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
 import { createDraftWorkflowKey, emptyDraft, toDraft } from "@/lib/pipelineDraft";
 import { buildSmartRunPlanSignature, normalizeSmartRunInputs, setSmartRunPlanCacheEntry } from "@/lib/smartRunInputs";
 import { parseRunInputRequestsFromText } from "@/lib/runInputRequests";
@@ -28,6 +29,29 @@ interface UseDesktopNotificationCallbackArgs {
 
 interface RunStatusNotificationOptions {
   onRunCompleted?: (run: PipelineRun) => void;
+}
+
+function isUnauthorizedMessage(rawMessage: string): boolean {
+  const normalized = rawMessage.trim().toLowerCase();
+  return normalized === "unauthorized" || normalized.includes("401");
+}
+
+export function mapInitialStateLoadErrorMessage(error: unknown): string {
+  const baseMessage = error instanceof Error ? error.message : "Failed to load state";
+  if (!isUnauthorizedMessage(baseMessage)) {
+    return baseMessage;
+  }
+
+  const connection = getActiveConnectionSettings();
+  if (connection.mode !== "remote") {
+    return baseMessage;
+  }
+
+  if (connection.apiToken.trim().length === 0) {
+    return "Remote backend requires authorization. Open Settings > Remote and set \"Connection auth token\" (DASHBOARD_API_TOKEN) or complete pairing.";
+  }
+
+  return "Remote backend rejected current Connection auth token. Check Settings > Remote.";
 }
 
 export function useDesktopNotificationCallback(args: UseDesktopNotificationCallbackArgs) {
@@ -137,8 +161,7 @@ export async function loadInitialState(args: {
 
     args.setNotice("");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load state";
-    args.setNotice(message);
+    args.setNotice(mapInitialStateLoadErrorMessage(error));
   }
 }
 

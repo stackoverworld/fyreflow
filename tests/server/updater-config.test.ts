@@ -4,7 +4,9 @@ import { parseBooleanEnv, resolveUpdaterRuntimeConfig } from "../../server/updat
 
 describe("updater config", () => {
   it("uses defaults", () => {
-    const config = resolveUpdaterRuntimeConfig({});
+    const config = resolveUpdaterRuntimeConfig({
+      UPDATER_AUTH_TOKEN: "updater-secret"
+    });
 
     expect(config.port).toBe(8788);
     expect(config.channel).toBe("stable");
@@ -16,6 +18,7 @@ describe("updater config", () => {
   it("parses overrides", () => {
     const config = resolveUpdaterRuntimeConfig({
       UPDATER_PORT: "9876",
+      UPDATER_AUTH_TOKEN: "updater-secret",
       UPDATER_CHANNEL: "prerelease",
       UPDATER_GITHUB_OWNER: "acme",
       UPDATER_GITHUB_REPO: "fyreflow",
@@ -39,5 +42,9 @@ describe("updater config", () => {
     expect(parseBooleanEnv("NO", true)).toBe(false);
     expect(parseBooleanEnv(undefined, true)).toBe(true);
     expect(parseBooleanEnv("unknown", false)).toBe(false);
+  });
+
+  it("requires updater auth token", () => {
+    expect(() => resolveUpdaterRuntimeConfig({})).toThrow("UPDATER_AUTH_TOKEN is required for updater service.");
   });
 });

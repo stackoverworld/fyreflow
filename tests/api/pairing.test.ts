@@ -87,6 +87,19 @@ describe("Pairing Routes", () => {
     };
     expect(claimPayload.session.status).toBe("claimed");
     expect(claimPayload.deviceToken.length).toBeGreaterThan(20);
+
+    const revokeHandler = route("POST", "/api/pairing/sessions/:sessionId/revoke");
+    const revokeResponse = await invokeRoute(revokeHandler, {
+      method: "POST",
+      path: `/api/pairing/sessions/${createdPayload.session.id}/revoke`,
+      params: { sessionId: createdPayload.session.id },
+      headers: {
+        authorization: "Bearer admin-token"
+      },
+      body: {}
+    });
+    expect(revokeResponse.statusCode).toBe(200);
+    expect((revokeResponse.body as { session: { status: string } }).session.status).toBe("claimed");
   });
 
   it("rejects claim when session is not approved", async () => {
@@ -205,6 +218,35 @@ describe("Pairing Routes", () => {
 
     expect(approveResponse.statusCode).toBe(401);
     expect(approveResponse.body).toEqual({
+      error: "Unauthorized",
+      code: "pairing_admin_unauthorized"
+    });
+  });
+
+  it("requires admin token for revoke in remote mode", async () => {
+    const { app, route } = createRouteHarness();
+    const pairingService = new PairingService();
+    registerPairingRoutes(app as never, {
+      pairingService,
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
+    });
+
+    const created = pairingService.createSession();
+    pairingService.approveSession(created.id, created.code, "Work Mac");
+    pairingService.claimSession(created.id, created.code);
+
+    const revokeHandler = route("POST", "/api/pairing/sessions/:sessionId/revoke");
+    const revokeResponse = await invokeRoute(revokeHandler, {
+      method: "POST",
+      path: `/api/pairing/sessions/${created.id}/revoke`,
+      params: { sessionId: created.id },
+      body: {}
+    });
+
+    expect(revokeResponse.statusCode).toBe(401);
+    expect(revokeResponse.body).toEqual({
       error: "Unauthorized",
       code: "pairing_admin_unauthorized"
     });

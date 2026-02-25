@@ -10,13 +10,17 @@ import {
   claimPairingSession,
   createPairingSession,
   generateFlowDraft,
+  getHealth,
+  buildStorageDownloadFileUrl,
   getManagedUpdateStatus,
   getPairingSession,
   getUpdaterStatus,
+  importStorageFileFromUrl,
   rollbackManagedUpdate,
   rollbackUpdaterUpdate,
   subscribePairingSessionStatus,
-  subscribeRunEvents
+  subscribeRunEvents,
+  uploadStorageFile
 } from "../../src/lib/api";
 import { setConnectionSettings } from "../../src/lib/connectionSettingsStorage";
 import type {
@@ -85,12 +89,14 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
 
   readonly url: string;
+  readonly protocols?: string | string[];
   readonly sentMessages: string[] = [];
   readyState = 0;
   private listeners = new Map<string, Array<(event: unknown) => void>>();
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -200,6 +206,27 @@ describe("generateFlowDraft", () => {
       "Network timeout (POST /api/flow-builder/generate): Request timed out after 480000ms"
     );
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("health API client", () => {
+  it("calls /api/health on active backend", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, now: "2026-02-25T20:00:00.000Z" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    ) as typeof fetch;
+
+    const response = await getHealth();
+    expect(response.ok).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    const [requestUrl] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit
+    ];
+    expect(requestUrl).toBe("http://localhost:8787/api/health");
   });
 });
 
@@ -340,6 +367,36 @@ describe("subscribeRunEvents", () => {
     const socket = FakeWebSocket.instances[0];
     expect(socket).toBeDefined();
     expect(socket.url).toBe("wss://remote.example.com/fyreflow/api/ws");
+
+    unsubscribe();
+  });
+
+  it("uses websocket subprotocol auth instead of query token", () => {
+    globalWithWindow.window = createMockWindow();
+    setConnectionSettings({
+      mode: "remote",
+      localApiBaseUrl: "http://localhost:8787",
+      remoteApiBaseUrl: "https://remote.example.com/fyreflow",
+      apiToken: "top-secret-token",
+      realtimePath: "/api/ws",
+      deviceToken: ""
+    });
+    global.fetch = vi.fn() as typeof fetch;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    const unsubscribe = subscribeRunEvents("run-1", {
+      onEvent: vi.fn()
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket).toBeDefined();
+    expect(socket.url).toBe("wss://remote.example.com/fyreflow/api/ws");
+    expect(socket.url.includes("api_token")).toBe(false);
+    expect(Array.isArray(socket.protocols)).toBe(true);
+    const protocols = (socket.protocols ?? []) as string[];
+    expect(protocols[0]).toBe("fyreflow.realtime.v1");
+    expect(protocols[1]).toMatch(/^fyreflow-auth\./);
 
     unsubscribe();
   });
@@ -497,6 +554,150 @@ describe("subscribeRunEvents", () => {
 
     expect(socket.readyState).toBe(3);
     expect(onError).not.toHaveBeenCalled();
+  });
+});
+
+describe("storage file API helpers", () => {
+  it("builds authenticated download URLs with download flag", () => {
+    globalWithWindow.window = createMockWindow();
+    setConnectionSettings({
+      mode: "remote",
+      localApiBaseUrl: "http://localhost:8787",
+      remoteApiBaseUrl: "https://remote.example.com/base",
+      apiToken: "remote-token",
+      realtimePath: "/api/ws",
+      deviceToken: ""
+    });
+
+    const rawUrl = buildStorageDownloadFileUrl({
+      pipelineId: "pipeline-1",
+      scope: "shared",
+      path: "docs/report.pdf"
+    });
+
+    const parsed = new URL(rawUrl);
+    expect(parsed.origin).toBe("https://remote.example.com");
+    expect(parsed.pathname).toBe("/api/files/raw/shared/pipeline-1/-/docs/report.pdf");
+    expect(parsed.searchParams.get("api_token")).toBeNull();
+    expect(parsed.searchParams.get("download")).toBe("1");
+  });
+
+  it("uploads files in chunks via /api/files/upload", async () => {
+    globalWithWindow.window = createMockWindow();
+
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            pipelineId: "pipeline-1",
+            scope: "shared",
+            runId: null,
+            path: "uploads/report.bin",
+            chunkIndex: 0,
+            totalChunks: 2,
+            receivedBytes: 524288,
+            status: "chunk_received"
+          }),
+          {
+            status: 202,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            pipelineId: "pipeline-1",
+            scope: "shared",
+            runId: null,
+            path: "uploads/report.bin",
+            sizeBytes: 700000,
+            status: "completed"
+          }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" }
+          }
+        )
+    ) as typeof fetch;
+
+    const progress = vi.fn();
+    const file = new Blob([new Uint8Array(700000)], { type: "application/octet-stream" }) as File;
+    const response = await uploadStorageFile({
+      pipelineId: "pipeline-1",
+      scope: "shared",
+      destinationPath: "uploads/report.bin",
+      file,
+      onProgress: progress
+    });
+
+    expect(response.status).toBe("completed");
+    expect(progress).toHaveBeenCalledTimes(2);
+
+    const calls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, RequestInit]>;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0]).toBe("http://localhost:8787/api/files/upload");
+    expect(calls[1]?.[0]).toBe("http://localhost:8787/api/files/upload");
+
+    const firstPayload = JSON.parse(String(calls[0]?.[1].body)) as {
+      chunkIndex: number;
+      totalChunks: number;
+      destinationPath: string;
+      chunkBase64: string;
+    };
+    const secondPayload = JSON.parse(String(calls[1]?.[1].body)) as {
+      chunkIndex: number;
+      totalChunks: number;
+      destinationPath: string;
+      chunkBase64: string;
+    };
+    expect(firstPayload.chunkIndex).toBe(0);
+    expect(secondPayload.chunkIndex).toBe(1);
+    expect(firstPayload.totalChunks).toBe(2);
+    expect(secondPayload.totalChunks).toBe(2);
+    expect(firstPayload.destinationPath).toBe("uploads/report.bin");
+    expect(firstPayload.chunkBase64.length).toBeGreaterThan(0);
+    expect(secondPayload.chunkBase64.length).toBeGreaterThan(0);
+  });
+
+  it("posts URL imports to /api/files/import-url with normalized paths", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          pipelineId: "pipeline-1",
+          scope: "runs",
+          runId: "run-1",
+          path: "docs/archive.zip",
+          sizeBytes: 1024,
+          sourceUrl: "https://example.com/archive.zip"
+        }),
+        {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    ) as typeof fetch;
+
+    await importStorageFileFromUrl({
+      pipelineId: "pipeline-1",
+      scope: "runs",
+      runId: "run-1",
+      sourceUrl: "https://example.com/archive.zip",
+      destinationPath: "docs//archive.zip"
+    });
+
+    const [requestUrl, requestInit] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit
+    ];
+    expect(requestUrl).toBe("http://localhost:8787/api/files/import-url");
+    const payload = JSON.parse(String(requestInit.body)) as {
+      runId?: string;
+      destinationPath?: string;
+    };
+    expect(payload.runId).toBe("run-1");
+    expect(payload.destinationPath).toBe("docs/archive.zip");
   });
 });
 

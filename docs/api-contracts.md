@@ -41,6 +41,8 @@
 - `GET /api/files` lists files inside a storage scope owned by the selected pipeline.
 - `GET /api/files/content` returns safe text preview content for a file inside the same scope.
 - `GET /api/files/raw/:scope/:pipelineId/:runId/*` returns raw file bytes for scoped HTML assets (images/css/fonts/etc).
+- `POST /api/files/upload` uploads a file into scoped storage using chunked base64 payloads.
+- `POST /api/files/import-url` downloads a file from an external URL into scoped storage.
 - Required query params:
 - `pipelineId`: pipeline id in dashboard state.
 - `scope`: `shared | isolated | runs`.
@@ -54,12 +56,20 @@
 - `runId`: use `-` for `shared/isolated`; required real run id for `runs`
 - `*`: relative file path inside scoped root
 - Optional raw query param:
-- `api_token` is accepted only on raw route as an alternative bearer token (for iframe asset requests that cannot set headers).
+- `download=1` forces attachment download via `Content-Disposition`.
 - `DELETE /api/files` deletes a file or folder inside the same scoped roots.
 - Required body fields:
 - `pipelineId`, `scope`, `path`.
 - Optional body fields:
 - `runId` (required when `scope=runs`), `recursive`.
+- Upload body fields:
+- `pipelineId`, `scope`, `destinationPath`, `uploadId`, `chunkIndex`, `totalChunks`, `totalSizeBytes`, `chunkBase64`.
+- Optional upload fields:
+- `runId` (required when `scope=runs`), `overwrite`.
+- URL import body fields:
+- `pipelineId`, `scope`, `sourceUrl`.
+- Optional URL import fields:
+- `runId` (required when `scope=runs`), `destinationPath`, `overwrite`.
 - Scope roots are derived from storage config:
 - shared: `<root>/<sharedFolder>/<pipelineId>`
 - isolated: `<root>/<isolatedFolder>/<pipelineId>`
@@ -70,6 +80,10 @@
 - Scope root deletion is disallowed.
 - Symlinks are blocked from listing/delete/content preview.
 - File preview returns only text-like content; non-text files are rejected.
+- Upload limits:
+- max file size `25 MB`, max chunk size `512 KB`, upload sessions expire after `15 min`.
+- URL import limits:
+- only `http/https`, blocks localhost/private-network IP hosts, timeout `30s`, max downloaded size `25 MB`.
 
 ## Run Event Stream Contract (2026-02-22)
 - `GET /api/runs/:runId/events?cursor=<number>` opens an SSE stream for run timeline updates.
@@ -88,7 +102,7 @@
 - `GET /api/health` may include `realtime: { enabled: boolean, path: string }` capability metadata for clients.
 - Auth matches API token policy:
 - if `DASHBOARD_API_TOKEN` is set, client must provide either:
-- `Authorization: Bearer`, `x-api-token`, or `api_token` query parameter with the static API token, or
+- `Authorization: Bearer`, `x-api-token`, or WS subprotocol `fyreflow-auth.<base64url(token)>` with the static API token, or
 - a claimed pairing `deviceToken` in `Authorization` / `x-api-token`.
 - Client messages:
 - `ping`
@@ -110,11 +124,13 @@
 - `POST /api/pairing/sessions/:sessionId/approve` approves session with request `{ code, label? }`.
 - `POST /api/pairing/sessions/:sessionId/claim` claims approved session with request `{ code }` and returns `{ session, deviceToken }`.
 - `POST /api/pairing/sessions/:sessionId/cancel` cancels pending/approved sessions.
+- `POST /api/pairing/sessions/:sessionId/revoke` revokes an already claimed device token for that session.
 - Pairing sessions status lifecycle: `pending -> approved -> claimed` and terminal states `cancelled` / `expired`.
 - Public bootstrap endpoints: `create`, `get`, `claim`.
-- Admin-only pairing endpoints in `remote` runtime: `approve`, `cancel` require `DASHBOARD_API_TOKEN` via `Authorization: Bearer` or `x-api-token`.
-- If `FYREFLOW_RUNTIME_MODE=remote` and `DASHBOARD_API_TOKEN` is missing, `approve`/`cancel` return `503` (`pairing_admin_token_missing`).
+- Admin-only pairing endpoints in `remote` runtime: `approve`, `cancel`, `revoke` require `DASHBOARD_API_TOKEN` via `Authorization: Bearer` or `x-api-token`.
+- If `FYREFLOW_RUNTIME_MODE=remote` and `DASHBOARD_API_TOKEN` is missing, `approve`/`cancel`/`revoke` return `503` (`pairing_admin_token_missing`).
 - After successful claim, returned `deviceToken` is accepted as an API/WS auth credential for protected routes.
+- Device token TTL is `30 days`; session summary includes `deviceTokenExpiresAt` once claimed.
 - Claimed pairing sessions and device tokens are persisted in backend state (`data/pairing-state.json`) and remain valid after server restarts.
 - Realtime pairing updates over WebSocket:
 - Client messages: `subscribe_pairing` (`{ type: "subscribe_pairing", sessionId: string }`), `unsubscribe_pairing`.
