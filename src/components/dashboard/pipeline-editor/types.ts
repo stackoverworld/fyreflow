@@ -19,6 +19,9 @@ export interface PipelineEditorProps {
   claudeFastModeAvailable: boolean;
   claudeFastModeUnavailableNote?: string;
   onChange: (next: PipelinePayload) => void;
+  onAddStep?: () => void;
+  onSpawnOrchestrator?: () => void;
+  hasOrchestrator?: boolean;
   onCanvasDragStateChange?: (active: boolean) => void;
   onStepPanelChange?: (open: boolean) => void;
   stepPanelBlocked?: boolean;

@@ -34,13 +34,12 @@ describe("remote pairing settings model", () => {
 
   it("provides token source hint per mode", () => {
     expect(getApiTokenSourceHint("local")).toContain(".env");
-    expect(getApiTokenSourceHint("remote")).toContain("Railway");
-    expect(getApiTokenSourceHint("remote")).toContain("DASHBOARD_API_TOKEN");
+    expect(getApiTokenSourceHint("remote")).toContain("environment variables");
   });
 
   it("maps unauthorized errors to actionable auth guidance", () => {
-    expect(getRemoteAuthErrorMessage("Unauthorized", "connection")).toContain("Connection auth token");
-    expect(getRemoteAuthErrorMessage("401 Unauthorized", "pairingAdmin")).toContain("step 1 (Approve)");
+    expect(getRemoteAuthErrorMessage("Unauthorized", "connection")).toContain("auth token");
+    expect(getRemoteAuthErrorMessage("401 Unauthorized", "pairingAdmin")).toContain("admin token");
     expect(getRemoteAuthErrorMessage("Network error", "connection")).toBe("Network error");
   });
 
@@ -49,8 +48,7 @@ describe("remote pairing settings model", () => {
       "Pairing realtime stream closed before subscription was established."
     );
 
-    expect(message).toContain("Session created");
-    expect(message).toContain("1) Approve Device");
-    expect(message).toContain("2) Claim Token");
+    expect(message).toContain("Live updates unavailable");
+    expect(message).toContain("buttons below");
   });
 });

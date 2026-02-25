@@ -11,6 +11,15 @@ import { extractDeviceCode, extractFirstAuthUrl } from "../loginOutputParser.js"
 import { probeClaudeRuntime } from "../runtimeProbe.js";
 import { nowIso } from "../time.js";
 
+const CLAUDE_CAPTURE_TIMEOUT_MS = 15_000;
+const CLAUDE_CAPTURE_SETTLE_MS = 600;
+const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
+
+function hasPreferredClaudeAuthUrl(capturedOutput: string): boolean {
+  const url = extractFirstAuthUrl(capturedOutput);
+  return typeof url === "string" && !GENERIC_CLAUDE_LOGIN_URL_PATTERN.test(url);
+}
+
 async function getClaudeLoggedInStatus(): Promise<ClaudeStatusJson> {
   try {
     const { stdout } = await execFileAsync(CLAUDE_CLI_COMMAND, ["auth", "status", "--json"], { timeout: 12000 });
@@ -30,7 +39,11 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  const launchResult = await launchDetachedAndCapture(CLAUDE_CLI_COMMAND, ["auth", "login"]);
+  const launchResult = await launchDetachedAndCapture(CLAUDE_CLI_COMMAND, ["auth", "login"], {
+    captureTimeoutMs: CLAUDE_CAPTURE_TIMEOUT_MS,
+    settleTimeMs: CLAUDE_CAPTURE_SETTLE_MS,
+    isOutputSufficient: hasPreferredClaudeAuthUrl
+  });
   const authUrl = extractFirstAuthUrl(launchResult.capturedOutput);
   const authCode = extractDeviceCode(launchResult.capturedOutput);
 

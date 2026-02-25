@@ -29,6 +29,7 @@ import type {
   UpdateServiceStatus
 } from "./types";
 import { getActiveConnectionSettings } from "./connectionSettingsStorage";
+import { getClientAppVersion } from "./clientVersion";
 const FLOW_BUILDER_GENERATE_PATH = "/api/flow-builder/generate";
 const FLOW_BUILDER_RETRY_ATTEMPTS = 2;
 const FLOW_BUILDER_RETRY_DELAY_MS = 250;
@@ -162,6 +163,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const connection = getActiveConnectionSettings();
   const headers = new Headers(init?.headers ?? {});
   headers.set("Content-Type", "application/json");
+  const clientAppVersion = getClientAppVersion();
+  if (clientAppVersion.length > 0) {
+    headers.set("x-fyreflow-client-version", clientAppVersion);
+  }
   if (connection.apiToken.length > 0) {
     headers.set("Authorization", `Bearer ${connection.apiToken}`);
   }

@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __FYREFLOW_APP_VERSION__: string;
+
 interface DesktopNotificationPayload {
   title: string;
   body?: string;
@@ -24,6 +26,7 @@ interface Window {
   desktop?: {
     isElectron: boolean;
     platform: string;
+    appVersion?: string;
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
     close: () => Promise<void>;

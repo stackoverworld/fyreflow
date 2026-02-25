@@ -39,6 +39,9 @@ export function PipelineCanvas({
   onSelectionChange,
   onAddNode,
   onAutoLayout,
+  onAddStep,
+  onSpawnOrchestrator,
+  hasOrchestrator,
   onMoveNode,
   onMoveNodes,
   onDragStateChange,
@@ -430,6 +433,9 @@ export function PipelineCanvas({
         toolMode={toolMode}
         onToolModeChange={setToolMode}
         onAutoLayout={selectionState.triggerAutoLayout}
+        onAddStep={onAddStep}
+        onSpawnOrchestrator={onSpawnOrchestrator}
+        hasOrchestrator={hasOrchestrator}
         viewportScale={viewport.scale}
         selectedNodeIds={selectedNodeIds}
         selectedLinkId={selectedLinkId}

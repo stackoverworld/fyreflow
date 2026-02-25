@@ -13,6 +13,24 @@ describe("OAuth Login Output Parser", () => {
     expect(extractFirstAuthUrl(raw)).toBe("https://claude.ai/device?pairing=abc123");
   });
 
+  it("prefers device pairing url over the generic login page", () => {
+    const raw = [
+      "Start here: https://claude.ai/login",
+      "Then use https://claude.ai/device?pairing=abc123)."
+    ].join("\n");
+
+    expect(extractFirstAuthUrl(raw)).toBe("https://claude.ai/device?pairing=abc123");
+  });
+
+  it("prefers oauth authorize url over generic login links", () => {
+    const raw = [
+      "Start here: https://claude.ai/login",
+      "Authorize app: https://claude.ai/oauth/authorize?client_id=abc123"
+    ].join("\n");
+
+    expect(extractFirstAuthUrl(raw)).toBe("https://claude.ai/oauth/authorize?client_id=abc123");
+  });
+
   it("returns undefined when no auth url is present", () => {
     expect(extractFirstAuthUrl("No url here.")).toBeUndefined();
   });

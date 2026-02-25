@@ -19,6 +19,7 @@ import { createRunQueueRuntime, isRunPreflightError } from "./runQueue.js";
 import { createSchedulerRuntime, schedulerPollIntervalMs } from "./scheduler.js";
 import { initializeRuntimeBootstrap, type RuntimeBootstrapHandle } from "./bootstrap.js";
 import { resolveRuntimeConfig, type RuntimeConfig } from "./config.js";
+import { compareSemverLikeVersions, normalizeSemverLikeVersion } from "./versioning.js";
 import { sanitizeDashboardState } from "./sanitization.js";
 import { createRealtimeRuntime, type RealtimeRuntime } from "../realtime/websocketRuntime.js";
 import { createUpdaterProxyClient } from "../updater/proxyClient.js";
@@ -98,7 +99,38 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       }),
       getUpdaterStatus: () => ({
         configured: updaterProxy.isConfigured()
-      })
+      }),
+      getClientCompatibility: (clientVersion) => {
+        if (config.minDesktopVersion.length === 0) {
+          return null;
+        }
+
+        const normalizedClientVersion = normalizeSemverLikeVersion(clientVersion);
+        const compareResult = compareSemverLikeVersions(normalizedClientVersion, config.minDesktopVersion);
+        const updateRequired = normalizedClientVersion.length === 0 || compareResult === null || compareResult < 0;
+        const message =
+          normalizedClientVersion.length === 0
+            ? `Backend requires desktop version ${config.minDesktopVersion} or newer. Current desktop version is unavailable.`
+            : updateRequired
+              ? `Backend requires desktop version ${config.minDesktopVersion} or newer. Current desktop version: ${normalizedClientVersion}.`
+              : `Desktop version ${normalizedClientVersion} is compatible with backend minimum ${config.minDesktopVersion}.`;
+
+        return {
+          minimumDesktopVersion: config.minDesktopVersion,
+          ...(normalizedClientVersion.length > 0
+            ? {
+                clientVersion: normalizedClientVersion
+              }
+            : {}),
+          updateRequired,
+          message,
+          ...(config.desktopDownloadUrl.length > 0
+            ? {
+                downloadUrl: config.desktopDownloadUrl
+              }
+            : {})
+        };
+      }
     },
     updates: {
       updater: updaterProxy

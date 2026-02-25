@@ -176,18 +176,6 @@ export function AppShellLayout({
 
         <div className="my-1 h-px w-6 bg-ink-700/50" />
 
-        <ToolButton label="Add step" disabled={selectedPipelineEditLocked} onClick={handleAddStep}>
-          <Plus className="h-4 w-4" />
-        </ToolButton>
-
-        <ToolButton
-          label={hasOrchestrator ? "Orchestrator exists" : "Spawn orchestrator"}
-          disabled={hasOrchestrator || selectedPipelineEditLocked}
-          onClick={handleSpawnOrchestrator}
-        >
-          <Workflow className="h-4 w-4" />
-        </ToolButton>
-
         <ToolButton label="Undo (Cmd/Ctrl+Z)" disabled={!canUndo || selectedPipelineEditLocked} onClick={undoDraftChange}>
           <Undo2 className="h-4 w-4" />
         </ToolButton>
@@ -244,6 +232,9 @@ export function AppShellLayout({
         onCanvasDragStateChange={setCanvasDragActive}
         onStepPanelChange={handleStepPanelChange}
         stepPanelBlocked={activePanel === "run"}
+        onAddStep={handleAddStep}
+        onSpawnOrchestrator={handleSpawnOrchestrator}
+        hasOrchestrator={hasOrchestrator}
         className="absolute left-[56px] top-[38px] right-0 bottom-0"
       />
 

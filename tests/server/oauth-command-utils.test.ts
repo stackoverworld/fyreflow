@@ -4,9 +4,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isCommandAvailable } from "../../server/oauth/commandUtils.js";
+import { isCommandAvailable, launchDetachedAndCapture } from "../../server/oauth/commandUtils.js";
+import { extractFirstAuthUrl } from "../../server/oauth/loginOutputParser.js";
 
 const tempDirs: string[] = [];
+const LOGIN_URL_PATTERN = /\/login(?:\/|\?|#|$)/i;
 
 afterEach(async () => {
   while (tempDirs.length > 0) {
@@ -47,4 +49,32 @@ describe("OAuth Command Utils", () => {
   it("returns false for an unknown command", async () => {
     await expect(isCommandAvailable("command-that-should-not-exist-987654321")).resolves.toBe(false);
   });
+});
+
+describe("OAuth command capture", () => {
+  it(
+    "keeps polling until a non-login auth url is captured",
+    async () => {
+      const script = [
+        "console.log('Start here: https://claude.ai/login');",
+        "setTimeout(() => console.log('Authorize app: https://claude.ai/oauth/authorize?client_id=test-client'), 1200);",
+        "setTimeout(() => process.exit(0), 1800);"
+      ].join(" ");
+
+      const captureResult = await launchDetachedAndCapture(process.execPath, ["-e", script], {
+        captureTimeoutMs: 6_000,
+        pollIntervalMs: 80,
+        settleTimeMs: 300,
+        isOutputSufficient: (capturedOutput) => {
+          const authUrl = extractFirstAuthUrl(capturedOutput);
+          return typeof authUrl === "string" && !LOGIN_URL_PATTERN.test(authUrl);
+        }
+      });
+
+      expect(extractFirstAuthUrl(captureResult.capturedOutput)).toBe(
+        "https://claude.ai/oauth/authorize?client_id=test-client"
+      );
+    },
+    15_000
+  );
 });

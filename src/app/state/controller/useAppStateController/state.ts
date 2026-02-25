@@ -12,6 +12,7 @@ import type { RunCompletionModalContext, RunInputModalContext } from "../../appS
 import { createDraftHistoryReducers } from "../../appStateReducers";
 
 export function useAppStateControllerState() {
+  const [initialStateLoading, setInitialStateLoading] = useState(true);
   const [pipelines, setPipelines] = useState<DashboardState["pipelines"]>([]);
   const [providers, setProviders] = useState<DashboardState["providers"] | null>(null);
   const [mcpServers, setMcpServers] = useState<DashboardState["mcpServers"]>([]);
@@ -88,6 +89,8 @@ export function useAppStateControllerState() {
   const canRedo = draftHistory.redoStack.length > 0;
 
   return {
+    initialStateLoading,
+    setInitialStateLoading,
     pipelines,
     setPipelines,
     providers,

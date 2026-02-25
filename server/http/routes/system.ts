@@ -13,13 +13,31 @@ export interface SystemRouteDependencies {
   getUpdaterStatus?: () => {
     configured: boolean;
   };
+  getClientCompatibility?: (clientVersion: string) => {
+    minimumDesktopVersion: string;
+    clientVersion?: string;
+    updateRequired: boolean;
+    message: string;
+    downloadUrl?: string;
+  } | null;
 }
 
 export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies): void {
-  app.get("/api/health", (_request, response) => {
+  app.get("/api/health", (request, response) => {
     const realtimeStatus = deps.getRealtimeStatus?.();
     const updaterStatus = deps.getUpdaterStatus?.();
     const version = deps.getVersion?.();
+    const clientVersionHeader = (() => {
+      const raw = request.headers["x-fyreflow-client-version"];
+      if (typeof raw === "string") {
+        return raw.trim();
+      }
+      if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "string") {
+        return raw[0].trim();
+      }
+      return "";
+    })();
+    const clientCompatibility = deps.getClientCompatibility?.(clientVersionHeader);
     response.json({
       ok: true,
       now: new Date().toISOString(),
@@ -36,6 +54,11 @@ export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies
       ...(updaterStatus
         ? {
             updater: updaterStatus
+          }
+        : {}),
+      ...(clientCompatibility
+        ? {
+            client: clientCompatibility
           }
         : {})
     });

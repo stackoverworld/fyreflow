@@ -1,8 +1,10 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUp,
   ChevronRight,
   Download,
+  EllipsisVertical,
   File,
   FileArchive,
   FileCode2,
@@ -45,6 +47,7 @@ import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
 import { Tooltip } from "@/components/optics/tooltip";
+import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider } from "@/components/optics/dropdown-menu";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
 import { FilePreviewModal } from "@/components/dashboard/file-preview/FilePreviewModal";
 import {
@@ -759,46 +762,44 @@ export function FilesPanel({
                 <HardDrive className="h-3.5 w-3.5" />
                 <span className="text-[11px] font-semibold uppercase tracking-wider">Location</span>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <Button
                   size="sm"
-                  variant="ghost"
-                  className="shrink-0 whitespace-nowrap"
-                  disabled={loading || !listing || listing.parentPath === null}
-                  onClick={goToParentPath}
-                >
-                  Up
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="shrink-0 whitespace-nowrap"
+                  variant="secondary"
                   disabled={uploading || importingUrl}
                   onClick={openFilePicker}
                 >
                   {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
                   Upload
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="shrink-0 whitespace-nowrap"
-                  disabled={uploading || importingUrl}
-                  onClick={() => setShowImportForm((current) => !current)}
+                <DropdownMenu
+                  align="right"
+                  trigger={
+                    <Button size="sm" variant="ghost" className="px-1.5">
+                      <EllipsisVertical className="h-3.5 w-3.5" />
+                    </Button>
+                  }
                 >
-                  {importingUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-                  Import URL
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="shrink-0 whitespace-nowrap"
-                  disabled={loading}
-                  onClick={() => { triggerRefreshSpin(); refreshListing(); }}
-                >
-                  <RefreshCw className="h-3.5 w-3.5" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} />
-                  Refresh
-                </Button>
+                  <DropdownMenuItem
+                    icon={<Link2 className="h-3.5 w-3.5" />}
+                    label="Import from URL"
+                    disabled={uploading || importingUrl}
+                    onClick={() => setShowImportForm((current) => !current)}
+                  />
+                  <DropdownMenuItem
+                    icon={<RefreshCw className="h-3.5 w-3.5" />}
+                    label="Refresh"
+                    disabled={loading}
+                    onClick={() => { triggerRefreshSpin(); refreshListing(); }}
+                  />
+                  <DropdownMenuDivider />
+                  <DropdownMenuItem
+                    icon={<ArrowUp className="h-3.5 w-3.5" />}
+                    label="Go to parent"
+                    disabled={loading || !listing || listing.parentPath === null}
+                    onClick={goToParentPath}
+                  />
+                </DropdownMenu>
               </div>
             </div>
 
@@ -847,19 +848,32 @@ export function FilesPanel({
             </div>
 
             {uploadProgress ? (
-              <div className="rounded-lg bg-[var(--surface-raised)] px-3 py-2 text-[11px] text-ink-500">
-                Uploading {formatSize(uploadProgress.uploadedBytes)} / {formatSize(uploadProgress.totalBytes)}
+              <div className="space-y-1.5 rounded-xl border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-medium text-ink-300">Uploading...</span>
+                  <span className="tabular-nums text-ink-500">
+                    {formatSize(uploadProgress.uploadedBytes)} / {formatSize(uploadProgress.totalBytes)}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-800">
+                  <div
+                    className="h-full rounded-full bg-ember-500 transition-[width] duration-200 ease-out"
+                    style={{
+                      width: `${uploadProgress.totalBytes > 0 ? Math.min(100, (uploadProgress.uploadedBytes / uploadProgress.totalBytes) * 100) : 0}%`
+                    }}
+                  />
+                </div>
               </div>
             ) : null}
 
             {showImportForm ? (
-              <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
-                <div className="space-y-2">
+              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--surface-raised)] p-3">
+                <div className="space-y-2.5">
                   <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-500">Source URL</span>
+                    <span className="text-[11px] font-medium text-ink-400">Source URL</span>
                     <Input
                       type="url"
-                      className="h-8 rounded-md border-ink-800/50 bg-[var(--surface-inset)] px-2 text-xs"
+                      className="h-8 text-xs"
                       placeholder="https://example.com/files/report.pdf"
                       value={importUrl}
                       onChange={(event) => setImportUrl(event.target.value)}
@@ -868,10 +882,10 @@ export function FilesPanel({
                   </label>
 
                   <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-500">File name (optional)</span>
+                    <span className="text-[11px] font-medium text-ink-400">File name (optional)</span>
                     <Input
                       type="text"
-                      className="h-8 rounded-md border-ink-800/50 bg-[var(--surface-inset)] px-2 text-xs"
+                      className="h-8 text-xs"
                       placeholder="Leave empty to use the name from URL"
                       value={importFileName}
                       onChange={(event) => setImportFileName(event.target.value)}
@@ -879,11 +893,10 @@ export function FilesPanel({
                     />
                   </label>
 
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1.5">
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="shrink-0 whitespace-nowrap"
                       disabled={importingUrl}
                       onClick={() => {
                         setShowImportForm(false);
@@ -895,8 +908,7 @@ export function FilesPanel({
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
-                      className="shrink-0 whitespace-nowrap"
+                      variant="secondary"
                       disabled={importingUrl}
                       onClick={() => {
                         void handleImportUrl();
@@ -947,7 +959,7 @@ export function FilesPanel({
             ) : null}
 
             {!loading && !loadError && listing && listing.exists && listing.entries.length > 0 ? (
-              <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] divide-y divide-ink-800/40">
+              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--surface-raised)] divide-y divide-ink-800/40">
                 {listing.entries.map((entry) => {
                   const deleting = deletingPath === entry.path;
                   const selectedForPreview = entry.type === "file" && previewPath === entry.path;
@@ -989,7 +1001,7 @@ export function FilesPanel({
                           <Tooltip content="Download" side="left">
                             <button
                               type="button"
-                              className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-ink-500 transition-colors hover:text-ink-200 disabled:opacity-50"
+                              className="shrink-0 cursor-pointer rounded-lg p-1.5 text-ink-500 transition-all duration-150 hover:bg-ink-800 hover:text-ink-200 active:scale-[0.95] disabled:pointer-events-none disabled:opacity-50"
                               disabled={downloadingPath === entry.path || deleting}
                               onClick={() => {
                                 void handleDownloadEntry(entry);
@@ -1008,7 +1020,7 @@ export function FilesPanel({
                         <Tooltip content="Delete" side="left">
                           <button
                             type="button"
-                            className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-ink-500 transition-colors hover:text-red-400 disabled:opacity-50"
+                            className="shrink-0 cursor-pointer rounded-lg p-1.5 text-ink-500 transition-all duration-150 hover:bg-red-500/10 hover:text-red-400 active:scale-[0.95] disabled:pointer-events-none disabled:opacity-50"
                             disabled={deleting || downloadingPath === entry.path}
                             onClick={() => void handleDeleteEntry(entry)}
                             aria-label={`Delete ${entry.name}`}
@@ -1064,15 +1076,16 @@ export function FilesPanel({
                       {preview.mimeType} · {formatSize(preview.sizeBytes)}
                     </div>
 
-                    <button
-                      type="button"
-                      className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-3 text-xs text-ink-300 transition-colors hover:bg-ink-800/60 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full justify-center"
                       onClick={() => setModalOpen(true)}
                       disabled={preview.kind === "binary"}
                     >
                       <Maximize2 className="h-3.5 w-3.5" />
                       {preview.kind === "binary" ? "Preview unavailable" : "Open preview"}
-                    </button>
+                    </Button>
 
                     {preview.kind === "binary" ? (
                       <div className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">

@@ -52,6 +52,9 @@ export interface PipelineCanvasProps {
   onSelectionChange: (selection: PipelineCanvasSelection) => void;
   onAddNode: () => void;
   onAutoLayout?: () => void;
+  onAddStep?: () => void;
+  onSpawnOrchestrator?: () => void;
+  hasOrchestrator?: boolean;
   onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
   onMoveNodes?: (updates: NodePositionUpdate[]) => void;
   onDragStateChange?: (active: boolean) => void;

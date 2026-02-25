@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-02-25
+- Last reviewed: 2026-02-26
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -8,7 +8,7 @@
 - Version externally consumed contracts.
 
 ## Initial Contract Surface
-- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string }, updater?: { configured: boolean } }
+- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string }, updater?: { configured: boolean }, client?: { minimumDesktopVersion: string, clientVersion?: string, updateRequired: boolean, message: string, downloadUrl?: string } }
 - GET /api/agents -> { items: AgentSummary[], nextCursor?: string }
 - POST /api/agents (CreateAgentInput) -> Agent
 - GET /api/agents/:agentId -> Agent
@@ -36,6 +36,16 @@
 - internal core->updater calls use `FYREFLOW_UPDATER_AUTH_TOKEN` (`UPDATER_AUTH_TOKEN` fallback).
 - direct updater `/api/updates/*` routes require `UPDATER_AUTH_TOKEN` via `Authorization: Bearer` or `x-api-token` header.
 - `GET /health` on updater remains unauthenticated for liveness checks.
+
+## Desktop Compatibility Contract (2026-02-26)
+- Client includes desktop/web app version in `x-fyreflow-client-version` header for core API requests.
+- `/api/health` may include `client` compatibility metadata when backend sets `FYREFLOW_MIN_DESKTOP_VERSION`:
+- `minimumDesktopVersion`: minimum supported desktop version on this backend.
+- `clientVersion`: normalized version received from request header (if present/valid).
+- `updateRequired`: `true` when client version is below required minimum or unavailable.
+- `message`: user-safe compatibility summary suitable for direct UI display.
+- `downloadUrl`: optional release/download URL from `FYREFLOW_DESKTOP_DOWNLOAD_URL`.
+- Client bootstrap should block dashboard usage when `client.updateRequired === true`.
 
 ## File Manager Scope API (2026-02-23)
 - `GET /api/files` lists files inside a storage scope owned by the selected pipeline.

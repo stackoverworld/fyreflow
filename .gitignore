@@ -8,3 +8,12 @@ data/local-db.json
 /data
 .primer-ai/
 output/playwright/
+
+# AI tools
+CLAUDE.md
+AGENTS.md
+**/AGENTS.md
+.claude/
+.agents/
+skills/
+skills-lock.json

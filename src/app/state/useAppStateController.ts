@@ -13,6 +13,8 @@ import { useAppStateControllerState } from "./controller/useAppStateController/s
 export function useAppStateController({ activePanel, setActivePanel }: UseAppStateOptions) {
   const { preference: themePreference, setTheme } = useTheme();
   const {
+    initialStateLoading,
+    setInitialStateLoading,
     pipelines,
     setPipelines,
     providers,
@@ -254,6 +256,7 @@ export function useAppStateController({ activePanel, setActivePanel }: UseAppSta
     isDirty,
     notice,
     noticeTimerRef,
+    providers,
     pipelineSaveValidationError,
     processingRunInputModal,
     runInputModal,
@@ -283,10 +286,12 @@ export function useAppStateController({ activePanel, setActivePanel }: UseAppSta
     setSelectedPipelineId,
     setSmartRunPlan,
     setStorageConfig,
+    setInitialStateLoading,
     runtimeInputPromptSeenRef,
     inputModalNotificationSignatureRef,
     smartRunPlan,
     smartRunPlanRef,
+    storageConfig,
     themePreference,
     aiWorkflowKey,
     notifyDesktop,
@@ -297,6 +302,7 @@ export function useAppStateController({ activePanel, setActivePanel }: UseAppSta
   });
 
   return {
+    initialStateLoading,
     notice,
     setNotice,
     themePreference,

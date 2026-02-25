@@ -1,4 +1,4 @@
-import { getState, getSmartRunPlan } from "@/lib/api";
+import { getHealth, getState, getSmartRunPlan } from "@/lib/api";
 import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
 import { createDraftWorkflowKey, emptyDraft, toDraft } from "@/lib/pipelineDraft";
 import { buildSmartRunPlanSignature, normalizeSmartRunInputs, setSmartRunPlanCacheEntry } from "@/lib/smartRunInputs";
@@ -20,6 +20,7 @@ import {
 import { type DesktopNotificationSettings } from "@/lib/appSettingsStorage";
 import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback } from "react";
 import type { RunInputModalContext } from "../appStateTypes";
+import type { ApiHealthStatus } from "@/lib/types";
 
 type SetRuns = Dispatch<SetStateAction<DashboardState["runs"]>>;
 
@@ -34,6 +35,22 @@ interface RunStatusNotificationOptions {
 function isUnauthorizedMessage(rawMessage: string): boolean {
   const normalized = rawMessage.trim().toLowerCase();
   return normalized === "unauthorized" || normalized.includes("401");
+}
+
+export function getClientUpdateRequiredMessage(health: ApiHealthStatus): string | null {
+  if (!health.client || health.client.updateRequired !== true) {
+    return null;
+  }
+
+  const fallbackMessage = `Backend requires desktop version ${health.client.minimumDesktopVersion} or newer.`;
+  const baseMessage =
+    typeof health.client.message === "string" && health.client.message.trim().length > 0
+      ? health.client.message.trim()
+      : fallbackMessage;
+
+  return health.client.downloadUrl
+    ? `${baseMessage} Download latest desktop app: ${health.client.downloadUrl}`
+    : baseMessage;
 }
 
 export function mapInitialStateLoadErrorMessage(error: unknown): string {
@@ -132,6 +149,16 @@ export async function loadInitialState(args: {
   isCancelled: () => boolean;
 }): Promise<void> {
   try {
+    const health = await getHealth();
+    if (args.isCancelled()) {
+      return;
+    }
+
+    const requiredClientUpdateMessage = getClientUpdateRequiredMessage(health);
+    if (requiredClientUpdateMessage) {
+      throw new Error(requiredClientUpdateMessage);
+    }
+
     const state = await getState();
     if (args.isCancelled()) {
       return;

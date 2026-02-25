@@ -74,6 +74,9 @@ export function PipelineEditor(props: PipelineEditorProps) {
     readOnly = false,
     claudeFastModeAvailable,
     claudeFastModeUnavailableNote,
+    onAddStep,
+    onSpawnOrchestrator,
+    hasOrchestrator,
     onCanvasDragStateChange,
     className
   } = props;
@@ -166,6 +169,9 @@ export function PipelineEditor(props: PipelineEditorProps) {
           selectedNodeIds={selectedStepIds}
           selectedLinkId={selectedLinkId}
           onAutoLayout={readOnly ? undefined : applyAutoLayout}
+          onAddStep={readOnly ? undefined : onAddStep}
+          onSpawnOrchestrator={readOnly ? undefined : onSpawnOrchestrator}
+          hasOrchestrator={hasOrchestrator}
           onSelectionChange={handleCanvasSelectionChange}
           onAddNode={() => {}}
           onMoveNode={handleCanvasMoveNode}

@@ -1,7 +1,7 @@
 import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/cn";
-import { DROPDOWN_MENU_CONTENT_CLASS } from "@/components/optics/overlay-classes";
+import { DROPDOWN_MENU_CONTENT_CLASS, DROPDOWN_MENU_CONTENT_UP_CLASS } from "@/components/optics/overlay-classes";
 
 const CloseContext = createContext<() => void>(() => {});
 
@@ -9,10 +9,11 @@ interface DropdownMenuProps {
   trigger: ReactNode;
   children: ReactNode;
   align?: "left" | "right";
+  openDirection?: "up" | "down";
   className?: string;
 }
 
-export function DropdownMenu({ trigger, children, align = "right", className }: DropdownMenuProps) {
+export function DropdownMenu({ trigger, children, align = "right", openDirection = "down", className }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -49,12 +50,12 @@ export function DropdownMenu({ trigger, children, align = "right", className }: 
         <AnimatePresence>
           {open && (
             <motion.div
-              initial={{ opacity: 0, y: -4, scale: 0.96 }}
+              initial={{ opacity: 0, y: openDirection === "up" ? 4 : -4, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.96 }}
+              exit={{ opacity: 0, y: openDirection === "up" ? 4 : -4, scale: 0.96 }}
               transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
               className={cn(
-                DROPDOWN_MENU_CONTENT_CLASS,
+                openDirection === "up" ? DROPDOWN_MENU_CONTENT_UP_CLASS : DROPDOWN_MENU_CONTENT_CLASS,
                 align === "right" ? "right-0" : "left-0"
               )}
             >

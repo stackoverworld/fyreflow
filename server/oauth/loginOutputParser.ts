@@ -3,6 +3,12 @@ const URL_PATTERN = /https?:\/\/[^\s<>"')\]}]+/gi;
 const DEVICE_CODE_PATTERN = /\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
 const CODE_HINT_PATTERN = /(one[- ]time code|user code|enter this code|code:)/i;
 const DISALLOWED_CODE_TOKENS = new Set(["ONE-TIME", "ONE-TIME-CODE", "USER-CODE", "ENTER-THIS-CODE"]);
+const STRONG_AUTH_URL_HINT_PATTERNS = [
+  /\/device(?:\/|$|\?)/i,
+  /\/oauth\/authorize(?:\/|$|\?)/i,
+  /[?&](?:pairing|user_code|device_code|verification_uri|verification_uri_complete)=/i
+];
+const WEAK_AUTH_URL_HINT_PATTERNS = [/\/authorize(?:\/|$|\?)/i];
 
 function stripAnsi(value: string): string {
   return value.replace(ANSI_ESCAPE_PATTERN, "");
@@ -16,15 +22,26 @@ function trimTrailingPunctuation(url: string): string {
   return url.replace(/[),.;]+$/g, "");
 }
 
+function hasAnyHint(url: string, patterns: ReadonlyArray<RegExp>): boolean {
+  return patterns.some((pattern) => pattern.test(url));
+}
+
 export function extractFirstAuthUrl(rawOutput: string): string | undefined {
   const normalized = normalizeOutput(rawOutput);
-  const match = URL_PATTERN.exec(normalized);
-  URL_PATTERN.lastIndex = 0;
-  if (!match) {
+  const matches = Array.from(normalized.matchAll(URL_PATTERN), (match) => trimTrailingPunctuation(match[0])).filter(
+    (url) => url.length > 0
+  );
+  if (matches.length === 0) {
     return undefined;
   }
 
-  return trimTrailingPunctuation(match[0]);
+  const strongHintUrl = matches.find((url) => hasAnyHint(url, STRONG_AUTH_URL_HINT_PATTERNS));
+  if (strongHintUrl) {
+    return strongHintUrl;
+  }
+
+  const weakHintUrl = matches.find((url) => hasAnyHint(url, WEAK_AUTH_URL_HINT_PATTERNS));
+  return weakHintUrl ?? matches[0];
 }
 
 function isPlausibleDeviceCode(candidate: string, allowLetterOnly: boolean): boolean {

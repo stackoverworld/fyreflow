@@ -84,6 +84,13 @@ export interface ApiHealthStatus {
   updater?: {
     configured: boolean;
   };
+  client?: {
+    minimumDesktopVersion: string;
+    clientVersion?: string;
+    updateRequired: boolean;
+    message: string;
+    downloadUrl?: string;
+  };
 }
 
 export type PairingSessionStatus =

@@ -55,7 +55,7 @@ export function createCorsMiddleware(config: CorsConfig) {
       callback(null, false);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-api-token"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-token", "x-fyreflow-client-version"],
     credentials: false,
     maxAge: 600
   });

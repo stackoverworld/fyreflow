@@ -59,19 +59,36 @@ describe("System and Auth Routes", () => {
         }),
         getUpdaterStatus: () => ({
           configured: true
+        }),
+        getClientCompatibility: (clientVersion) => ({
+          minimumDesktopVersion: "1.3.0",
+          clientVersion: clientVersion.trim(),
+          updateRequired: false,
+          message: "Client is compatible.",
+          downloadUrl: "https://downloads.example.com/fyreflow"
         })
       });
 
       const healthHandler = route("GET", "/api/health");
       const response = await invokeRoute(healthHandler, {
         path: "/api/health",
-        method: "GET"
+        method: "GET",
+        headers: {
+          "x-fyreflow-client-version": "1.4.0"
+        }
       });
       const payload = response.body as {
         ok: boolean;
         version?: string;
         realtime?: { enabled: boolean; path: string };
         updater?: { configured: boolean };
+        client?: {
+          minimumDesktopVersion: string;
+          clientVersion?: string;
+          updateRequired: boolean;
+          message: string;
+          downloadUrl?: string;
+        };
       };
       expect(response.statusCode).toBe(200);
       expect(payload.ok).toBe(true);
@@ -82,6 +99,13 @@ describe("System and Auth Routes", () => {
       });
       expect(payload.updater).toEqual({
         configured: true
+      });
+      expect(payload.client).toEqual({
+        minimumDesktopVersion: "1.3.0",
+        clientVersion: "1.4.0",
+        updateRequired: false,
+        message: "Client is compatible.",
+        downloadUrl: "https://downloads.example.com/fyreflow"
       });
     } finally {
       await cleanup();

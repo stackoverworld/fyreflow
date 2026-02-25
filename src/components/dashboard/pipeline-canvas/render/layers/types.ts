@@ -46,6 +46,9 @@ export interface OverlayLayerProps {
   toolMode: "select" | "pan";
   onToolModeChange: (toolMode: "select" | "pan") => void;
   onAutoLayout?: () => void;
+  onAddStep?: () => void;
+  onSpawnOrchestrator?: () => void;
+  hasOrchestrator?: boolean;
   viewportScale: number;
   selectedNodeIds: string[];
   selectedLinkId: string | null;

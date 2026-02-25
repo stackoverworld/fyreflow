@@ -9,15 +9,16 @@ import { promisify } from "node:util";
 export const execFileAsync = promisify(execFile);
 const DEFAULT_CAPTURE_TIMEOUT_MS = 5_000;
 const DEFAULT_CAPTURE_POLL_INTERVAL_MS = 150;
-const DEFAULT_CAPTURE_STABLE_POLLS = 2;
-const DEFAULT_EMPTY_CAPTURE_GRACE_MS = 1_500;
+const DEFAULT_CAPTURE_SETTLE_MS = 600;
 const DEFAULT_CAPTURE_MAX_BYTES = 16 * 1024;
 const CAPTURE_LOG_RETENTION_MS = 5 * 60 * 1_000;
 
 export interface LaunchDetachedCaptureOptions {
   captureTimeoutMs?: number;
   pollIntervalMs?: number;
+  settleTimeMs?: number;
   maxBytes?: number;
+  isOutputSufficient?: (capturedOutput: string) => boolean;
 }
 
 export interface LaunchDetachedCaptureResult {
@@ -65,28 +66,22 @@ function scheduleCaptureLogCleanup(filePath: string): void {
 
 async function waitForCapturedOutput(
   filePath: string,
-  options: Required<Pick<LaunchDetachedCaptureOptions, "captureTimeoutMs" | "pollIntervalMs" | "maxBytes">>
+  options: Required<Pick<LaunchDetachedCaptureOptions, "captureTimeoutMs" | "pollIntervalMs" | "settleTimeMs" | "maxBytes">> &
+    Pick<LaunchDetachedCaptureOptions, "isOutputSufficient">
 ): Promise<string> {
   const startedAt = Date.now();
   let output = "";
-  let stablePollCount = 0;
+  let lastOutputChangeAt = startedAt;
 
   while (Date.now() - startedAt < options.captureTimeoutMs) {
     const nextOutput = readFileTail(filePath, options.maxBytes);
-    if (nextOutput.length === 0 && Date.now() - startedAt >= DEFAULT_EMPTY_CAPTURE_GRACE_MS) {
-      break;
-    }
-
-    if (nextOutput === output) {
-      if (nextOutput.length > 0) {
-        stablePollCount += 1;
-        if (stablePollCount >= DEFAULT_CAPTURE_STABLE_POLLS) {
-          break;
-        }
-      }
-    } else {
+    if (nextOutput !== output) {
       output = nextOutput;
-      stablePollCount = 0;
+      lastOutputChangeAt = Date.now();
+    } else if (nextOutput.length > 0 && Date.now() - lastOutputChangeAt >= options.settleTimeMs) {
+      if (!options.isOutputSufficient || options.isOutputSufficient(output)) {
+        break;
+      }
     }
 
     await sleep(options.pollIntervalMs);
@@ -144,6 +139,7 @@ export async function launchDetachedAndCapture(
 ): Promise<LaunchDetachedCaptureResult> {
   const captureTimeoutMs = options.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_CAPTURE_POLL_INTERVAL_MS;
+  const settleTimeMs = options.settleTimeMs ?? DEFAULT_CAPTURE_SETTLE_MS;
   const maxBytes = options.maxBytes ?? DEFAULT_CAPTURE_MAX_BYTES;
   const captureLogPath = path.join(
     os.tmpdir(),
@@ -174,7 +170,9 @@ export async function launchDetachedAndCapture(
   const capturedOutput = await waitForCapturedOutput(captureLogPath, {
     captureTimeoutMs,
     pollIntervalMs,
-    maxBytes
+    settleTimeMs,
+    maxBytes,
+    isOutputSufficient: options.isOutputSufficient
   });
   scheduleCaptureLogCleanup(captureLogPath);
 

@@ -28,10 +28,10 @@ export function getActiveApiBaseUrlField(settings: {
 
 export function getApiTokenSourceHint(mode: RuntimeConnectionMode): string {
   if (mode === "remote") {
-    return "set in Railway/service environment variables (DASHBOARD_API_TOKEN)";
+    return "set in your server's environment variables";
   }
 
-  return "set in local API environment (.env)";
+  return "set in your local .env file";
 }
 
 export function getRemoteAuthErrorMessage(rawMessage: string, context: "connection" | "pairingAdmin"): string {
@@ -42,10 +42,10 @@ export function getRemoteAuthErrorMessage(rawMessage: string, context: "connecti
   }
 
   if (context === "pairingAdmin") {
-    return "Unauthorized. For step 1 (Approve), paste DASHBOARD_API_TOKEN into \"Connection auth token\", click Save Connection, then retry.";
+    return "Authorization failed. Make sure the admin token is set in the auth token field above, then try again.";
   }
 
-  return "Unauthorized. Paste DASHBOARD_API_TOKEN (owner) or a claimed Device Token into \"Connection auth token\", then click Save Connection.";
+  return "Authorization failed. Check that your auth token is correct and saved.";
 }
 
 export function getPairingRealtimeErrorMessage(rawMessage: string): string {
@@ -54,7 +54,7 @@ export function getPairingRealtimeErrorMessage(rawMessage: string): string {
     normalized.includes("closed before subscription was established") ||
     normalized.includes("failed to open pairing realtime stream")
   ) {
-    return "Session created, but realtime updates are unavailable. Continue manually: click Refresh, then 1) Approve Device and 2) Claim Token.";
+    return "Live updates unavailable. Use the buttons below to continue the pairing flow manually.";
   }
 
   return rawMessage;

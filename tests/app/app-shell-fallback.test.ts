@@ -9,6 +9,7 @@ describe("AppShell fallback", () => {
     const html = renderToStaticMarkup(
       createElement(AppShell, {
         state: {
+          initialStateLoading: false,
           notice: "Remote backend rejected current API token.",
           providers: null,
           storageConfig: null,
@@ -46,6 +47,7 @@ describe("AppShell fallback", () => {
     const html = renderToStaticMarkup(
       createElement(AppShell, {
         state: {
+          initialStateLoading: false,
           notice: "",
           providers: null,
           storageConfig: null,
@@ -75,5 +77,42 @@ describe("AppShell fallback", () => {
     );
 
     expect(html).toContain("Backend is not available. Open Settings &gt; Remote to configure connection.");
+  });
+
+  it("shows neutral loading copy while initial state is still loading", () => {
+    const html = renderToStaticMarkup(
+      createElement(AppShell, {
+        state: {
+          initialStateLoading: true,
+          notice: "",
+          providers: null,
+          storageConfig: null,
+          settingsOpen: false,
+          debugEnabled: false,
+          desktopNotifications: {
+            enabled: false,
+            inputRequired: false,
+            runFailed: false,
+            runCompleted: false
+          },
+          themePreference: "system",
+          providerOauthStatuses: {},
+          providerOauthMessages: {},
+          setSettingsOpen: vi.fn(),
+          setDebugEnabled: vi.fn(),
+          setDesktopNotifications: vi.fn(),
+          setTheme: vi.fn(),
+          handleProviderOauthStatusChange: vi.fn(),
+          handleProviderOauthMessageChange: vi.fn(),
+          handleSaveProvider: vi.fn()
+        } as unknown,
+        navigation: {
+          activePanel: null
+        } as unknown
+      })
+    );
+
+    expect(html).toContain("Connecting to backend...");
+    expect(html).not.toContain("Backend is not available.");
   });
 });

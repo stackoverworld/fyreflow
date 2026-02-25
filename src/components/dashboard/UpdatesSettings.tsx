@@ -11,7 +11,7 @@ interface ActionFeedback {
   message: string;
 }
 
-type BusyAction = "check" | "update" | "rollback" | "reload";
+type BusyAction = "check" | "update" | "rollback";
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
@@ -19,9 +19,9 @@ function toErrorMessage(error: unknown): string {
     : "Action failed.";
 }
 
-function formatTimestamp(value: string | undefined): string {
+function formatTimeAgo(value: string | undefined): string {
   if (!value) {
-    return "-";
+    return "Never";
   }
 
   const parsed = Date.parse(value);
@@ -29,13 +29,29 @@ function formatTimestamp(value: string | undefined): string {
     return value;
   }
 
-  return new Date(parsed).toLocaleString();
+  const seconds = Math.floor((Date.now() - parsed) / 1000);
+  if (seconds < 60) {
+    return "Just now";
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  return new Date(parsed).toLocaleDateString();
 }
 
 export function UpdatesSettings() {
   const [status, setStatus] = useState<UpdateServiceStatus | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
   const [feedback, setFeedback] = useState<ActionFeedback | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const runAction = async (action: BusyAction, callback: () => Promise<void>) => {
     setBusyAction(action);
@@ -52,17 +68,6 @@ export function UpdatesSettings() {
     }
   };
 
-  const handleReloadStatus = async () => {
-    await runAction("reload", async () => {
-      const response = await getManagedUpdateStatus();
-      setStatus(response.status);
-      setFeedback({
-        tone: "success",
-        message: "Update status synced from backend."
-      });
-    });
-  };
-
   const handleCheck = async () => {
     await runAction("check", async () => {
       const response = await checkManagedUpdateStatus();
@@ -71,7 +76,7 @@ export function UpdatesSettings() {
         tone: "success",
         message: response.status.updateAvailable
           ? `Update available: ${response.status.latestTag}`
-          : "You are on the latest version."
+          : "You're on the latest version."
       });
     });
   };
@@ -93,7 +98,7 @@ export function UpdatesSettings() {
       setStatus(response.status);
       setFeedback({
         tone: "success",
-        message: `Rollback complete. Current version: ${response.status.currentTag}.`
+        message: `Rolled back to ${response.status.currentTag}.`
       });
     });
   };
@@ -101,29 +106,19 @@ export function UpdatesSettings() {
   useEffect(() => {
     let cancelled = false;
 
-    setBusyAction("reload");
-    setFeedback(null);
     void getManagedUpdateStatus()
       .then((response) => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setStatus(response.status);
         }
-        setStatus(response.status);
       })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-        setFeedback({
-          tone: "error",
-          message: toErrorMessage(error)
-        });
+      .catch(() => {
+        // Silent load — user can check manually
       })
       .finally(() => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setLoaded(true);
         }
-        setBusyAction(null);
       });
 
     return () => {
@@ -139,58 +134,83 @@ export function UpdatesSettings() {
           <span className="text-[11px] font-semibold uppercase tracking-wider">Release Updates</span>
         </div>
 
-        <p className="text-xs text-ink-500">
-          Uses the active backend connection from Remote settings. No separate updater token is required in the app.
-        </p>
-
-        <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={status?.updateAvailable ? "warning" : "neutral"}>
-              {status?.updateAvailable ? "Update Available" : "Current"}
-            </Badge>
-            {status?.busy ? <Badge variant="running">Updater Busy</Badge> : null}
-            <span className="text-[11px] text-ink-500">Channel: {status?.channel ?? "stable"}</span>
+        {/* Version card */}
+        <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-display text-base text-ink-100">
+                {status?.currentTag ?? (loaded ? "Not checked yet" : "Loading…")}
+              </p>
+              {status?.currentVersion ? (
+                <p className="mt-0.5 text-[11px] text-ink-500">{status.currentVersion}</p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge variant="neutral">{status?.channel ?? "stable"}</Badge>
+              {status?.busy ? <Badge variant="running">Busy</Badge> : null}
+            </div>
           </div>
-
-          <div className="mt-2 grid gap-1 text-[11px] text-ink-500">
-            <p>Current tag: {status?.currentTag ?? "-"}</p>
-            <p>Current core version: {status?.currentVersion ?? "-"}</p>
-            <p>Latest tag: {status?.latestTag ?? "-"}</p>
-            <p>Latest published: {formatTimestamp(status?.latestPublishedAt)}</p>
-            <p>Last checked: {formatTimestamp(status?.lastCheckedAt)}</p>
-            <p>Last applied: {formatTimestamp(status?.lastAppliedAt)}</p>
-          </div>
+          <p className="mt-2 text-[11px] text-ink-600">
+            Last checked: {formatTimeAgo(status?.lastCheckedAt)}
+          </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" disabled={busyAction !== null} onClick={handleCheck}>
-            {busyAction === "check" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            Check
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busyAction !== null || !status?.latestTag || status.busy === true || status.updateAvailable !== true}
-            onClick={handleApply}
-          >
-            {busyAction === "update" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-            Update
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busyAction !== null || !status?.rollbackAvailable || status.busy === true}
-            onClick={handleRollback}
-          >
-            {busyAction === "rollback" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-            Rollback
-          </Button>
-          <Button size="sm" variant="ghost" disabled={busyAction !== null} onClick={handleReloadStatus}>
-            {busyAction === "reload" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Refresh
-          </Button>
+        {/* Update available banner */}
+        {status?.updateAvailable && status.latestTag ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-2.5">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-amber-400">Update available</p>
+              <p className="mt-0.5 truncate font-mono text-[11px] text-ink-400">{status.latestTag}</p>
+            </div>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busyAction !== null || status.busy === true}
+              onClick={handleApply}
+            >
+              {busyAction === "update" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              Update now
+            </Button>
+          </div>
+        ) : null}
+
+        {/* Primary action + rollback */}
+        <div className="flex items-center gap-2">
+          {!status?.updateAvailable ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busyAction !== null}
+              onClick={handleCheck}
+            >
+              {busyAction === "check" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Check for updates
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busyAction !== null}
+              onClick={handleCheck}
+            >
+              {busyAction === "check" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Re-check
+            </Button>
+          )}
+          {status?.rollbackAvailable && !status.busy ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busyAction !== null}
+              onClick={handleRollback}
+            >
+              {busyAction === "rollback" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              Rollback
+            </Button>
+          ) : null}
         </div>
 
+        {/* Backend error */}
         {status?.lastError ? (
           <div className="flex items-start gap-2 rounded-lg bg-red-500/8 px-3 py-2 text-xs text-red-400">
             <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -198,6 +218,7 @@ export function UpdatesSettings() {
           </div>
         ) : null}
 
+        {/* Action feedback */}
         {feedback ? (
           <div
             className={

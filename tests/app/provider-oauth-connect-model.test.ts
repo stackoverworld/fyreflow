@@ -11,14 +11,14 @@ import {
 describe("provider oauth connect model", () => {
   it("maps provider ids to deterministic login urls", () => {
     expect(getProviderOAuthLoginUrl("openai")).toBe("https://chatgpt.com");
-    expect(getProviderOAuthLoginUrl("claude")).toBe("https://claude.ai/login");
+    expect(getProviderOAuthLoginUrl("claude")).toBe("https://claude.ai/device");
   });
 
   it("prefers backend pairing url when oauth start returns one", () => {
     expect(resolveProviderOAuthLoginUrl("claude", "https://claude.ai/device?pairing=abc123")).toBe(
       "https://claude.ai/device?pairing=abc123"
     );
-    expect(resolveProviderOAuthLoginUrl("claude", "  ")).toBe("https://claude.ai/login");
+    expect(resolveProviderOAuthLoginUrl("claude", "  ")).toBe("https://claude.ai/device");
   });
 
   it("opens browser only when using remote connection mode", () => {

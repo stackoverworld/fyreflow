@@ -16,14 +16,23 @@ interface AppShellProps {
   navigation: ReturnType<typeof useNavigationState>;
 }
 
+function extractFirstUrl(input: string): string {
+  const match = input.match(/https?:\/\/\S+/);
+  return match?.[0] ?? "";
+}
+
 export function AppShell({
   state,
   navigation
 }: AppShellProps) {
   const { notice, providers, storageConfig } = state;
-  const fallbackNotice = notice.trim().length > 0
-    ? notice
-    : "Backend is not available. Open Settings > Remote to configure connection.";
+  const fallbackNotice =
+    notice.trim().length > 0
+      ? notice
+      : state.initialStateLoading
+        ? "Connecting to backend..."
+        : "Backend is not available. Open Settings > Remote to configure connection.";
+  const downloadUrl = extractFirstUrl(fallbackNotice);
   const actions = useAppShellActions(state);
 
   if (!providers || !storageConfig) {
@@ -44,6 +53,17 @@ export function AppShell({
           <div className="w-full max-w-[520px] rounded-xl border border-ink-800 bg-ink-900/90 px-5 py-4 shadow-panel">
             <p>{fallbackNotice}</p>
             <div className="mt-3">
+              {downloadUrl ? (
+                <button
+                  type="button"
+                  className="mr-2 inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-700/50 bg-ink-900/60 px-3 py-1.5 text-xs text-ink-200 transition-colors hover:bg-ink-800"
+                  onClick={() => {
+                    window.open(downloadUrl, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Download Update
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-700/50 bg-ink-900/60 px-3 py-1.5 text-xs text-ink-200 transition-colors hover:bg-ink-800"

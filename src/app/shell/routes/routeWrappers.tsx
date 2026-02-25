@@ -89,7 +89,7 @@ export function ShellNoticeBanner({ notice }: ShellNoticeBannerProps) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 4, scale: 0.98 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="glass-panel-dense pointer-events-none fixed bottom-5 left-4 right-4 z-[100] mx-auto w-fit max-w-[calc(100%-2rem)] rounded-xl border border-ink-700/40 px-4 py-2 text-center text-xs text-ink-200 shadow-lg"
+          className="glass-panel-dense pointer-events-none fixed bottom-5 right-4 z-[100] w-fit max-w-[calc(100%-80px)] rounded-xl border border-ink-700/40 px-4 py-2 text-center text-xs text-ink-200 shadow-lg"
         >
           {notice}
         </motion.div>

@@ -32,6 +32,7 @@ export interface AppStateControllerRuntimeArgs {
   isDirty: boolean;
   notice: string;
   noticeTimerRef: MutableRefObject<number | undefined>;
+  providers: DashboardState["providers"] | null;
   pipelineSaveValidationError: string;
   processingRunInputModal: boolean;
   runInputModal: RunInputModalContext | null;
@@ -61,10 +62,12 @@ export interface AppStateControllerRuntimeArgs {
   setSelectedPipelineId: AppStateSetState<string | null>;
   setSmartRunPlan: AppStateSetState<SmartRunPlan | null>;
   setStorageConfig: AppStateSetState<DashboardState["storage"] | null>;
+  setInitialStateLoading: AppStateSetState<boolean>;
   runtimeInputPromptSeenRef: MutableRefObject<Set<string>>;
   inputModalNotificationSignatureRef: MutableRefObject<string>;
   smartRunPlan: SmartRunPlan | null;
   smartRunPlanRef: MutableRefObject<SmartRunPlan | null>;
+  storageConfig: DashboardState["storage"] | null;
   themePreference: ThemePreference;
   aiWorkflowKey: string;
   notifyDesktop: (event: DesktopNotificationEvent, title: string, body?: string) => void;
@@ -91,6 +94,7 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
     isDirty,
     notice,
     noticeTimerRef,
+    providers,
     pipelineSaveValidationError,
     processingRunInputModal,
     runInputModal,
@@ -120,10 +124,12 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
     setSelectedPipelineId,
     setSmartRunPlan,
     setStorageConfig,
+    setInitialStateLoading,
     runtimeInputPromptSeenRef,
     inputModalNotificationSignatureRef,
     smartRunPlan,
     smartRunPlanRef,
+    storageConfig,
     themePreference,
     aiWorkflowKey,
     notifyDesktop,
@@ -177,11 +183,12 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
 
   useEffect(() => {
     clearTimeoutRef(noticeTimerRef);
-    if (notice) {
+    const shouldAutoDismissNotice = providers !== null && storageConfig !== null;
+    if (notice && shouldAutoDismissNotice) {
       noticeTimerRef.current = window.setTimeout(() => setNotice(""), 3500);
     }
     return () => clearTimeoutRef(noticeTimerRef);
-  }, [notice, noticeTimerRef, setNotice]);
+  }, [notice, noticeTimerRef, providers, setNotice, storageConfig]);
 
   useEffect(() => {
     saveAppSettings({ debugEnabled, theme: themePreference, desktopNotifications });
@@ -209,6 +216,7 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
 
   useEffect(() => {
     let cancelled = false;
+    setInitialStateLoading(true);
     void loadInitialState({
       setPipelines,
       setProviders,
@@ -222,16 +230,21 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
       setIsNewDraft,
       setNotice,
       isCancelled: () => cancelled
+    }).finally(() => {
+      if (!cancelled) {
+        setInitialStateLoading(false);
+      }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
+  }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setInitialStateLoading, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
 
   useEffect(() => {
     let disposed = false;
     const handleConnectionSettingsChanged = () => {
+      setInitialStateLoading(true);
       void loadInitialState({
         setPipelines,
         setProviders,
@@ -245,6 +258,10 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
         setIsNewDraft,
         setNotice,
         isCancelled: () => disposed
+      }).finally(() => {
+        if (!disposed) {
+          setInitialStateLoading(false);
+        }
       });
     };
 
@@ -253,7 +270,7 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
       disposed = true;
       window.removeEventListener(CONNECTION_SETTINGS_CHANGED_EVENT, handleConnectionSettingsChanged);
     };
-  }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
+  }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setInitialStateLoading, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

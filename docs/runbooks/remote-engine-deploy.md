@@ -1,6 +1,6 @@
 # Remote Engine Deploy Runbook
 
-- Last reviewed: 2026-02-25
+- Last reviewed: 2026-02-26
 
 This runbook is for cases where UI stays local/desktop and the FyreFlow engine runs on a remote server.
 
@@ -15,6 +15,9 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - `DASHBOARD_API_TOKEN=<strong-random-token>`
    - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
    - `CORS_ORIGINS=<allowed desktop/web origins>`
+   - optional compatibility gate:
+   - `FYREFLOW_MIN_DESKTOP_VERSION=<min-supported-desktop-version>`
+   - `FYREFLOW_DESKTOP_DOWNLOAD_URL=<desktop-release-download-url>`
 6. Deploy and verify:
    - `GET https://<railway-domain>/api/health`
    - `GET https://<railway-domain>/api/health` should include realtime metadata when WS is enabled.
@@ -58,6 +61,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 
 - Repository is monolith, but remote engine deployment runs only backend process from `Dockerfile`.
 - Frontend source files inside repo do not start a separate frontend service on Railway.
+- Desktop app can run startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured in desktop runtime environment.
 - For production, use strong random tokens and restricted `CORS_ORIGINS`.
-- Provider OAuth in `remote` mode opens the pairing/login URL returned by backend OAuth start (fallbacks to provider login page), but CLI auth still runs on the remote host. If login stays pending, run the UI-shown CLI command on the server terminal.
+- Provider OAuth in `remote` mode opens the pairing/authorization URL returned by backend OAuth start (fallbacks to provider default auth page, for Claude this is `https://claude.ai/device`), but CLI auth still runs on the remote host. If login stays pending, run the UI-shown CLI command on the server terminal.
 - If provider status shows `CLI unavailable`, install provider CLI on the backend host and set `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` env vars when binaries are outside `PATH`.

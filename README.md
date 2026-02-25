@@ -131,6 +131,10 @@ bun run start:desktop
 - `FYREFLOW_UPDATER_BASE_URL` (optional; enable backend-managed updates via updater service)
 - `FYREFLOW_UPDATER_AUTH_TOKEN` (optional; token core uses to call updater service)
 - `FYREFLOW_UPDATER_TIMEOUT_MS` (default `15000`)
+- `FYREFLOW_MIN_DESKTOP_VERSION` (optional; when set, backend reports client compatibility and can require desktop upgrade)
+- `FYREFLOW_DESKTOP_DOWNLOAD_URL` (optional; download/release URL shown to outdated desktop clients)
+- `FYREFLOW_DESKTOP_UPDATE_FEED_URL` (optional; Electron auto-update feed URL used by desktop app on startup)
+- `FYREFLOW_DESKTOP_UPDATE_CHECK_INTERVAL_MS` (default `3600000`; desktop auto-update check interval)
 - `VITE_API_BASE_URL` (default `http://localhost:8787`)
 - `VITE_DASHBOARD_API_TOKEN` (optional web default token)
 - `VITE_REALTIME_WS_PATH` (default `/api/ws`)
@@ -151,6 +155,14 @@ bun run start:desktop
 5. Click `Save Connection` and `Validate`.
 
 After that, app UI is local, engine runs remotely on Railway.
+
+## Desktop App Auto-Update + Compatibility Gate
+
+- Desktop app now supports startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured.
+- Desktop app checks for updates at startup and then on interval (`FYREFLOW_DESKTOP_UPDATE_CHECK_INTERVAL_MS`).
+- To prevent backend/frontend drift, set `FYREFLOW_MIN_DESKTOP_VERSION` on backend:
+- if connected desktop version is lower than required, app bootstrap is blocked and user is prompted to update.
+- set `FYREFLOW_DESKTOP_DOWNLOAD_URL` so blocked clients get a direct download link.
 
 ## Build / checks
 

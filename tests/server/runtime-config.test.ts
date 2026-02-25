@@ -23,6 +23,8 @@ describe("runtime config", () => {
     expect(config.updaterBaseUrl).toBe("");
     expect(config.updaterAuthToken).toBe("");
     expect(config.updaterProxyTimeoutMs).toBe(15_000);
+    expect(config.minDesktopVersion).toBe("");
+    expect(config.desktopDownloadUrl).toBe("");
     expect(config.allowedCorsOrigins).toEqual([
       "http://localhost:5173",
       "http://127.0.0.1:5173",
@@ -45,7 +47,9 @@ describe("runtime config", () => {
       FYREFLOW_WS_HEARTBEAT_INTERVAL_MS: "12000",
       FYREFLOW_UPDATER_BASE_URL: "https://updates.example.com/",
       FYREFLOW_UPDATER_AUTH_TOKEN: "updater-token",
-      FYREFLOW_UPDATER_TIMEOUT_MS: "18000"
+      FYREFLOW_UPDATER_TIMEOUT_MS: "18000",
+      FYREFLOW_MIN_DESKTOP_VERSION: "v1.4",
+      FYREFLOW_DESKTOP_DOWNLOAD_URL: "https://downloads.example.com/fyreflow/"
     });
 
     expect(config.mode).toBe("remote");
@@ -62,6 +66,8 @@ describe("runtime config", () => {
     expect(config.updaterBaseUrl).toBe("https://updates.example.com");
     expect(config.updaterAuthToken).toBe("updater-token");
     expect(config.updaterProxyTimeoutMs).toBe(18_000);
+    expect(config.minDesktopVersion).toBe("1.4.0");
+    expect(config.desktopDownloadUrl).toBe("https://downloads.example.com/fyreflow");
   });
 
   it("normalizes helper parsers", () => {
@@ -80,6 +86,10 @@ describe("runtime config", () => {
     expect(resolveRuntimeConfig({ FYREFLOW_UPDATER_BASE_URL: "not-a-url" }).updaterBaseUrl).toBe("");
     expect(resolveRuntimeConfig({ UPDATER_AUTH_TOKEN: "fallback-token" }).updaterAuthToken).toBe("fallback-token");
     expect(resolveRuntimeConfig({ FYREFLOW_UPDATER_TIMEOUT_MS: "1500" }).updaterProxyTimeoutMs).toBe(2_000);
+    expect(resolveRuntimeConfig({ FYREFLOW_MIN_DESKTOP_VERSION: "invalid-version" }).minDesktopVersion).toBe("");
+    expect(resolveRuntimeConfig({ FYREFLOW_DESKTOP_DOWNLOAD_URL: "ftp://invalid.example.com" }).desktopDownloadUrl).toBe(
+      "ftp://invalid.example.com"
+    );
     expect(resolveCorsOrigins("https://a.example.com, https://b.example.com").allowedCorsOrigins).toEqual([
       "https://a.example.com",
       "https://b.example.com"

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, Notification, shell } from "electron";
+import { app, autoUpdater, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,25 @@ const indexHtmlPath = path.join(__dirname, "..", "dist", "index.html");
 const MAX_NOTIFICATION_TITLE_LENGTH = 120;
 const MAX_NOTIFICATION_BODY_LENGTH = 400;
 const MAX_REVEAL_PATH_LENGTH = 2048;
+const desktopUpdateFeedUrl = (process.env.FYREFLOW_DESKTOP_UPDATE_FEED_URL ?? "").trim();
+const DESKTOP_UPDATE_CHECK_DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
+const DESKTOP_UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const DESKTOP_UPDATE_CHECK_MAX_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const desktopUpdateCheckIntervalMs = (() => {
+  const raw = process.env.FYREFLOW_DESKTOP_UPDATE_CHECK_INTERVAL_MS;
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return DESKTOP_UPDATE_CHECK_DEFAULT_INTERVAL_MS;
+  }
+
+  return Math.max(
+    DESKTOP_UPDATE_CHECK_MIN_INTERVAL_MS,
+    Math.min(DESKTOP_UPDATE_CHECK_MAX_INTERVAL_MS, parsed)
+  );
+})();
+const desktopUpdateSupported = process.platform === "darwin" || process.platform === "win32";
+let desktopUpdateCheckInFlight = false;
+let desktopUpdateTimer = null;
 
 function normalizeNotificationPayload(raw) {
   if (!raw || typeof raw !== "object") {
@@ -124,6 +143,82 @@ function createMainWindow() {
   }
 
   void window.loadFile(indexHtmlPath);
+}
+
+async function checkForDesktopUpdates(trigger) {
+  if (!desktopUpdateSupported || desktopUpdateFeedUrl.length === 0 || rendererUrl || desktopUpdateCheckInFlight) {
+    return;
+  }
+
+  desktopUpdateCheckInFlight = true;
+  try {
+    await autoUpdater.checkForUpdates();
+    console.log(`[desktop-updates] checked (${trigger})`);
+  } catch (error) {
+    console.warn(`[desktop-updates] check failed (${trigger})`, error);
+  } finally {
+    desktopUpdateCheckInFlight = false;
+  }
+}
+
+function setupDesktopAutoUpdater() {
+  if (rendererUrl) {
+    return;
+  }
+
+  if (!desktopUpdateSupported) {
+    console.warn("[desktop-updates] auto-update is supported only on macOS/Windows.");
+    return;
+  }
+
+  if (desktopUpdateFeedUrl.length === 0) {
+    console.log("[desktop-updates] FYREFLOW_DESKTOP_UPDATE_FEED_URL is not set; skipping desktop auto-update checks.");
+    return;
+  }
+
+  try {
+    autoUpdater.setFeedURL({ url: desktopUpdateFeedUrl });
+  } catch (error) {
+    console.warn("[desktop-updates] failed to configure feed URL", error);
+    return;
+  }
+
+  autoUpdater.on("error", (error) => {
+    console.warn("[desktop-updates] updater error", error);
+  });
+
+  autoUpdater.on("update-available", () => {
+    console.log("[desktop-updates] update available; downloading.");
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[desktop-updates] already on latest desktop version.");
+  });
+
+  autoUpdater.on("update-downloaded", async () => {
+    try {
+      const result = await dialog.showMessageBox({
+        type: "info",
+        buttons: ["Restart now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "Update ready",
+        message: "A new desktop version has been downloaded.",
+        detail: "Restart FyreFlow to apply the update."
+      });
+
+      if (result.response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    } catch (error) {
+      console.warn("[desktop-updates] failed to apply downloaded update", error);
+    }
+  });
+
+  void checkForDesktopUpdates("startup");
+  desktopUpdateTimer = setInterval(() => {
+    void checkForDesktopUpdates("interval");
+  }, desktopUpdateCheckIntervalMs);
 }
 
 ipcMain.handle("window:minimize", (event) => {
@@ -198,6 +293,7 @@ ipcMain.handle("desktop:reveal-path", (event, payload) => {
 app.whenReady().then(() => {
   createMainWindow();
   setMacDockIconSafely();
+  setupDesktopAutoUpdater();
 
   app.on("activate", () => {
     setMacDockIconSafely();
@@ -210,5 +306,12 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
+  }
+});
+
+app.on("before-quit", () => {
+  if (desktopUpdateTimer) {
+    clearInterval(desktopUpdateTimer);
+    desktopUpdateTimer = null;
   }
 });

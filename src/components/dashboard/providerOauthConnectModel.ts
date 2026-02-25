@@ -3,7 +3,7 @@ import type { ProviderId } from "@/lib/types";
 
 const PROVIDER_OAUTH_LOGIN_URL: Record<ProviderId, string> = {
   openai: "https://chatgpt.com",
-  claude: "https://claude.ai/login"
+  claude: "https://claude.ai/device"
 };
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
