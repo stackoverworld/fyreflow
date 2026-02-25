@@ -1,9 +1,9 @@
 # Architecture
 
 ## Intent
-Set up fyreflow as a Bun-managed monorepo where web and API evolve through shared typed contracts, Codex can work in small bounded modules, and delivery is reproducible in local and CI runs.
+Set up FyreFlow as a Bun-managed monorepo where web and API evolve through shared typed contracts, Codex can work in small bounded modules, and delivery is reproducible in local and CI runs.
 
-- Last reviewed: 2026-02-24
+- Last reviewed: 2026-02-25
 
 ## Structural Principles
 - Use a workspace layout with apps/web, apps/api, packages/shared, and packages/config under one lockfile and root scripts.

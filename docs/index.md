@@ -2,7 +2,7 @@
 
 This folder is the source of truth for architecture and delivery guidance.
 
-- Last reviewed: 2026-02-24
+- Last reviewed: 2026-02-25
 
 ## Core Documents
 - `architecture.md`: architectural boundaries, module ownership, and dependency rules.
@@ -12,6 +12,7 @@ This folder is the source of truth for architecture and delivery guidance.
 - `skills.md`: curated skill inventory and trigger/testing lifecycle.
 - `decisions/`: ADR history for architectural tradeoffs.
 - `runbooks/local-dev.md`: local setup, run, and troubleshooting steps.
+- `runbooks/remote-engine-deploy.md`: deploy the engine on Railway or any Docker host.
 
 ## Document Inventory
 <!-- primer-ai:docs-index:start -->
@@ -23,6 +24,7 @@ This folder is the source of truth for architecture and delivery guidance.
 - `decisions/0001-initial-architecture.md`
 - `decisions/0002-runtime-kernel-and-managed-release-updates.md`
 - `runbooks/local-dev.md`
+- `runbooks/remote-engine-deploy.md`
 <!-- primer-ai:docs-index:end -->
 
 ## Maintenance Loop
@@ -31,6 +33,6 @@ This folder is the source of truth for architecture and delivery guidance.
 - Add ADR entries whenever cross-cutting architecture decisions change.
 
 ## Project Summary
-- Name: `fyreflow`
-- Description: Build agents-dashboard with an agent-optimized architecture and reproducible delivery workflow.
+- Name: `FyreFlow`
+- Description: Build FyreFlow with an agent-optimized architecture and reproducible delivery workflow.
 - Stack: React + TypeScript + Vite

@@ -1,6 +1,12 @@
-# Agents Dashboard (Local First)
+# FyreFlow
 
-A local-first dashboard panel for creating AI workflows/pipelines, configuring step-by-step agents, and running sequential multi-agent execution with provider routing.
+FyreFlow is a local-first dashboard for building AI workflows/pipelines, configuring step-by-step agents, and running sequential multi-agent execution with provider routing.
+
+You can run FyreFlow in two modes:
+- `local`: UI + engine on the same machine.
+- `remote`: UI local/desktop, engine on a remote server.
+
+Remote deployment guide: `docs/runbooks/remote-engine-deploy.md`.
 
 ## What you can do
 
@@ -115,7 +121,7 @@ bun run start:desktop
 - `UPDATER_IMAGE_REPOSITORY` (default `ghcr.io/<owner>/fyreflow-core`)
 - `UPDATER_CORS_ORIGINS` (default local web origins)
 
-## Self-host (core + one-click updater)
+## Remote engine (self-host + one-click updater)
 
 1. Copy `.env.selfhost.example` to `.env.selfhost` and fill tokens/owner/repo.
 2. Start stack:
@@ -168,6 +174,9 @@ npm run test:e2e
    - mode `remote`
    - remote API URL `https://<railway-domain>`
    - API token = your `DASHBOARD_API_TOKEN` (or a claimed pairing `deviceToken`).
+7. Monorepo note:
+   - this repo contains frontend and backend code, but Railway runs only `npm run start:api` from `Dockerfile`;
+   - Vite/web frontend dev server is not started in Railway.
 
 ## Release -> auto-update pipeline
 
@@ -176,6 +185,7 @@ npm run test:e2e
 - `ghcr.io/<owner>/fyreflow-core:1.2.3`
 - `ghcr.io/<owner>/fyreflow-core:latest` (for non-prerelease releases)
 3. Self-host updater checks GitHub release metadata and applies the new tag through `docker compose`.
+4. Railway users typically get updates via Railway deploy/redeploy from GitHub (not via in-app updater container control).
 
 ## About Optics UI library
 
@@ -253,16 +263,6 @@ For Claude, this is expected:
 - OAuth token input does not auto-fill.
 - Status should show **Connected** and **CLI ready**.
 - Pipeline runs can execute through Claude CLI auth in OAuth mode.
-
-## T13 Wave-2 Final Verification / Refactor Closeout
-
-- `bun x tsc --noEmit` — pass (exit code 0).
-- `bun x vitest run` — fail in this environment (exit code 1).
-  - Error: `bun` cannot write temp files (`AccessDenied`).
-  - Retry required in an environment with writable `TMPDIR`/temp permissions.
-- `bun x vite build` — pass (exit code 0), Vite 6.4.1.
-  - Build completes successfully; chunk-size warning is pre-existing and did not affect buildability.
-- Boundary docs update: added `docs/architecture/refactor-boundaries.md` to document current and proposed module boundaries for Wave-2.
 
 <!-- primer-ai:agent-context:start -->
 ## AI Agent Context (Managed by primer-ai)

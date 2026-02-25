@@ -95,7 +95,13 @@ function loadPipelineForRouteDebug(): PipelinePayload {
   }
 
   const value = candidate as Partial<PipelinePayload>;
-  if (typeof value.name !== "string" || !Array.isArray(value.steps) || !Array.isArray(value.links)) {
+  if (
+    typeof value.name !== "string" ||
+    !Array.isArray(value.steps) ||
+    value.steps.length === 0 ||
+    !Array.isArray(value.links) ||
+    value.links.length === 0
+  ) {
     return createFallbackPipeline();
   }
 

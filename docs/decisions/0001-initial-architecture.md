@@ -1,6 +1,6 @@
 # ADR-0001: Initial Architecture Blueprint
 
-- Last reviewed: 2026-02-20
+- Last reviewed: 2026-02-25
 
 ## Status
 Accepted
@@ -23,4 +23,4 @@ The project was initialized with `primer-ai` to provide an agent-optimized, prog
 - Repository decisions become explicit and reviewable.
 
 ## Notes
-Initial project intent: Build agents-dashboard with an agent-optimized architecture and reproducible delivery workflow.
+Initial project intent: Build FyreFlow with an agent-optimized architecture and reproducible delivery workflow.
