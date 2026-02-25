@@ -1,0 +1,49 @@
+services:
+  core:
+    image: ${FYREFLOW_CORE_IMAGE_REPOSITORY:?missing_FYREFLOW_CORE_IMAGE_REPOSITORY}:${FYREFLOW_VERSION:?missing_FYREFLOW_VERSION}
+    container_name: fyreflow-core
+    restart: unless-stopped
+    env_file:
+      - .env.selfhost
+    environment:
+      PORT: 8787
+      FYREFLOW_BUILD_VERSION: ${FYREFLOW_VERSION:?missing_FYREFLOW_VERSION}
+    ports:
+      - "8787:8787"
+    volumes:
+      - fyreflow_data:/app/data
+    networks:
+      - fyreflow
+
+  updater:
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: fyreflow-updater
+    restart: unless-stopped
+    depends_on:
+      - core
+    env_file:
+      - .env.selfhost
+    environment:
+      UPDATER_PORT: 8788
+      UPDATER_COMPOSE_FILE: /workspace/docker-compose.yml
+      UPDATER_ENV_FILE: /workspace/.env.selfhost
+      UPDATER_CORE_SERVICE_NAME: core
+      UPDATER_CORE_HEALTH_URL: http://core:8787/api/health
+    ports:
+      - "8788:8788"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/workspace
+      - fyreflow_data:/app/data
+    networks:
+      - fyreflow
+
+networks:
+  fyreflow:
+    name: fyreflow-network
+
+volumes:
+  fyreflow_data:
+    name: fyreflow-data

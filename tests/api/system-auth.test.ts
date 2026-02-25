@@ -45,8 +45,42 @@ function sanitizeDashboardState(state: DashboardState): DashboardState {
 }
 
 describe("System and Auth Routes", () => {
+  it("returns health payload with realtime capabilities when provided", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+    try {
+      registerSystemRoutes(app as never, {
+        getState: () => store.getState(),
+        sanitizeDashboardState,
+        getVersion: () => "1.2.3",
+        getRealtimeStatus: () => ({
+          enabled: true,
+          path: "/api/ws"
+        })
+      });
+
+      const healthHandler = route("GET", "/api/health");
+      const response = await invokeRoute(healthHandler, {
+        path: "/api/health",
+        method: "GET"
+      });
+      const payload = response.body as { ok: boolean; version?: string; realtime?: { enabled: boolean; path: string } };
+      expect(response.statusCode).toBe(200);
+      expect(payload.ok).toBe(true);
+      expect(payload.version).toBe("1.2.3");
+      expect(payload.realtime).toEqual({
+        enabled: true,
+        path: "/api/ws"
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("keeps /api/health public and protects private API endpoints with token auth", async () => {
-    const middleware = createApiAuthMiddleware("super-secret-token");
+    const middleware = createApiAuthMiddleware("super-secret-token", {
+      isAdditionalTokenValid: (token) => token === "device-token"
+    });
 
     const healthResponse = createMockResponse();
     let healthNextCalled = false;
@@ -62,6 +96,21 @@ describe("System and Auth Routes", () => {
       }
     );
     expect(healthNextCalled).toBe(true);
+
+    const pairingResponse = createMockResponse();
+    let pairingNextCalled = false;
+    middleware(
+      {
+        path: "/api/pairing/sessions",
+        method: "POST",
+        headers: {}
+      } as never,
+      pairingResponse as never,
+      () => {
+        pairingNextCalled = true;
+      }
+    );
+    expect(pairingNextCalled).toBe(true);
 
     const unauthorizedResponse = createMockResponse();
     let unauthorizedNextCalled = false;
@@ -113,6 +162,23 @@ describe("System and Auth Routes", () => {
       }
     );
     expect(headerNextCalled).toBe(true);
+
+    const pairingDeviceTokenResponse = createMockResponse();
+    let pairingDeviceTokenNextCalled = false;
+    middleware(
+      {
+        path: "/api/state",
+        method: "GET",
+        headers: {
+          "x-api-token": "device-token"
+        }
+      } as never,
+      pairingDeviceTokenResponse as never,
+      () => {
+        pairingDeviceTokenNextCalled = true;
+      }
+    );
+    expect(pairingDeviceTokenNextCalled).toBe(true);
 
     const rawQueryResponse = createMockResponse();
     let rawQueryNextCalled = false;

@@ -61,8 +61,13 @@ export function createCorsMiddleware(config: CorsConfig) {
   });
 }
 
-export function createApiAuthMiddleware(apiAuthToken: string) {
+export interface ApiAuthMiddlewareOptions {
+  isAdditionalTokenValid?: (token: string) => boolean;
+}
+
+export function createApiAuthMiddleware(apiAuthToken: string, options: ApiAuthMiddlewareOptions = {}) {
   const trimmedToken = apiAuthToken.trim();
+  const publicPaths = new Set(["/api/health"]);
 
   return (request: Request, response: Response, next: NextFunction) => {
     if (!request.path.startsWith("/api/")) {
@@ -70,7 +75,7 @@ export function createApiAuthMiddleware(apiAuthToken: string) {
       return;
     }
 
-    if (request.method === "OPTIONS" || request.path === "/api/health") {
+    if (request.method === "OPTIONS" || publicPaths.has(request.path) || request.path.startsWith("/api/pairing/")) {
       next();
       return;
     }
@@ -97,7 +102,13 @@ export function createApiAuthMiddleware(apiAuthToken: string) {
         : "";
     const candidate = bearerToken || headerToken || queryToken;
 
-    if (candidate.length === 0 || !constantTimeEquals(candidate, trimmedToken)) {
+    const isStaticTokenValid = candidate.length > 0 && constantTimeEquals(candidate, trimmedToken);
+    const isAdditionalTokenValid =
+      candidate.length > 0 &&
+      typeof options.isAdditionalTokenValid === "function" &&
+      options.isAdditionalTokenValid(candidate);
+
+    if (!isStaticTokenValid && !isAdditionalTokenValid) {
       response.status(401).json({ error: "Unauthorized" });
       return;
     }

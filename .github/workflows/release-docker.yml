@@ -1,0 +1,55 @@
+name: Release Docker Images
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-core-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push core image
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          OWNER_LOWER=$(echo "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER_LOWER}/fyreflow-core"
+          TAG=$(echo "$RELEASE_TAG" | sed 's#^v##')
+
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg FYREFLOW_BUILD_VERSION="$TAG" \
+              -f Dockerfile \
+              -t "$IMAGE:$TAG" \
+              --push \
+              .
+          else
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg FYREFLOW_BUILD_VERSION="$TAG" \
+              -f Dockerfile \
+              -t "$IMAGE:$TAG" \
+              -t "$IMAGE:latest" \
+              --push \
+              .
+          fi

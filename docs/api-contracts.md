@@ -8,7 +8,7 @@
 - Version externally consumed contracts.
 
 ## Initial Contract Surface
-- GET /api/health -> { status: "ok", version: string }
+- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string } }
 - GET /api/agents -> { items: AgentSummary[], nextCursor?: string }
 - POST /api/agents (CreateAgentInput) -> Agent
 - GET /api/agents/:agentId -> Agent
@@ -16,7 +16,22 @@
 - POST /api/runs (CreateRunInput) -> Run
 - GET /api/runs/:runId -> Run
 - GET /api/runs/:runId/events -> Server-Sent Events stream of RunEvent
+- GET /api/ws (WebSocket upgrade) -> realtime run/log stream protocol
 - Shared exports: AgentSchema, RunSchema, ApiErrorSchema, and createApiClient(baseUrl)
+
+## Update Service Contract (2026-02-24)
+- Dedicated updater service runs separately from core runtime (default port `8788`).
+- `GET /api/updates/status` -> `{ status }` with:
+- `channel`, `currentTag`, optional `currentVersion`,
+- optional `latestTag`/`latestPublishedAt`,
+- `updateAvailable`, `rollbackAvailable`, `busy`,
+- optional `lastCheckedAt`, `lastAppliedAt`, `lastError`.
+- `POST /api/updates/check` -> refresh latest release from GitHub and return `{ status }`.
+- `POST /api/updates/apply` with optional `{ version }` -> update core to latest/explicit tag and return `{ status }`.
+- `POST /api/updates/rollback` -> rollback to previously applied tag and return `{ status }`.
+- Updater auth:
+- all `/api/updates/*` routes require `UPDATER_AUTH_TOKEN` via `Authorization: Bearer` or `x-api-token` header.
+- `GET /health` on updater remains unauthenticated for liveness checks.
 
 ## File Manager Scope API (2026-02-23)
 - `GET /api/files` lists files inside a storage scope owned by the selected pipeline.
@@ -63,6 +78,41 @@
 - `error`: `{ runId, message, at }`
 - `cursor` is additive/backward-compatible; omitted cursor defaults to `0`.
 - Clients can reconnect using the last processed `logIndex + 1` as cursor.
+
+## WebSocket Realtime Contract (2026-02-24)
+- `GET /api/ws` upgrades to WebSocket (`FYREFLOW_WS_PATH` can override path).
+- `GET /api/health` may include `realtime: { enabled: boolean, path: string }` capability metadata for clients.
+- Auth matches API token policy:
+- if `DASHBOARD_API_TOKEN` is set, client must provide either:
+- `Authorization: Bearer`, `x-api-token`, or `api_token` query parameter with the static API token, or
+- a claimed pairing `deviceToken` in `Authorization` / `x-api-token`.
+- Client messages:
+- `ping`
+- `subscribe_run`: `{ type: "subscribe_run", runId: string, cursor?: number }`
+- `unsubscribe_run`: `{ type: "unsubscribe_run", runId: string }`
+- Server messages:
+- `hello`: session bootstrap metadata.
+- `subscribed` / `unsubscribed`
+- `run_log`: incremental log messages.
+- `run_status`: status transitions.
+- `run_not_found`, `heartbeat`, `pong`, `error`
+- SSE `/api/runs/:runId/events` remains supported for backward compatibility during client migration.
+
+## Pairing Contract (2026-02-24)
+- `POST /api/pairing/sessions` creates a short-lived pairing session for desktop/web linking.
+- Request body (optional): `{ clientName?: string, platform?: string, ttlSeconds?: number }`.
+- Response: `{ session: { id, code, status, clientName, platform, label, createdAt, updatedAt, expiresAt, realtimePath } }`.
+- `GET /api/pairing/sessions/:sessionId` returns current session status.
+- `POST /api/pairing/sessions/:sessionId/approve` approves session with request `{ code, label? }`.
+- `POST /api/pairing/sessions/:sessionId/claim` claims approved session with request `{ code }` and returns `{ session, deviceToken }`.
+- `POST /api/pairing/sessions/:sessionId/cancel` cancels pending/approved sessions.
+- Pairing sessions status lifecycle: `pending -> approved -> claimed` and terminal states `cancelled` / `expired`.
+- Pairing endpoints are intentionally public (`/api/pairing/*`) so first-time clients can bootstrap before API token exchange.
+- After successful claim, returned `deviceToken` is accepted as an API/WS auth credential for protected routes.
+- Claimed pairing sessions and device tokens are persisted in backend state (`data/pairing-state.json`) and remain valid after server restarts.
+- Realtime pairing updates over WebSocket:
+- Client messages: `subscribe_pairing` (`{ type: "subscribe_pairing", sessionId: string }`), `unsubscribe_pairing`.
+- Server messages: `pairing_subscribed`, `pairing_status`, `pairing_not_found`, `pairing_unsubscribed`.
 
 ## Error Model
 - Provide stable machine-readable error codes.

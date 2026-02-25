@@ -91,11 +91,46 @@ bun run build
 bun run start:desktop
 ```
 
-## Environment variables (optional)
+## Environment variables
 
 - `PORT` (default `8787`)
-- `VITE_API_BASE_URL` (default `http://localhost:8787`)
+- `FYREFLOW_RUNTIME_MODE` (`local` or `remote`, default `local`)
+- `DASHBOARD_API_TOKEN` (recommended for remote deployment)
+- `DASHBOARD_SECRETS_KEY` (recommended for remote deployment; keeps encrypted secrets stable across restarts)
 - `CORS_ORIGINS` (comma-separated; default `http://localhost:5173,http://127.0.0.1:5173,null`)
+- `FYREFLOW_ENABLE_SCHEDULER` (`true`/`false`, default `true`)
+- `FYREFLOW_ENABLE_RECOVERY` (`true`/`false`, default `true`)
+- `FYREFLOW_ENABLE_REALTIME_WS` (`true`/`false`, default `true`)
+- `FYREFLOW_WS_PATH` (default `/api/ws`)
+- `FYREFLOW_WS_RUN_POLL_INTERVAL_MS` (default `400`)
+- `FYREFLOW_WS_HEARTBEAT_INTERVAL_MS` (default `15000`)
+- `VITE_API_BASE_URL` (default `http://localhost:8787`)
+- `VITE_DASHBOARD_API_TOKEN` (optional web default token)
+- `VITE_REALTIME_WS_PATH` (default `/api/ws`)
+- `UPDATER_PORT` (default `8788`)
+- `UPDATER_AUTH_TOKEN` (required for `/api/updates/*`)
+- `UPDATER_GITHUB_OWNER` / `UPDATER_GITHUB_REPO` (release source)
+- `UPDATER_GITHUB_TOKEN` (optional, recommended for private repos/rate limits)
+- `UPDATER_CHANNEL` (`stable` or `prerelease`, default `stable`)
+- `UPDATER_IMAGE_REPOSITORY` (default `ghcr.io/<owner>/fyreflow-core`)
+- `UPDATER_CORS_ORIGINS` (default local web origins)
+
+## Self-host (core + one-click updater)
+
+1. Copy `.env.selfhost.example` to `.env.selfhost` and fill tokens/owner/repo.
+2. Start stack:
+
+```bash
+docker compose --env-file .env.selfhost up -d --build
+```
+
+3. Services:
+- Core API: `http://localhost:8787`
+- Updater API: `http://localhost:8788`
+4. In dashboard open **Settings -> Updates**:
+- set updater URL and updater token,
+- click **Check**,
+- click **Update** when a newer release is available.
 
 ## Build / checks
 
@@ -115,10 +150,32 @@ npm run test:e2e
 
 ## Railway deployment notes
 
-1. Set `PORT` in Railway environment.
-2. Run API + web behind Railway service (or split services).
-3. Persist `data/local-db.json` with a mounted volume if you need durable storage.
-4. For production, move secrets to server-side env vault and avoid storing raw credentials in JSON.
+1. Push this repository with `Dockerfile` and `railway.json` to GitHub.
+2. In Railway, create a new service from this repo (Dockerfile build is auto-detected).
+3. Add a volume mount to `/app/data` (required for durable state):
+   - `/app/data/local-db.json`
+   - `/app/data/pairing-state.json`
+   - `/app/data/.secrets-key` (if `DASHBOARD_SECRETS_KEY` is not set)
+4. Set Railway environment variables:
+   - `FYREFLOW_RUNTIME_MODE=remote`
+   - `DASHBOARD_API_TOKEN=<strong-random-token>`
+   - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
+   - `CORS_ORIGINS=<desktop/web origins>`
+   - optional: `FYREFLOW_WS_PATH=/api/ws`
+5. Deploy and verify:
+   - `GET https://<railway-domain>/api/health` returns `{ ok: true, realtime: { ... } }`.
+6. In desktop/web UI open **Settings -> Remote** and configure:
+   - mode `remote`
+   - remote API URL `https://<railway-domain>`
+   - API token = your `DASHBOARD_API_TOKEN` (or a claimed pairing `deviceToken`).
+
+## Release -> auto-update pipeline
+
+1. Publish `GitHub Release` (tag like `v1.2.3`).
+2. Workflow `.github/workflows/release-docker.yml` builds and pushes:
+- `ghcr.io/<owner>/fyreflow-core:1.2.3`
+- `ghcr.io/<owner>/fyreflow-core:latest` (for non-prerelease releases)
+3. Self-host updater checks GitHub release metadata and applies the new tag through `docker compose`.
 
 ## About Optics UI library
 

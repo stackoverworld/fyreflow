@@ -8,6 +8,10 @@ export interface RuntimeConfig {
   allowAnyCorsOrigin: boolean;
   enableScheduler: boolean;
   enableRecovery: boolean;
+  enableRealtimeSocket: boolean;
+  realtimeSocketPath: string;
+  realtimeRunPollIntervalMs: number;
+  realtimeHeartbeatIntervalMs: number;
 }
 
 const defaultPort = 8787;
@@ -20,6 +24,9 @@ const defaultCorsOrigins = [
 
 const truthyEnvValues = new Set(["1", "true", "yes", "on"]);
 const falsyEnvValues = new Set(["0", "false", "no", "off"]);
+const defaultRealtimeSocketPath = "/api/ws";
+const defaultRealtimeRunPollIntervalMs = 400;
+const defaultRealtimeHeartbeatIntervalMs = 15_000;
 
 export function resolveRuntimeMode(raw: string | undefined): RuntimeMode {
   if (raw?.trim().toLowerCase() === "remote") {
@@ -53,6 +60,15 @@ export function parseBooleanEnv(raw: string | undefined, fallback: boolean): boo
   return fallback;
 }
 
+export function parseIntEnv(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, parsed));
+}
+
 export function resolveCorsOrigins(raw: string | undefined): {
   allowedCorsOrigins: string[];
   allowAnyCorsOrigin: boolean;
@@ -72,6 +88,10 @@ export function resolveCorsOrigins(raw: string | undefined): {
 export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const mode = resolveRuntimeMode(env.FYREFLOW_RUNTIME_MODE);
   const { allowedCorsOrigins, allowAnyCorsOrigin } = resolveCorsOrigins(env.CORS_ORIGINS);
+  const realtimeSocketPath =
+    typeof env.FYREFLOW_WS_PATH === "string" && env.FYREFLOW_WS_PATH.trim().startsWith("/")
+      ? env.FYREFLOW_WS_PATH.trim()
+      : defaultRealtimeSocketPath;
 
   return {
     mode,
@@ -80,6 +100,20 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runt
     allowedCorsOrigins,
     allowAnyCorsOrigin,
     enableScheduler: parseBooleanEnv(env.FYREFLOW_ENABLE_SCHEDULER, true),
-    enableRecovery: parseBooleanEnv(env.FYREFLOW_ENABLE_RECOVERY, true)
+    enableRecovery: parseBooleanEnv(env.FYREFLOW_ENABLE_RECOVERY, true),
+    enableRealtimeSocket: parseBooleanEnv(env.FYREFLOW_ENABLE_REALTIME_WS, true),
+    realtimeSocketPath,
+    realtimeRunPollIntervalMs: parseIntEnv(
+      env.FYREFLOW_WS_RUN_POLL_INTERVAL_MS,
+      defaultRealtimeRunPollIntervalMs,
+      100,
+      10_000
+    ),
+    realtimeHeartbeatIntervalMs: parseIntEnv(
+      env.FYREFLOW_WS_HEARTBEAT_INTERVAL_MS,
+      defaultRealtimeHeartbeatIntervalMs,
+      1_000,
+      120_000
+    )
   };
 }

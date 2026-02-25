@@ -73,6 +73,47 @@ export interface DashboardState {
   storage: StorageConfig;
 }
 
+export type PairingSessionStatus =
+  | "pending"
+  | "approved"
+  | "claimed"
+  | "cancelled"
+  | "expired";
+
+export interface PairingSessionSummary {
+  id: string;
+  status: PairingSessionStatus;
+  clientName: string;
+  platform: string;
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  approvedAt?: string;
+  claimedAt?: string;
+}
+
+export interface PairingSessionCreated extends PairingSessionSummary {
+  code: string;
+  realtimePath: string;
+}
+
+export type UpdateChannel = "stable" | "prerelease";
+
+export interface UpdateServiceStatus {
+  channel: UpdateChannel;
+  currentTag: string;
+  currentVersion?: string;
+  latestTag?: string;
+  latestPublishedAt?: string;
+  updateAvailable: boolean;
+  rollbackAvailable: boolean;
+  busy: boolean;
+  lastCheckedAt?: string;
+  lastAppliedAt?: string;
+  lastError?: string;
+}
+
 export type FlowBuilderAction = "answer" | "update_current_flow" | "replace_flow";
 
 export interface FlowBuilderQuestionOption {

@@ -1,5 +1,6 @@
 import { useEffect, type MutableRefObject } from "react";
 import { listRuns } from "@/lib/api";
+import { CONNECTION_SETTINGS_CHANGED_EVENT } from "@/lib/connectionSettingsStorage";
 import type { DashboardState, PipelinePayload, PipelineScheduleConfig, RunStatus, SmartRunPlan } from "@/lib/types";
 import { loadRunDraft } from "@/lib/runDraftStorage";
 import { saveAppSettings, type DesktopNotificationSettings, type ThemePreference } from "@/lib/appSettingsStorage";
@@ -225,6 +226,32 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
 
     return () => {
       cancelled = true;
+    };
+  }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
+
+  useEffect(() => {
+    let disposed = false;
+    const handleConnectionSettingsChanged = () => {
+      void loadInitialState({
+        setPipelines,
+        setProviders,
+        setMcpServers,
+        setStorageConfig,
+        setRuns,
+        setSelectedPipelineId,
+        setDraftWorkflowKey,
+        resetDraftHistory,
+        setBaselineDraft,
+        setIsNewDraft,
+        setNotice,
+        isCancelled: () => disposed
+      });
+    };
+
+    window.addEventListener(CONNECTION_SETTINGS_CHANGED_EVENT, handleConnectionSettingsChanged);
+    return () => {
+      disposed = true;
+      window.removeEventListener(CONNECTION_SETTINGS_CHANGED_EVENT, handleConnectionSettingsChanged);
     };
   }, [resetDraftHistory, setBaselineDraft, setDraftWorkflowKey, setIsNewDraft, setNotice, setPipelines, setProviders, setMcpServers, setRuns, setSelectedPipelineId, setStorageConfig]);
 

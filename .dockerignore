@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+dist
+dist-server
+coverage
+playwright-report
+test-results
+tmp
+output
+data
+.DS_Store
+.env.selfhost
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

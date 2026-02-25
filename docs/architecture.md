@@ -42,6 +42,13 @@ Set up fyreflow as a Bun-managed monorepo where web and API evolve through share
 | `server/runtime/config.ts` | Parse runtime mode, CORS, auth token, and startup feature flags from env in one place. |
 | `server/runtime/bootstrap.ts` | Deterministic startup sequence for recovery/scheduler, with disposable scheduler loop. |
 | `server/runtime/kernel.ts` | Compose store, runtimes, HTTP app, and bootstrap lifecycle behind one start/stop API. |
+| `server/pairing/service.ts` | Pairing session lifecycle/state machine for remote desktop linking (create/approve/claim/cancel/expire). |
+| `server/pairing/state.ts` | Durable pairing session/token persistence (`data/pairing-state.json`) used across server restarts. |
+| `server/realtime/websocketRuntime.ts` | WebSocket upgrade/auth/runtime for realtime run updates over `/api/ws`. |
+| `server/updater/*` | Separate updater runtime for self-host one-click updates (release lookup, compose update apply/rollback, persisted updater state). |
+| `src/lib/connectionSettingsStorage.ts` | Persist local/remote connection profile and resolve active API/WS endpoint at runtime. |
+| `src/components/dashboard/UpdatesSettings.tsx` | UI surface for update checks and one-click apply/rollback against updater service. |
+| `src/lib/updateSettingsStorage.ts` | Persist updater endpoint/token settings for update operations. |
 | `docs/decisions/0002-runtime-kernel-and-managed-release-updates.md` | ADR capturing runtime profile boundaries and release-driven backend update policy. |
 
 ## Dependency Direction

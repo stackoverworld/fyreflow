@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import { generateFlowDraft } from "../flowBuilder.js";
 import { createApp } from "../http/appFactory.js";
 import { getProviderOAuthStatus, startProviderOAuthLogin, syncProviderOAuthToken } from "../oauth.js";
+import { PairingService } from "../pairing/service.js";
 import { normalizeRunInputs } from "../runInputs.js";
 import {
   deletePipelineSecureInputs,
@@ -19,6 +20,7 @@ import { createSchedulerRuntime, schedulerPollIntervalMs } from "./scheduler.js"
 import { initializeRuntimeBootstrap, type RuntimeBootstrapHandle } from "./bootstrap.js";
 import { resolveRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { sanitizeDashboardState } from "./sanitization.js";
+import { createRealtimeRuntime, type RealtimeRuntime } from "../realtime/websocketRuntime.js";
 
 export interface ServerRuntimeOptions {
   env?: NodeJS.ProcessEnv;
@@ -40,8 +42,15 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
     ...resolvedConfig,
     ...(options.config ?? {})
   };
+  const appVersion =
+    (options.env?.FYREFLOW_BUILD_VERSION ??
+      process.env.FYREFLOW_BUILD_VERSION ??
+      options.env?.npm_package_version ??
+      process.env.npm_package_version ??
+      "dev").trim() || "dev";
 
   const store = options.store ?? new LocalStore();
+  const pairingService = new PairingService();
   const activeRunControllers = options.activeRunControllers ?? new Map<string, AbortController>();
 
   const { queuePipelineRun } = createRunQueueRuntime({
@@ -70,11 +79,21 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
 
   const app = createApp({
     apiAuthToken: config.apiAuthToken,
+    isAdditionalApiTokenValid: (token) => pairingService.isDeviceTokenValid(token),
     allowedCorsOrigins: config.allowedCorsOrigins,
     allowAnyCorsOrigin: config.allowAnyCorsOrigin,
     system: {
       getState: () => store.getState(),
-      sanitizeDashboardState
+      sanitizeDashboardState,
+      getVersion: () => appVersion,
+      getRealtimeStatus: () => ({
+        enabled: config.enableRealtimeSocket,
+        path: config.realtimeSocketPath
+      })
+    },
+    pairing: {
+      pairingService,
+      realtimePath: config.realtimeSocketPath
     },
     pipelines: {
       store,
@@ -99,6 +118,18 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
     }
   });
 
+  const realtimeRuntime: RealtimeRuntime | null = config.enableRealtimeSocket
+    ? createRealtimeRuntime({
+        store,
+        pairingService,
+        apiAuthToken: config.apiAuthToken,
+        isAdditionalTokenValid: (token) => pairingService.isDeviceTokenValid(token),
+        path: config.realtimeSocketPath,
+        runPollIntervalMs: config.realtimeRunPollIntervalMs,
+        heartbeatIntervalMs: config.realtimeHeartbeatIntervalMs
+      })
+    : null;
+
   let server: Server | null = null;
   let bootstrapHandle: RuntimeBootstrapHandle | null = null;
 
@@ -112,6 +143,8 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       server.close();
       server = null;
     }
+
+    realtimeRuntime?.dispose();
   }
 
   function start(): Server {
@@ -121,6 +154,9 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
 
     server = app.listen(config.port, () => {
       console.log(`Agents dashboard API listening on http://localhost:${config.port} (mode=${config.mode})`);
+      if (realtimeRuntime) {
+        console.log(`Realtime WS enabled at ${config.realtimeSocketPath}`);
+      }
 
       void initializeRuntimeBootstrap({
         enableScheduler: config.enableScheduler,
@@ -137,6 +173,10 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
           console.error("[runtime-startup-error]", error);
         });
     });
+
+    if (realtimeRuntime) {
+      realtimeRuntime.attachServer(server);
+    }
 
     return server;
   }

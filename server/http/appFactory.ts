@@ -9,14 +9,17 @@ import {
 } from "./middleware.js";
 import type { PipelineRouteDependencies } from "./routes/pipelines.js";
 import { registerPipelineRoutes } from "./routes/pipelines.js";
+import { registerPairingRoutes, type PairingRouteDependencies } from "./routes/pairing.js";
 import { registerRunRoutes, type RunRouteDependencies } from "./routes/runs.js";
 import { registerSystemRoutes, type SystemRouteDependencies } from "./routes/system.js";
 
 export interface AppFactoryDependencies {
   apiAuthToken: string;
+  isAdditionalApiTokenValid?: (token: string) => boolean;
   allowedCorsOrigins: string[];
   allowAnyCorsOrigin: boolean;
   system: SystemRouteDependencies;
+  pairing: PairingRouteDependencies;
   pipelines: PipelineRouteDependencies;
   runs: RunRouteDependencies;
 }
@@ -33,9 +36,14 @@ export function createApp(deps: AppFactoryDependencies): express.Express {
     })
   );
   app.use(express.json({ limit: "1mb" }));
-  app.use(createApiAuthMiddleware(deps.apiAuthToken));
+  app.use(
+    createApiAuthMiddleware(deps.apiAuthToken, {
+      isAdditionalTokenValid: deps.isAdditionalApiTokenValid
+    })
+  );
 
   registerSystemRoutes(app, deps.system);
+  registerPairingRoutes(app, deps.pairing);
   registerPipelineRoutes(app, deps.pipelines);
   registerRunRoutes(app, deps.runs);
 

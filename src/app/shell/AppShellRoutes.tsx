@@ -1,6 +1,8 @@
 import { RunInputRequestModal } from "@/components/dashboard/RunInputRequestModal";
 import { RunCompletionModal } from "@/components/dashboard/RunCompletionModal";
 import { SettingsModal } from "@/components/dashboard/SettingsModal";
+import { RemotePairingSettings } from "@/components/dashboard/RemotePairingSettings";
+import { UpdatesSettings } from "@/components/dashboard/UpdatesSettings";
 import { ProviderSettings } from "@/components/dashboard/ProviderSettings";
 import { type useAppState } from "@/app/useAppState";
 import { type useNavigationState } from "@/app/useNavigationState";
@@ -127,6 +129,8 @@ export function AppShellRoutes({
             <p className="text-xs text-ink-500">Loading provider configuration...</p>
           )
         }
+        remoteSettingsSlot={<RemotePairingSettings />}
+        updatesSettingsSlot={<UpdatesSettings />}
       />
 
       <ShellNoticeBanner notice={notice} />

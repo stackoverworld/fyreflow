@@ -5,11 +5,31 @@ import type { DashboardState } from "../../types.js";
 export interface SystemRouteDependencies {
   getState: () => DashboardState;
   sanitizeDashboardState: (state: DashboardState) => DashboardState;
+  getVersion?: () => string;
+  getRealtimeStatus?: () => {
+    enabled: boolean;
+    path: string;
+  };
 }
 
 export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies): void {
   app.get("/api/health", (_request, response) => {
-    response.json({ ok: true, now: new Date().toISOString() });
+    const realtimeStatus = deps.getRealtimeStatus?.();
+    const version = deps.getVersion?.();
+    response.json({
+      ok: true,
+      now: new Date().toISOString(),
+      ...(typeof version === "string" && version.trim().length > 0
+        ? {
+            version: version.trim()
+          }
+        : {}),
+      ...(realtimeStatus
+        ? {
+            realtime: realtimeStatus
+          }
+        : {})
+    });
   });
 
   app.get("/api/state", (_request, response) => {

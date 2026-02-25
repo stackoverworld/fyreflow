@@ -1,4 +1,4 @@
-import { Bug, Monitor, Moon, Settings2, ShieldCheck, Sun, X } from "lucide-react";
+import { Bug, Download, Link2, Monitor, Moon, Settings2, ShieldCheck, Sun, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
 import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
@@ -18,15 +18,19 @@ interface SettingsModalProps {
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   providerSettingsSlot: ReactNode;
+  remoteSettingsSlot?: ReactNode;
+  updatesSettingsSlot?: ReactNode;
 }
 
-type SettingsTab = "general" | "providers";
+type SettingsTab = "general" | "providers" | "remote" | "updates";
 
-const SETTINGS_TABS = ["general", "providers"] as const;
+const SETTINGS_TABS = ["general", "providers", "remote", "updates"] as const;
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Settings2 }[] = [
   { id: "general", label: "General", icon: Bug },
-  { id: "providers", label: "Provider Auth", icon: ShieldCheck }
+  { id: "providers", label: "Provider Auth", icon: ShieldCheck },
+  { id: "remote", label: "Remote", icon: Link2 },
+  { id: "updates", label: "Updates", icon: Download }
 ];
 
 const THEME_SEGMENTS: Segment<ThemePreference>[] = [
@@ -45,7 +49,9 @@ export function SettingsModal({
   desktopNotificationsAvailable,
   themePreference,
   onThemeChange,
-  providerSettingsSlot
+  providerSettingsSlot,
+  remoteSettingsSlot,
+  updatesSettingsSlot
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = usePersistedTab<SettingsTab>("fyreflow:settings-tab", "general", SETTINGS_TABS);
   const updateDesktopNotifications = (patch: Partial<DesktopNotificationSettings>) => {
@@ -216,6 +222,10 @@ export function SettingsModal({
                   )}
 
                   {activeTab === "providers" && providerSettingsSlot}
+                  {activeTab === "remote" &&
+                    (remoteSettingsSlot ?? <p className="text-xs text-ink-500">Remote settings are not available yet.</p>)}
+                  {activeTab === "updates" &&
+                    (updatesSettingsSlot ?? <p className="text-xs text-ink-500">Update settings are not available yet.</p>)}
                 </div>
               </div>
             </div>

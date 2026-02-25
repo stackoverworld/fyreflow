@@ -16,6 +16,10 @@ describe("runtime config", () => {
     expect(config.port).toBe(8787);
     expect(config.enableScheduler).toBe(true);
     expect(config.enableRecovery).toBe(true);
+    expect(config.enableRealtimeSocket).toBe(true);
+    expect(config.realtimeSocketPath).toBe("/api/ws");
+    expect(config.realtimeRunPollIntervalMs).toBe(400);
+    expect(config.realtimeHeartbeatIntervalMs).toBe(15_000);
     expect(config.allowedCorsOrigins).toEqual([
       "http://localhost:5173",
       "http://127.0.0.1:5173",
@@ -31,7 +35,11 @@ describe("runtime config", () => {
       DASHBOARD_API_TOKEN: "token-1",
       CORS_ORIGINS: "https://app.example.com,*",
       FYREFLOW_ENABLE_SCHEDULER: "0",
-      FYREFLOW_ENABLE_RECOVERY: "false"
+      FYREFLOW_ENABLE_RECOVERY: "false",
+      FYREFLOW_ENABLE_REALTIME_WS: "no",
+      FYREFLOW_WS_PATH: "/ws/remote",
+      FYREFLOW_WS_RUN_POLL_INTERVAL_MS: "250",
+      FYREFLOW_WS_HEARTBEAT_INTERVAL_MS: "12000"
     });
 
     expect(config.mode).toBe("remote");
@@ -41,6 +49,10 @@ describe("runtime config", () => {
     expect(config.allowAnyCorsOrigin).toBe(true);
     expect(config.enableScheduler).toBe(false);
     expect(config.enableRecovery).toBe(false);
+    expect(config.enableRealtimeSocket).toBe(false);
+    expect(config.realtimeSocketPath).toBe("/ws/remote");
+    expect(config.realtimeRunPollIntervalMs).toBe(250);
+    expect(config.realtimeHeartbeatIntervalMs).toBe(12_000);
   });
 
   it("normalizes helper parsers", () => {
@@ -53,6 +65,9 @@ describe("runtime config", () => {
     expect(parseBooleanEnv("no", true)).toBe(false);
     expect(parseBooleanEnv("oops", true)).toBe(true);
     expect(parseBooleanEnv(undefined, false)).toBe(false);
+    expect(resolveRuntimeConfig({ FYREFLOW_WS_PATH: "ws-no-leading-slash" }).realtimeSocketPath).toBe("/api/ws");
+    expect(resolveRuntimeConfig({ FYREFLOW_WS_RUN_POLL_INTERVAL_MS: "20" }).realtimeRunPollIntervalMs).toBe(100);
+    expect(resolveRuntimeConfig({ FYREFLOW_WS_HEARTBEAT_INTERVAL_MS: "999999" }).realtimeHeartbeatIntervalMs).toBe(120_000);
     expect(resolveCorsOrigins("https://a.example.com, https://b.example.com").allowedCorsOrigins).toEqual([
       "https://a.example.com",
       "https://b.example.com"
