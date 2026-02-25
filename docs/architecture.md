@@ -40,6 +40,7 @@ Set up FyreFlow as a Bun-managed monorepo where web and API evolve through share
 | `scripts/verify.sh` | Deterministic local/CI gate runner in fixed order. |
 | `docs/decisions/0001-contract-first-monorepo.md` | ADR capturing boundaries, dependencies, and tradeoffs. |
 | `server/runtime/config.ts` | Parse runtime mode, CORS, auth token, and startup feature flags from env in one place. |
+| `server/runtime/desktopCompatibility.ts` | Load repo-managed desktop compatibility policy (`config/desktop-compatibility.json`) with normalized version/link values. |
 | `server/runtime/bootstrap.ts` | Deterministic startup sequence for recovery/scheduler, with disposable scheduler loop. |
 | `server/runtime/kernel.ts` | Compose store, runtimes, HTTP app, and bootstrap lifecycle behind one start/stop API. |
 | `server/pairing/service.ts` | Pairing session lifecycle/state machine for remote desktop linking (create/approve/claim/cancel/expire). |

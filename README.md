@@ -26,6 +26,37 @@ This is the simplest flow for your users.
 
 After this, backend is online and users can connect from desktop app.
 
+### Provider CLI install in Docker image (default)
+
+Remote OAuth requires provider CLIs on backend host. The root `Dockerfile` now installs both CLIs by default during image build:
+
+- Claude CLI: `@anthropic-ai/claude-code`
+- Codex CLI: `@openai/codex`
+
+You can control this with Docker build args:
+
+- `FYREFLOW_INSTALL_PROVIDER_CLIS=1` (default, installs both CLIs)
+- `FYREFLOW_INSTALL_PROVIDER_CLIS=0` (skip CLI install)
+- `FYREFLOW_CLAUDE_CLI_NPM_VERSION=<version>` (default `latest`)
+- `FYREFLOW_CODEX_CLI_NPM_VERSION=<version>` (default `latest`)
+
+Example build:
+
+```bash
+docker build \
+  --build-arg FYREFLOW_INSTALL_PROVIDER_CLIS=1 \
+  --build-arg FYREFLOW_CLAUDE_CLI_NPM_VERSION=latest \
+  --build-arg FYREFLOW_CODEX_CLI_NPM_VERSION=latest \
+  -t fyreflow-core:local .
+```
+
+After deploy, verify on backend:
+
+```bash
+which claude && claude --version
+which codex && codex --version
+```
+
 ## What you can do
 
 - Create and name pipelines/workflows
@@ -131,8 +162,9 @@ bun run start:desktop
 - `FYREFLOW_UPDATER_BASE_URL` (optional; enable backend-managed updates via updater service)
 - `FYREFLOW_UPDATER_AUTH_TOKEN` (optional; token core uses to call updater service)
 - `FYREFLOW_UPDATER_TIMEOUT_MS` (default `15000`)
-- `FYREFLOW_MIN_DESKTOP_VERSION` (optional; when set, backend reports client compatibility and can require desktop upgrade)
-- `FYREFLOW_DESKTOP_DOWNLOAD_URL` (optional; download/release URL shown to outdated desktop clients)
+- `FYREFLOW_DESKTOP_COMPATIBILITY_POLICY_PATH` (default `config/desktop-compatibility.json`)
+- `FYREFLOW_MIN_DESKTOP_VERSION` (optional emergency override; normally managed in repo policy file)
+- `FYREFLOW_DESKTOP_DOWNLOAD_URL` (optional emergency override; normally managed in repo policy file)
 - `FYREFLOW_DESKTOP_UPDATE_FEED_URL` (optional; Electron auto-update feed URL used by desktop app on startup)
 - `FYREFLOW_DESKTOP_UPDATE_CHECK_INTERVAL_MS` (default `3600000`; desktop auto-update check interval)
 - `VITE_API_BASE_URL` (default `http://localhost:8787`)
@@ -160,9 +192,12 @@ After that, app UI is local, engine runs remotely on Railway.
 
 - Desktop app now supports startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured.
 - Desktop app checks for updates at startup and then on interval (`FYREFLOW_DESKTOP_UPDATE_CHECK_INTERVAL_MS`).
-- To prevent backend/frontend drift, set `FYREFLOW_MIN_DESKTOP_VERSION` on backend:
+- Source of truth for compatibility is repo file `config/desktop-compatibility.json`:
+- `minimumDesktopVersion` controls oldest supported desktop app version.
+- `downloadUrl` is shown to users when update is required.
+- To prevent backend/frontend drift, set `minimumDesktopVersion` in repo policy file:
 - if connected desktop version is lower than required, app bootstrap is blocked and user is prompted to update.
-- set `FYREFLOW_DESKTOP_DOWNLOAD_URL` so blocked clients get a direct download link.
+- `FYREFLOW_MIN_DESKTOP_VERSION` / `FYREFLOW_DESKTOP_DOWNLOAD_URL` stay available as emergency overrides.
 
 ## Build / checks
 

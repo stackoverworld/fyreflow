@@ -11,14 +11,14 @@ import {
 describe("provider oauth connect model", () => {
   it("maps provider ids to deterministic login urls", () => {
     expect(getProviderOAuthLoginUrl("openai")).toBe("https://chatgpt.com");
-    expect(getProviderOAuthLoginUrl("claude")).toBe("https://claude.ai/device");
+    expect(getProviderOAuthLoginUrl("claude")).toBe("https://claude.ai/login");
   });
 
   it("prefers backend pairing url when oauth start returns one", () => {
     expect(resolveProviderOAuthLoginUrl("claude", "https://claude.ai/device?pairing=abc123")).toBe(
       "https://claude.ai/device?pairing=abc123"
     );
-    expect(resolveProviderOAuthLoginUrl("claude", "  ")).toBe("https://claude.ai/device");
+    expect(resolveProviderOAuthLoginUrl("claude", "  ")).toBe("https://claude.ai/login");
   });
 
   it("opens browser only when using remote connection mode", () => {
@@ -60,9 +60,23 @@ describe("provider oauth connect model", () => {
       authCode: "ABC-123-XYZ"
     });
 
-    expect(message).toContain("https://chatgpt.com");
+    expect(message).toContain("did not return an OAuth URL yet");
     expect(message).toContain("ABC-123-XYZ");
     expect(message).toContain("Run the provider CLI login command on the remote server terminal");
+  });
+
+  it("instructs manual remote CLI run when backend did not return auth url", () => {
+    const message = buildProviderOAuthStartMessage({
+      connectionMode: "remote",
+      providerId: "claude",
+      apiMessage: "Claude browser login started.",
+      command: "claude auth login",
+      authUrl: ""
+    });
+
+    expect(message).toContain("did not return an OAuth URL yet");
+    expect(message).toContain("\"claude auth login\"");
+    expect(message).not.toContain("https://claude.ai/login");
   });
 
   it("explains that remote oauth requires cli on the server when missing", () => {

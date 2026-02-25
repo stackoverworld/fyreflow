@@ -25,6 +25,7 @@ describe("runtime config", () => {
     expect(config.updaterProxyTimeoutMs).toBe(15_000);
     expect(config.minDesktopVersion).toBe("");
     expect(config.desktopDownloadUrl).toBe("");
+    expect(config.desktopCompatibilityPolicyPath.endsWith("/config/desktop-compatibility.json")).toBe(true);
     expect(config.allowedCorsOrigins).toEqual([
       "http://localhost:5173",
       "http://127.0.0.1:5173",
@@ -49,7 +50,8 @@ describe("runtime config", () => {
       FYREFLOW_UPDATER_AUTH_TOKEN: "updater-token",
       FYREFLOW_UPDATER_TIMEOUT_MS: "18000",
       FYREFLOW_MIN_DESKTOP_VERSION: "v1.4",
-      FYREFLOW_DESKTOP_DOWNLOAD_URL: "https://downloads.example.com/fyreflow/"
+      FYREFLOW_DESKTOP_DOWNLOAD_URL: "https://downloads.example.com/fyreflow/",
+      FYREFLOW_DESKTOP_COMPATIBILITY_POLICY_PATH: "./tmp/desktop-policy.json"
     });
 
     expect(config.mode).toBe("remote");
@@ -68,6 +70,7 @@ describe("runtime config", () => {
     expect(config.updaterProxyTimeoutMs).toBe(18_000);
     expect(config.minDesktopVersion).toBe("1.4.0");
     expect(config.desktopDownloadUrl).toBe("https://downloads.example.com/fyreflow");
+    expect(config.desktopCompatibilityPolicyPath.endsWith("/tmp/desktop-policy.json")).toBe(true);
   });
 
   it("normalizes helper parsers", () => {

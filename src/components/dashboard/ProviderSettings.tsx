@@ -20,7 +20,6 @@ import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
 import {
   buildProviderOAuthStartErrorMessage,
   buildProviderOAuthStartMessage,
-  resolveProviderOAuthLoginUrl,
   shouldOpenProviderOAuthBrowser
 } from "./providerOauthConnectModel";
 
@@ -206,6 +205,19 @@ export function ProviderSettings({
       const shouldOpenBrowser = shouldOpenProviderOAuthBrowser(connection.mode);
       const isElectronDesktop = window.desktop?.isElectron === true;
       let pendingWindow: Window | null = null;
+      const closePendingWindow = () => {
+        if (!pendingWindow || pendingWindow.closed) {
+          return;
+        }
+
+        try {
+          pendingWindow.close();
+        } catch {
+          // Ignore close errors from strict popup blockers.
+        } finally {
+          pendingWindow = null;
+        }
+      };
 
       const openBrowserUrl = (url: string) => {
         if (url.trim().length === 0) {
@@ -244,10 +256,12 @@ export function ProviderSettings({
 
       try {
         const response = await startProviderOAuthLogin(providerId);
-        const loginUrl = shouldOpenBrowser
-          ? resolveProviderOAuthLoginUrl(providerId, response.result.authUrl)
-          : "";
-        openBrowserUrl(loginUrl);
+        const loginUrl = (response.result.authUrl ?? "").trim();
+        if (shouldOpenBrowser && loginUrl.length > 0) {
+          openBrowserUrl(loginUrl);
+        } else if (shouldOpenBrowser) {
+          closePendingWindow();
+        }
 
         onOAuthMessageChange(
           providerId,
@@ -271,10 +285,7 @@ export function ProviderSettings({
             errorMessage: error instanceof Error ? error.message : "Failed to start OAuth login."
           })
         );
-
-        if (shouldOpenBrowser) {
-          openBrowserUrl(resolveProviderOAuthLoginUrl(providerId));
-        }
+        closePendingWindow();
         await loadOAuthStatus(providerId);
       } finally {
         setOauthBusyId(null);

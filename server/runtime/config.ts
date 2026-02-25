@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { normalizeSemverLikeVersion } from "./versioning.js";
 
 export type RuntimeMode = "local" | "remote";
@@ -19,6 +21,7 @@ export interface RuntimeConfig {
   updaterProxyTimeoutMs: number;
   minDesktopVersion: string;
   desktopDownloadUrl: string;
+  desktopCompatibilityPolicyPath: string;
 }
 
 const defaultPort = 8787;
@@ -149,7 +152,11 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runt
       120_000
     ),
     minDesktopVersion: normalizeSemverLikeVersion(env.FYREFLOW_MIN_DESKTOP_VERSION),
-    desktopDownloadUrl: normalizeOptionalUrl(env.FYREFLOW_DESKTOP_DOWNLOAD_URL)
+    desktopDownloadUrl: normalizeOptionalUrl(env.FYREFLOW_DESKTOP_DOWNLOAD_URL),
+    desktopCompatibilityPolicyPath: path.resolve(
+      process.cwd(),
+      (env.FYREFLOW_DESKTOP_COMPATIBILITY_POLICY_PATH ?? "config/desktop-compatibility.json").trim()
+    )
   };
 
   if (config.mode === "remote" && config.apiAuthToken.length === 0) {

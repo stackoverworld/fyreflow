@@ -3,7 +3,7 @@ import type { ProviderId } from "@/lib/types";
 
 const PROVIDER_OAUTH_LOGIN_URL: Record<ProviderId, string> = {
   openai: "https://chatgpt.com",
-  claude: "https://claude.ai/device"
+  claude: "https://claude.ai/login"
 };
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
@@ -53,19 +53,25 @@ export function buildProviderOAuthStartMessage(args: BuildProviderOAuthStartMess
     return apiMessage.length > 0 ? apiMessage : "OAuth login started.";
   }
 
-  const loginUrl = resolveProviderOAuthLoginUrl(args.providerId, args.authUrl);
+  const loginUrl = normalizeWhitespace(args.authUrl ?? "");
   const authCode = normalizeWhitespace(args.authCode ?? "");
   const command = normalizeWhitespace(args.command);
   const remoteCommandHint =
     command.length > 0
       ? `Run "${command}" on the remote server terminal if login is still pending.`
       : "Run the provider CLI login command on the remote server terminal if login is still pending.";
+  const remoteLoginHint =
+    loginUrl.length > 0
+      ? `Open ${PROVIDER_LABEL[args.providerId]} login in this browser: ${loginUrl}.`
+      : command.length > 0
+        ? `Remote server did not return an OAuth URL yet. Run "${command}" on the remote server terminal and open the URL it prints.`
+        : "Remote server did not return an OAuth URL yet. Run the provider CLI login command on the remote server terminal and open the URL it prints.";
   const codeHint = authCode.length > 0 ? `Use one-time code ${authCode} if prompted.` : "";
   const prefix = apiMessage.length > 0 ? `${apiMessage} ` : "";
 
   const remoteParts = [
     `${prefix}Remote mode is active, so the server cannot open a browser tab on this device.`,
-    `Open ${PROVIDER_LABEL[args.providerId]} login in this browser: ${loginUrl}.`,
+    remoteLoginHint,
     codeHint,
     remoteCommandHint
   ].filter((value) => value.length > 0);

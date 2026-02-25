@@ -15,13 +15,16 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - `DASHBOARD_API_TOKEN=<strong-random-token>`
    - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
    - `CORS_ORIGINS=<allowed desktop/web origins>`
-   - optional compatibility gate:
+   - optional compatibility gate overrides:
    - `FYREFLOW_MIN_DESKTOP_VERSION=<min-supported-desktop-version>`
    - `FYREFLOW_DESKTOP_DOWNLOAD_URL=<desktop-release-download-url>`
-6. Deploy and verify:
+6. Manage compatibility policy in repo file `config/desktop-compatibility.json`:
+   - set `minimumDesktopVersion` / `downloadUrl`
+   - push to GitHub so Railway deploy picks it up
+7. Deploy and verify:
    - `GET https://<railway-domain>/api/health`
    - `GET https://<railway-domain>/api/health` should include realtime metadata when WS is enabled.
-7. In desktop/web app -> `Settings -> Remote`:
+8. In desktop/web app -> `Settings -> Remote`:
    - mode: `remote`
    - API URL: `https://<railway-domain>`
    - API token: value from `DASHBOARD_API_TOKEN` (or pairing `deviceToken`)
@@ -63,5 +66,9 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 - Frontend source files inside repo do not start a separate frontend service on Railway.
 - Desktop app can run startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured in desktop runtime environment.
 - For production, use strong random tokens and restricted `CORS_ORIGINS`.
-- Provider OAuth in `remote` mode opens the pairing/authorization URL returned by backend OAuth start (fallbacks to provider default auth page, for Claude this is `https://claude.ai/device`), but CLI auth still runs on the remote host. If login stays pending, run the UI-shown CLI command on the server terminal.
-- If provider status shows `CLI unavailable`, install provider CLI on the backend host and set `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` env vars when binaries are outside `PATH`.
+- Provider OAuth in `remote` mode opens only the pairing/authorization URL returned by backend OAuth start; if backend cannot provide a URL, the UI keeps browser closed and prompts you to run the shown CLI command on the remote host terminal to copy/open the printed URL manually.
+- Root `Dockerfile` installs provider CLIs by default during image build (`@anthropic-ai/claude-code`, `@openai/codex`). To disable/pin versions, use build args:
+  - `FYREFLOW_INSTALL_PROVIDER_CLIS=0|1`
+  - `FYREFLOW_CLAUDE_CLI_NPM_VERSION=<version>`
+  - `FYREFLOW_CODEX_CLI_NPM_VERSION=<version>`
+- If provider status still shows `CLI unavailable`, verify binaries on backend (`which claude`, `which codex`) and set `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` when binaries are outside `PATH`.

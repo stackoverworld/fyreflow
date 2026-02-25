@@ -19,6 +19,7 @@ import { createRunQueueRuntime, isRunPreflightError } from "./runQueue.js";
 import { createSchedulerRuntime, schedulerPollIntervalMs } from "./scheduler.js";
 import { initializeRuntimeBootstrap, type RuntimeBootstrapHandle } from "./bootstrap.js";
 import { resolveRuntimeConfig, type RuntimeConfig } from "./config.js";
+import { loadDesktopCompatibilityPolicy } from "./desktopCompatibility.js";
 import { compareSemverLikeVersions, normalizeSemverLikeVersion } from "./versioning.js";
 import { sanitizeDashboardState } from "./sanitization.js";
 import { createRealtimeRuntime, type RealtimeRuntime } from "../realtime/websocketRuntime.js";
@@ -83,6 +84,9 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
     authToken: config.updaterAuthToken,
     timeoutMs: config.updaterProxyTimeoutMs
   });
+  const desktopCompatibilityPolicy = loadDesktopCompatibilityPolicy(config.desktopCompatibilityPolicyPath);
+  const minimumDesktopVersion = config.minDesktopVersion || desktopCompatibilityPolicy.minimumDesktopVersion;
+  const desktopDownloadUrl = config.desktopDownloadUrl || desktopCompatibilityPolicy.downloadUrl;
 
   const app = createApp({
     apiAuthToken: config.apiAuthToken,
@@ -101,22 +105,22 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
         configured: updaterProxy.isConfigured()
       }),
       getClientCompatibility: (clientVersion) => {
-        if (config.minDesktopVersion.length === 0) {
+        if (minimumDesktopVersion.length === 0) {
           return null;
         }
 
         const normalizedClientVersion = normalizeSemverLikeVersion(clientVersion);
-        const compareResult = compareSemverLikeVersions(normalizedClientVersion, config.minDesktopVersion);
+        const compareResult = compareSemverLikeVersions(normalizedClientVersion, minimumDesktopVersion);
         const updateRequired = normalizedClientVersion.length === 0 || compareResult === null || compareResult < 0;
         const message =
           normalizedClientVersion.length === 0
-            ? `Backend requires desktop version ${config.minDesktopVersion} or newer. Current desktop version is unavailable.`
+            ? `Backend requires desktop version ${minimumDesktopVersion} or newer. Current desktop version is unavailable.`
             : updateRequired
-              ? `Backend requires desktop version ${config.minDesktopVersion} or newer. Current desktop version: ${normalizedClientVersion}.`
-              : `Desktop version ${normalizedClientVersion} is compatible with backend minimum ${config.minDesktopVersion}.`;
+              ? `Backend requires desktop version ${minimumDesktopVersion} or newer. Current desktop version: ${normalizedClientVersion}.`
+              : `Desktop version ${normalizedClientVersion} is compatible with backend minimum ${minimumDesktopVersion}.`;
 
         return {
-          minimumDesktopVersion: config.minDesktopVersion,
+          minimumDesktopVersion,
           ...(normalizedClientVersion.length > 0
             ? {
                 clientVersion: normalizedClientVersion
@@ -124,9 +128,9 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
             : {}),
           updateRequired,
           message,
-          ...(config.desktopDownloadUrl.length > 0
+          ...(desktopDownloadUrl.length > 0
             ? {
-                downloadUrl: config.desktopDownloadUrl
+                downloadUrl: desktopDownloadUrl
               }
             : {})
         };

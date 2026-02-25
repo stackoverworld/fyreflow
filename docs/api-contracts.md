@@ -39,7 +39,9 @@
 
 ## Desktop Compatibility Contract (2026-02-26)
 - Client includes desktop/web app version in `x-fyreflow-client-version` header for core API requests.
-- `/api/health` may include `client` compatibility metadata when backend sets `FYREFLOW_MIN_DESKTOP_VERSION`:
+- Compatibility policy source defaults to repository file `config/desktop-compatibility.json` (backend image content).
+- `FYREFLOW_MIN_DESKTOP_VERSION` / `FYREFLOW_DESKTOP_DOWNLOAD_URL` are optional operator overrides.
+- `/api/health` may include `client` compatibility metadata when effective minimum desktop version is configured:
 - `minimumDesktopVersion`: minimum supported desktop version on this backend.
 - `clientVersion`: normalized version received from request header (if present/valid).
 - `updateRequired`: `true` when client version is below required minimum or unavailable.
