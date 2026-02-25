@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Link2, Loader2, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, KeyRound, Link2, Loader2, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/optics/badge";
@@ -23,6 +23,11 @@ import {
   type RuntimeConnectionMode
 } from "@/lib/connectionSettingsStorage";
 import type { PairingSessionCreated, PairingSessionStatus, PairingSessionSummary } from "@/lib/types";
+import {
+  getActiveApiBaseUrlField,
+  getApiTokenSourceHint,
+  getPairingRealtimeErrorMessage
+} from "@/components/dashboard/remotePairingSettingsModel";
 
 interface PairingSessionState extends PairingSessionCreated {
   deviceToken?: string;
@@ -108,6 +113,8 @@ export function RemotePairingSettings() {
     () => !sameConnectionSettings(savedConnection, connectionDraft),
     [connectionDraft, savedConnection]
   );
+  const activeApiBaseUrlField = useMemo(() => getActiveApiBaseUrlField(connectionDraft), [connectionDraft]);
+  const apiTokenSourceHint = useMemo(() => getApiTokenSourceHint(connectionDraft.mode), [connectionDraft.mode]);
 
   useEffect(() => {
     if (!session?.id) {
@@ -130,7 +137,7 @@ export function RemotePairingSettings() {
       onError: (nextError) => {
         setPairingFeedback({
           tone: "error",
-          message: nextError.message
+          message: getPairingRealtimeErrorMessage(nextError.message)
         });
       }
     });
@@ -143,9 +150,15 @@ export function RemotePairingSettings() {
     return getPairingStatusBadge(session.status);
   }, [session]);
 
-  const canApprove = session?.status === "pending" || session?.status === "approved";
+  const requiresPairingAdminToken = activeConnection.mode === "remote";
+  const hasActiveApiToken = activeConnection.apiToken.trim().length > 0;
+  const canApprove =
+    (session?.status === "pending" || session?.status === "approved") &&
+    (!requiresPairingAdminToken || hasActiveApiToken);
   const canClaim = session?.status === "approved";
-  const canCancel = session?.status === "pending" || session?.status === "approved";
+  const canCancel =
+    (session?.status === "pending" || session?.status === "approved") &&
+    (!requiresPairingAdminToken || hasActiveApiToken);
 
   const runConnectionAction = async (action: BusyAction, callback: () => Promise<void>) => {
     setBusyAction(action);
@@ -238,7 +251,7 @@ export function RemotePairingSettings() {
       setDeviceLabel("");
       setPairingFeedback({
         tone: "success",
-        message: "Pairing session started. Use the code to approve this device."
+        message: "Pairing session started. Next: 1) Approve Device, 2) Claim Token. No extra link required."
       });
     });
   };
@@ -399,31 +412,27 @@ export function RemotePairingSettings() {
         </label>
 
         <label className="block space-y-1.5">
-          <span className="text-xs text-ink-400">Local API base URL</span>
+          <span className="text-xs text-ink-400">{activeApiBaseUrlField.label}</span>
           <Input
-            value={connectionDraft.localApiBaseUrl}
+            value={activeApiBaseUrlField.value}
             onChange={(event) =>
-              setConnectionDraft((current) => ({
-                ...current,
-                localApiBaseUrl: event.target.value
-              }))
+              setConnectionDraft((current) =>
+                current.mode === "remote"
+                  ? {
+                      ...current,
+                      remoteApiBaseUrl: event.target.value
+                    }
+                  : {
+                      ...current,
+                      localApiBaseUrl: event.target.value
+                    }
+              )
             }
-            placeholder="http://localhost:8787"
+            placeholder={activeApiBaseUrlField.placeholder}
           />
-        </label>
-
-        <label className="block space-y-1.5">
-          <span className="text-xs text-ink-400">Remote API base URL</span>
-          <Input
-            value={connectionDraft.remoteApiBaseUrl}
-            onChange={(event) =>
-              setConnectionDraft((current) => ({
-                ...current,
-                remoteApiBaseUrl: event.target.value
-              }))
-            }
-            placeholder="https://your-app.up.railway.app"
-          />
+          <p className="text-[11px] text-ink-600">
+            Only the active mode URL is shown. Switch mode if you need to edit the other endpoint.
+          </p>
         </label>
 
         <label className="block space-y-1.5">
@@ -437,9 +446,31 @@ export function RemotePairingSettings() {
                 apiToken: event.target.value
               }))
             }
-            placeholder="Bearer token used for REST and WS auth"
+            placeholder="Optional if backend auth is disabled"
           />
         </label>
+
+        <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
+          <div className="flex items-start gap-2">
+            <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-400" />
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">Token Help</p>
+              <p className="text-[11px] text-ink-500">
+                Needed only when backend auth is enabled. The token is used for REST and realtime WS requests.
+              </p>
+              <p className="text-[11px] text-ink-500">
+                Source:{" "}
+                <span className="rounded bg-ink-950 px-1 py-0.5 font-mono text-[10px] text-ink-300">
+                  DASHBOARD_API_TOKEN
+                </span>{" "}
+                ({apiTokenSourceHint})
+              </p>
+              <p className="text-[11px] text-ink-500">
+                No token yet? Use Remote Pairing below and click <span className="font-medium text-ink-300">Claim Token</span>.
+              </p>
+            </div>
+          </div>
+        </div>
 
         <label className="block space-y-1.5">
           <span className="text-xs text-ink-400">Realtime WS path</span>
@@ -509,10 +540,23 @@ export function RemotePairingSettings() {
           Create a session on the active backend, approve via one-time code, then claim a device token.
         </p>
 
+        <div className="rounded-lg border border-ink-800/50 bg-ink-900/35 px-3 py-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">How To Pair</p>
+          <p className="mt-1 text-[11px] text-ink-500">1. Click Start Pairing.</p>
+          <p className="text-[11px] text-ink-500">2. Click 1. Approve Device.</p>
+          <p className="text-[11px] text-ink-500">3. Click 2. Claim Token.</p>
+          <p className="text-[11px] text-ink-500">No external page or link is required.</p>
+          {requiresPairingAdminToken ? (
+            <p className="mt-1 text-[11px] text-amber-400">
+              Remote mode: Approve/Cancel require admin API token (`DASHBOARD_API_TOKEN`).
+            </p>
+          ) : null}
+        </div>
+
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" disabled={busyAction !== null} onClick={handleCreate}>
             {busyAction === "create_pairing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-            {session ? "Start New Session" : "Start Session"}
+            {session ? "Start New Pairing" : "Start Pairing"}
           </Button>
           {session ? (
             <Button size="sm" variant="ghost" disabled={busyAction !== null} onClick={handleRefresh}>
@@ -582,12 +626,12 @@ export function RemotePairingSettings() {
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" disabled={busyAction !== null || !canApprove} onClick={handleApprove}>
                 {busyAction === "approve_pairing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Approve
+                1. Approve Device
               </Button>
 
               <Button size="sm" variant="secondary" disabled={busyAction !== null || !canClaim} onClick={handleClaim}>
                 {busyAction === "claim_pairing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Claim Token
+                2. Claim Token
               </Button>
 
               <Button size="sm" variant="ghost" disabled={busyAction !== null || !canCancel} onClick={handleCancel}>

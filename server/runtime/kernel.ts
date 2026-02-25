@@ -105,7 +105,9 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
     },
     pairing: {
       pairingService,
-      realtimePath: config.realtimeSocketPath
+      realtimePath: config.realtimeSocketPath,
+      apiAuthToken: config.apiAuthToken,
+      runtimeMode: config.mode
     },
     pipelines: {
       store,

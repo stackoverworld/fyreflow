@@ -11,7 +11,9 @@ describe("Pairing Routes", () => {
 
     registerPairingRoutes(app as never, {
       pairingService,
-      realtimePath: "/api/ws"
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
     });
 
     const createHandler = route("POST", "/api/pairing/sessions");
@@ -57,6 +59,9 @@ describe("Pairing Routes", () => {
       method: "POST",
       path: `/api/pairing/sessions/${createdPayload.session.id}/approve`,
       params: { sessionId: createdPayload.session.id },
+      headers: {
+        authorization: "Bearer admin-token"
+      },
       body: {
         code: createdPayload.session.code,
         label: "Work Mac"
@@ -90,7 +95,9 @@ describe("Pairing Routes", () => {
 
     registerPairingRoutes(app as never, {
       pairingService,
-      realtimePath: "/api/ws"
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
     });
 
     const created = pairingService.createSession();
@@ -116,7 +123,9 @@ describe("Pairing Routes", () => {
 
     registerPairingRoutes(app as never, {
       pairingService,
-      realtimePath: "/api/ws"
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
     });
 
     const getHandler = route("GET", "/api/pairing/sessions/:sessionId");
@@ -138,7 +147,9 @@ describe("Pairing Routes", () => {
     const pairingService = new PairingService();
     registerPairingRoutes(app as never, {
       pairingService,
-      realtimePath: "/api/ws"
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
     });
 
     const createHandler = route("POST", "/api/pairing/sessions");
@@ -160,11 +171,70 @@ describe("Pairing Routes", () => {
       method: "POST",
       path: `/api/pairing/sessions/${created.id}/approve`,
       params: { sessionId: created.id },
+      headers: {
+        authorization: "Bearer admin-token"
+      },
       body: {}
     });
     expect(approveResponse.statusCode).toBe(400);
     expect(approveResponse.body).toMatchObject({
       error: "Validation failed"
+    });
+  });
+
+  it("requires admin token for approve in remote mode", async () => {
+    const { app, route } = createRouteHarness();
+    const pairingService = new PairingService();
+    registerPairingRoutes(app as never, {
+      pairingService,
+      realtimePath: "/api/ws",
+      apiAuthToken: "admin-token",
+      runtimeMode: "remote"
+    });
+
+    const created = pairingService.createSession();
+    const approveHandler = route("POST", "/api/pairing/sessions/:sessionId/approve");
+    const approveResponse = await invokeRoute(approveHandler, {
+      method: "POST",
+      path: `/api/pairing/sessions/${created.id}/approve`,
+      params: { sessionId: created.id },
+      body: {
+        code: created.code
+      }
+    });
+
+    expect(approveResponse.statusCode).toBe(401);
+    expect(approveResponse.body).toEqual({
+      error: "Unauthorized",
+      code: "pairing_admin_unauthorized"
+    });
+  });
+
+  it("blocks remote approve when admin token is not configured", async () => {
+    const { app, route } = createRouteHarness();
+    const pairingService = new PairingService();
+    registerPairingRoutes(app as never, {
+      pairingService,
+      realtimePath: "/api/ws",
+      apiAuthToken: "",
+      runtimeMode: "remote"
+    });
+
+    const created = pairingService.createSession();
+    const approveHandler = route("POST", "/api/pairing/sessions/:sessionId/approve");
+    const approveResponse = await invokeRoute(approveHandler, {
+      method: "POST",
+      path: `/api/pairing/sessions/${created.id}/approve`,
+      params: { sessionId: created.id },
+      body: {
+        code: created.code
+      }
+    });
+
+    expect(approveResponse.statusCode).toBe(503);
+    expect(approveResponse.body).toEqual({
+      error: "Pairing admin actions require DASHBOARD_API_TOKEN in remote mode.",
+      code: "pairing_admin_token_missing"
     });
   });
 });

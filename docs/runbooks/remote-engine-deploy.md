@@ -22,6 +22,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - mode: `remote`
    - API URL: `https://<railway-domain>`
    - API token: value from `DASHBOARD_API_TOKEN` (or pairing `deviceToken`)
+   - note: pairing `approve/cancel` in remote mode requires admin token (`DASHBOARD_API_TOKEN`); `create/claim` stay bootstrap-friendly.
 
 ## Option B: Any Docker host (self-host with updater)
 

@@ -111,7 +111,9 @@
 - `POST /api/pairing/sessions/:sessionId/claim` claims approved session with request `{ code }` and returns `{ session, deviceToken }`.
 - `POST /api/pairing/sessions/:sessionId/cancel` cancels pending/approved sessions.
 - Pairing sessions status lifecycle: `pending -> approved -> claimed` and terminal states `cancelled` / `expired`.
-- Pairing endpoints are intentionally public (`/api/pairing/*`) so first-time clients can bootstrap before API token exchange.
+- Public bootstrap endpoints: `create`, `get`, `claim`.
+- Admin-only pairing endpoints in `remote` runtime: `approve`, `cancel` require `DASHBOARD_API_TOKEN` via `Authorization: Bearer` or `x-api-token`.
+- If `FYREFLOW_RUNTIME_MODE=remote` and `DASHBOARD_API_TOKEN` is missing, `approve`/`cancel` return `503` (`pairing_admin_token_missing`).
 - After successful claim, returned `deviceToken` is accepted as an API/WS auth credential for protected routes.
 - Claimed pairing sessions and device tokens are persisted in backend state (`data/pairing-state.json`) and remain valid after server restarts.
 - Realtime pairing updates over WebSocket:
