@@ -8,6 +8,24 @@ You can run FyreFlow in two modes:
 
 Remote deployment guide: `docs/runbooks/remote-engine-deploy.md`.
 
+## Fast Path For End Users (Railway, No CLI)
+
+This is the simplest flow for your users.
+
+1. Push this repository to GitHub.
+2. In Railway: `New Project` -> `Deploy from GitHub Repo` -> select this repo.
+3. Railway builds from root `Dockerfile` automatically.
+4. In Railway service, set variables:
+   - `FYREFLOW_RUNTIME_MODE=remote`
+   - `DASHBOARD_API_TOKEN=<strong-random-token>`
+   - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
+   - `CORS_ORIGINS=<allowed desktop/web origins>`
+5. Add a volume mounted to `/app/data`.
+6. Enable GitHub auto-deploy for your branch (usually `main`).
+7. Generate a public domain for the service.
+
+After this, backend is online and users can connect from desktop app.
+
 ## What you can do
 
 - Create and name pipelines/workflows
@@ -124,22 +142,15 @@ bun run start:desktop
 - `UPDATER_IMAGE_REPOSITORY` (default `ghcr.io/<owner>/fyreflow-core`)
 - `UPDATER_CORS_ORIGINS` (default local web origins)
 
-## Remote engine (self-host + one-click updater)
+## How Users Connect Desktop App
 
-1. Copy `.env.selfhost.example` to `.env.selfhost` and fill tokens/owner/repo.
-2. Start stack:
+1. Open desktop app -> `Settings -> Remote`.
+2. Set mode: `remote`.
+3. Set API URL: `https://<your-railway-domain>`.
+4. Set API token: same value as `DASHBOARD_API_TOKEN`.
+5. Click `Save Connection` and `Validate`.
 
-```bash
-docker compose --env-file .env.selfhost up -d --build
-```
-
-3. Services:
-- Core API: `http://localhost:8787`
-- Updater API: `http://localhost:8788`
-4. In dashboard open **Settings -> Updates**:
-- click **Check**,
-- click **Update** when a newer release is available.
-- no updater token input is required in the app; updates use current backend auth (API token / pairing device token).
+After that, app UI is local, engine runs remotely on Railway.
 
 ## Build / checks
 
@@ -157,38 +168,38 @@ npm run test:e2e
   - `docs/SKILL_COMPLIANCE.md`
   - `security_best_practices_report.md`
 
-## Railway deployment notes
+## How Updates Work On Railway
 
-1. Push this repository with `Dockerfile` and `railway.json` to GitHub.
-2. In Railway, create a new service from this repo (Dockerfile build is auto-detected).
-3. Add a volume mount to `/app/data` (required for durable state):
-   - `/app/data/local-db.json`
-   - `/app/data/pairing-state.json`
-   - `/app/data/.secrets-key` (if `DASHBOARD_SECRETS_KEY` is not set)
-4. Set Railway environment variables:
-   - `FYREFLOW_RUNTIME_MODE=remote`
-   - `DASHBOARD_API_TOKEN=<strong-random-token>`
-   - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
-   - `CORS_ORIGINS=<desktop/web origins>`
-   - optional: `FYREFLOW_WS_PATH=/api/ws`
-5. Deploy and verify:
-   - `GET https://<railway-domain>/api/health` returns `{ ok: true, realtime: { ... } }`.
-6. In desktop/web UI open **Settings -> Remote** and configure:
-   - mode `remote`
-   - remote API URL `https://<railway-domain>`
-   - API token = your `DASHBOARD_API_TOKEN` (or a claimed pairing `deviceToken`).
-7. Monorepo note:
-   - this repo contains frontend and backend code, but Railway runs only `npm run start:api` from `Dockerfile`;
-   - Vite/web frontend dev server is not started in Railway.
+- Railway path: your users get updates from GitHub auto-deploy.
+- You push/merge to deployment branch (`main`) -> Railway rebuilds and redeploys.
+- No updater token input is required for users in this flow.
+- `Settings -> Updates` is intended for self-host stacks that run a dedicated updater service.
 
-## Release -> auto-update pipeline
+## Advanced: Self-Host With Updater Service (One-Click In App)
 
-1. Publish `GitHub Release` (tag like `v1.2.3`).
+Use this only if you host with Docker/VPS and want in-app `Check/Update/Rollback`.
+
+1. Copy `.env.selfhost.example` to `.env.selfhost` and fill values.
+2. Start stack:
+
+```bash
+docker compose --env-file .env.selfhost up -d --build
+```
+
+3. Services:
+- Core API: `http://localhost:8787`
+- Updater API: `http://localhost:8788`
+4. In app `Settings -> Updates`:
+- click `Check`,
+- click `Update` when new release is available.
+
+## Advanced: Release Image Pipeline For Self-Host
+
+1. Publish `GitHub Release` (for example `v1.2.3`).
 2. Workflow `.github/workflows/release-docker.yml` builds and pushes:
 - `ghcr.io/<owner>/fyreflow-core:1.2.3`
 - `ghcr.io/<owner>/fyreflow-core:latest` (for non-prerelease releases)
-3. Self-host updater checks GitHub release metadata and applies the new tag through `docker compose`.
-4. Railway users typically get updates via Railway deploy/redeploy from GitHub (not via in-app updater container control).
+3. Self-host updater reads GitHub release metadata and applies updates via Docker Compose.
 
 ## About Optics UI library
 
