@@ -11,8 +11,6 @@ output/playwright/
 
 # AI tools
 CLAUDE.md
-AGENTS.md
-**/AGENTS.md
 .claude/
 .agents/
 skills/
