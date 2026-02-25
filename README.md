@@ -174,6 +174,7 @@ npm run test:e2e
 - You push/merge to deployment branch (`main`) -> Railway rebuilds and redeploys.
 - No updater token input is required for users in this flow.
 - `Settings -> Updates` is intended for self-host stacks that run a dedicated updater service.
+- Railway `Image Auto Updates` applies to services created from a Docker image registry; for GitHub-repo deploys use GitHub auto-deploy.
 
 ## Advanced: Self-Host With Updater Service (One-Click In App)
 
