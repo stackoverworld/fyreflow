@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-02-24
+- Last reviewed: 2026-02-25
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -8,7 +8,7 @@
 - Version externally consumed contracts.
 
 ## Initial Contract Surface
-- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string } }
+- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string }, updater?: { configured: boolean } }
 - GET /api/agents -> { items: AgentSummary[], nextCursor?: string }
 - POST /api/agents (CreateAgentInput) -> Agent
 - GET /api/agents/:agentId -> Agent
@@ -19,8 +19,10 @@
 - GET /api/ws (WebSocket upgrade) -> realtime run/log stream protocol
 - Shared exports: AgentSchema, RunSchema, ApiErrorSchema, and createApiClient(baseUrl)
 
-## Update Service Contract (2026-02-24)
-- Dedicated updater service runs separately from core runtime (default port `8788`).
+## Update Service Contract (2026-02-25)
+- Core API exposes `/api/updates/*` and proxies calls to updater service when configured.
+- Clients call core `/api/updates/*` with regular API auth (static API token or pairing device token).
+- Dedicated updater service still runs separately from core runtime (default port `8788`).
 - `GET /api/updates/status` -> `{ status }` with:
 - `channel`, `currentTag`, optional `currentVersion`,
 - optional `latestTag`/`latestPublishedAt`,
@@ -29,8 +31,10 @@
 - `POST /api/updates/check` -> refresh latest release from GitHub and return `{ status }`.
 - `POST /api/updates/apply` with optional `{ version }` -> update core to latest/explicit tag and return `{ status }`.
 - `POST /api/updates/rollback` -> rollback to previously applied tag and return `{ status }`.
-- Updater auth:
-- all `/api/updates/*` routes require `UPDATER_AUTH_TOKEN` via `Authorization: Bearer` or `x-api-token` header.
+- If updater proxy is not configured on backend, core `/api/updates/*` returns `503` with a descriptive error.
+- Updater service auth:
+- internal core->updater calls use `FYREFLOW_UPDATER_AUTH_TOKEN` (`UPDATER_AUTH_TOKEN` fallback).
+- direct updater `/api/updates/*` routes require `UPDATER_AUTH_TOKEN` via `Authorization: Bearer` or `x-api-token` header.
 - `GET /health` on updater remains unauthenticated for liveness checks.
 
 ## File Manager Scope API (2026-02-23)

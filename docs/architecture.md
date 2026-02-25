@@ -45,7 +45,9 @@ Set up FyreFlow as a Bun-managed monorepo where web and API evolve through share
 | `server/pairing/service.ts` | Pairing session lifecycle/state machine for remote desktop linking (create/approve/claim/cancel/expire). |
 | `server/pairing/state.ts` | Durable pairing session/token persistence (`data/pairing-state.json`) used across server restarts. |
 | `server/realtime/websocketRuntime.ts` | WebSocket upgrade/auth/runtime for realtime run updates over `/api/ws`. |
+| `server/http/routes/updates.ts` | Core `/api/updates/*` routes that proxy update operations through backend auth context. |
 | `server/updater/*` | Separate updater runtime for self-host one-click updates (release lookup, compose update apply/rollback, persisted updater state). |
+| `server/updater/proxyClient.ts` | Core-to-updater HTTP bridge used to avoid exposing updater admin token in client UI. |
 | `src/lib/connectionSettingsStorage.ts` | Persist local/remote connection profile and resolve active API/WS endpoint at runtime. |
 | `src/components/dashboard/UpdatesSettings.tsx` | UI surface for update checks and one-click apply/rollback against updater service. |
 | `src/lib/updateSettingsStorage.ts` | Persist updater endpoint/token settings for update operations. |

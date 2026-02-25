@@ -10,11 +10,15 @@ export interface SystemRouteDependencies {
     enabled: boolean;
     path: string;
   };
+  getUpdaterStatus?: () => {
+    configured: boolean;
+  };
 }
 
 export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies): void {
   app.get("/api/health", (_request, response) => {
     const realtimeStatus = deps.getRealtimeStatus?.();
+    const updaterStatus = deps.getUpdaterStatus?.();
     const version = deps.getVersion?.();
     response.json({
       ok: true,
@@ -27,6 +31,11 @@ export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies
       ...(realtimeStatus
         ? {
             realtime: realtimeStatus
+          }
+        : {}),
+      ...(updaterStatus
+        ? {
+            updater: updaterStatus
           }
         : {})
     });

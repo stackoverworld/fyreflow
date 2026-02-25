@@ -12,6 +12,9 @@ export interface RuntimeConfig {
   realtimeSocketPath: string;
   realtimeRunPollIntervalMs: number;
   realtimeHeartbeatIntervalMs: number;
+  updaterBaseUrl: string;
+  updaterAuthToken: string;
+  updaterProxyTimeoutMs: number;
 }
 
 const defaultPort = 8787;
@@ -27,6 +30,7 @@ const falsyEnvValues = new Set(["0", "false", "no", "off"]);
 const defaultRealtimeSocketPath = "/api/ws";
 const defaultRealtimeRunPollIntervalMs = 400;
 const defaultRealtimeHeartbeatIntervalMs = 15_000;
+const defaultUpdaterProxyTimeoutMs = 15_000;
 
 export function resolveRuntimeMode(raw: string | undefined): RuntimeMode {
   if (raw?.trim().toLowerCase() === "remote") {
@@ -85,6 +89,23 @@ export function resolveCorsOrigins(raw: string | undefined): {
   };
 }
 
+export function normalizeOptionalUrl(raw: string | undefined): string {
+  if (!raw) {
+    return "";
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+
+  try {
+    return new URL(trimmed).toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
 export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const mode = resolveRuntimeMode(env.FYREFLOW_RUNTIME_MODE);
   const { allowedCorsOrigins, allowAnyCorsOrigin } = resolveCorsOrigins(env.CORS_ORIGINS);
@@ -113,6 +134,14 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runt
       env.FYREFLOW_WS_HEARTBEAT_INTERVAL_MS,
       defaultRealtimeHeartbeatIntervalMs,
       1_000,
+      120_000
+    ),
+    updaterBaseUrl: normalizeOptionalUrl(env.FYREFLOW_UPDATER_BASE_URL),
+    updaterAuthToken: (env.FYREFLOW_UPDATER_AUTH_TOKEN ?? env.UPDATER_AUTH_TOKEN ?? "").trim(),
+    updaterProxyTimeoutMs: parseIntEnv(
+      env.FYREFLOW_UPDATER_TIMEOUT_MS,
+      defaultUpdaterProxyTimeoutMs,
+      2_000,
       120_000
     )
   };

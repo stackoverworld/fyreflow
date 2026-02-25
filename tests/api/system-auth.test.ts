@@ -56,6 +56,9 @@ describe("System and Auth Routes", () => {
         getRealtimeStatus: () => ({
           enabled: true,
           path: "/api/ws"
+        }),
+        getUpdaterStatus: () => ({
+          configured: true
         })
       });
 
@@ -64,13 +67,21 @@ describe("System and Auth Routes", () => {
         path: "/api/health",
         method: "GET"
       });
-      const payload = response.body as { ok: boolean; version?: string; realtime?: { enabled: boolean; path: string } };
+      const payload = response.body as {
+        ok: boolean;
+        version?: string;
+        realtime?: { enabled: boolean; path: string };
+        updater?: { configured: boolean };
+      };
       expect(response.statusCode).toBe(200);
       expect(payload.ok).toBe(true);
       expect(payload.version).toBe("1.2.3");
       expect(payload.realtime).toEqual({
         enabled: true,
         path: "/api/ws"
+      });
+      expect(payload.updater).toEqual({
+        configured: true
       });
     } finally {
       await cleanup();

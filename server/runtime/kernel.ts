@@ -21,6 +21,7 @@ import { initializeRuntimeBootstrap, type RuntimeBootstrapHandle } from "./boots
 import { resolveRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { sanitizeDashboardState } from "./sanitization.js";
 import { createRealtimeRuntime, type RealtimeRuntime } from "../realtime/websocketRuntime.js";
+import { createUpdaterProxyClient } from "../updater/proxyClient.js";
 
 export interface ServerRuntimeOptions {
   env?: NodeJS.ProcessEnv;
@@ -76,6 +77,11 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
     listActivePipelineIds,
     isRunPreflightError
   });
+  const updaterProxy = createUpdaterProxyClient({
+    baseUrl: config.updaterBaseUrl,
+    authToken: config.updaterAuthToken,
+    timeoutMs: config.updaterProxyTimeoutMs
+  });
 
   const app = createApp({
     apiAuthToken: config.apiAuthToken,
@@ -89,7 +95,13 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       getRealtimeStatus: () => ({
         enabled: config.enableRealtimeSocket,
         path: config.realtimeSocketPath
+      }),
+      getUpdaterStatus: () => ({
+        configured: updaterProxy.isConfigured()
       })
+    },
+    updates: {
+      updater: updaterProxy
     },
     pairing: {
       pairingService,

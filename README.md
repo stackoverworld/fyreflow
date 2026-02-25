@@ -110,6 +110,9 @@ bun run start:desktop
 - `FYREFLOW_WS_PATH` (default `/api/ws`)
 - `FYREFLOW_WS_RUN_POLL_INTERVAL_MS` (default `400`)
 - `FYREFLOW_WS_HEARTBEAT_INTERVAL_MS` (default `15000`)
+- `FYREFLOW_UPDATER_BASE_URL` (optional; enable backend-managed updates via updater service)
+- `FYREFLOW_UPDATER_AUTH_TOKEN` (optional; token core uses to call updater service)
+- `FYREFLOW_UPDATER_TIMEOUT_MS` (default `15000`)
 - `VITE_API_BASE_URL` (default `http://localhost:8787`)
 - `VITE_DASHBOARD_API_TOKEN` (optional web default token)
 - `VITE_REALTIME_WS_PATH` (default `/api/ws`)
@@ -134,9 +137,9 @@ docker compose --env-file .env.selfhost up -d --build
 - Core API: `http://localhost:8787`
 - Updater API: `http://localhost:8788`
 4. In dashboard open **Settings -> Updates**:
-- set updater URL and updater token,
 - click **Check**,
 - click **Update** when a newer release is available.
+- no updater token input is required in the app; updates use current backend auth (API token / pairing device token).
 
 ## Build / checks
 

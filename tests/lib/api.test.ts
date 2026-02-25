@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyManagedUpdate,
   applyUpdaterUpdate,
   approvePairingSession,
   cancelPairingSession,
+  checkManagedUpdateStatus,
   checkUpdaterStatus,
   claimPairingSession,
   createPairingSession,
   generateFlowDraft,
+  getManagedUpdateStatus,
   getPairingSession,
   getUpdaterStatus,
+  rollbackManagedUpdate,
   rollbackUpdaterUpdate,
   subscribePairingSessionStatus,
   subscribeRunEvents
@@ -254,6 +258,62 @@ describe("updater API client", () => {
     expect(calls[1]?.[0]).toBe("http://localhost:8788/api/updates/apply");
     expect(calls[1]?.[1].method).toBe("POST");
     expect(calls[2]?.[0]).toBe("http://localhost:8788/api/updates/rollback");
+    expect(calls[2]?.[1].method).toBe("POST");
+  });
+});
+
+describe("managed updates API client", () => {
+  const statusPayload: UpdateServiceStatus = {
+    channel: "stable",
+    currentTag: "1.0.0",
+    currentVersion: "1.0.0",
+    latestTag: "1.0.1",
+    updateAvailable: true,
+    rollbackAvailable: true,
+    busy: false
+  };
+
+  it("uses active backend connection for managed update status", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: statusPayload }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    ) as typeof fetch;
+
+    const response = await getManagedUpdateStatus();
+
+    expect(response.status.latestTag).toBe("1.0.1");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    const [requestUrl, requestInit] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit
+    ];
+    expect(requestUrl).toBe("http://localhost:8787/api/updates/status");
+    const headers = requestInit.headers as Headers;
+    expect(headers.get("Authorization")).toBeNull();
+  });
+
+  it("sends managed update POST routes to active backend", async () => {
+    global.fetch = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ status: statusPayload }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    ) as typeof fetch;
+
+    await checkManagedUpdateStatus();
+    await applyManagedUpdate("1.0.2");
+    await rollbackManagedUpdate();
+
+    const calls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, RequestInit]>;
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.[0]).toBe("http://localhost:8787/api/updates/check");
+    expect(calls[0]?.[1].method).toBe("POST");
+    expect(calls[1]?.[0]).toBe("http://localhost:8787/api/updates/apply");
+    expect(calls[1]?.[1].method).toBe("POST");
+    expect(calls[2]?.[0]).toBe("http://localhost:8787/api/updates/rollback");
     expect(calls[2]?.[1].method).toBe("POST");
   });
 });

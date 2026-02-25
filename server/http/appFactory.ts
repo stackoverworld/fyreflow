@@ -12,6 +12,7 @@ import { registerPipelineRoutes } from "./routes/pipelines.js";
 import { registerPairingRoutes, type PairingRouteDependencies } from "./routes/pairing.js";
 import { registerRunRoutes, type RunRouteDependencies } from "./routes/runs.js";
 import { registerSystemRoutes, type SystemRouteDependencies } from "./routes/system.js";
+import { registerUpdateRoutes, type UpdateRouteDependencies } from "./routes/updates.js";
 
 export interface AppFactoryDependencies {
   apiAuthToken: string;
@@ -19,6 +20,7 @@ export interface AppFactoryDependencies {
   allowedCorsOrigins: string[];
   allowAnyCorsOrigin: boolean;
   system: SystemRouteDependencies;
+  updates: UpdateRouteDependencies;
   pairing: PairingRouteDependencies;
   pipelines: PipelineRouteDependencies;
   runs: RunRouteDependencies;
@@ -43,6 +45,7 @@ export function createApp(deps: AppFactoryDependencies): express.Express {
   );
 
   registerSystemRoutes(app, deps.system);
+  registerUpdateRoutes(app, deps.updates);
   registerPairingRoutes(app, deps.pairing);
   registerPipelineRoutes(app, deps.pipelines);
   registerRunRoutes(app, deps.runs);

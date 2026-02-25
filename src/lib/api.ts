@@ -449,6 +449,35 @@ export interface UpdaterClientConfig {
   authToken?: string;
 }
 
+export async function getManagedUpdateStatus() {
+  return request<{ status: UpdateServiceStatus }>("/api/updates/status");
+}
+
+export async function checkManagedUpdateStatus() {
+  return request<{ status: UpdateServiceStatus }>("/api/updates/check", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function applyManagedUpdate(version?: string) {
+  return request<{ status: UpdateServiceStatus }>("/api/updates/apply", {
+    method: "POST",
+    body: JSON.stringify(
+      version && version.trim().length > 0
+        ? { version: version.trim() }
+        : {}
+    )
+  });
+}
+
+export async function rollbackManagedUpdate() {
+  return request<{ status: UpdateServiceStatus }>("/api/updates/rollback", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
 function normalizeExternalBaseUrl(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {

@@ -6,7 +6,8 @@ import type {
   PipelineRun,
   ProviderId,
   ProviderOAuthStatus,
-  SmartRunPlan
+  SmartRunPlan,
+  UpdateServiceStatus
 } from "../../../src/lib/types";
 
 interface MockDashboardApiOptions {
@@ -292,6 +293,17 @@ export async function mockDashboardApi(
     ],
     canRun: true
   };
+  let updateStatus: UpdateServiceStatus = {
+    channel: "stable",
+    currentTag: "1.0.0",
+    currentVersion: "1.0.0",
+    latestTag: "1.0.1",
+    latestPublishedAt: isoAt(2_000),
+    updateAvailable: true,
+    rollbackAvailable: false,
+    busy: false,
+    lastCheckedAt: isoAt(2_500)
+  };
 
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -300,6 +312,46 @@ export async function mockDashboardApi(
 
     if (method === "GET" && pathname === "/api/health") {
       await fulfillJson(route, 200, { ok: true, now: isoAt(5) });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/updates/status") {
+      await fulfillJson(route, 200, { status: updateStatus });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/updates/check") {
+      updateStatus = {
+        ...updateStatus,
+        lastCheckedAt: isoAt(3_000)
+      };
+      await fulfillJson(route, 200, { status: updateStatus });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/updates/apply") {
+      updateStatus = {
+        ...updateStatus,
+        currentTag: updateStatus.latestTag ?? updateStatus.currentTag,
+        currentVersion: updateStatus.latestTag ?? updateStatus.currentVersion,
+        updateAvailable: false,
+        rollbackAvailable: true,
+        lastAppliedAt: isoAt(3_500)
+      };
+      await fulfillJson(route, 200, { status: updateStatus });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/updates/rollback") {
+      updateStatus = {
+        ...updateStatus,
+        currentTag: "1.0.0",
+        currentVersion: "1.0.0",
+        updateAvailable: true,
+        rollbackAvailable: false,
+        lastAppliedAt: isoAt(4_000)
+      };
+      await fulfillJson(route, 200, { status: updateStatus });
       return;
     }
 

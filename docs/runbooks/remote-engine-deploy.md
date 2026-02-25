@@ -31,6 +31,8 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - `FYREFLOW_VERSION`
    - `DASHBOARD_API_TOKEN`
    - `DASHBOARD_SECRETS_KEY`
+   - `FYREFLOW_UPDATER_BASE_URL` (usually `http://updater:8788` in compose)
+   - `FYREFLOW_UPDATER_AUTH_TOKEN`
    - `UPDATER_AUTH_TOKEN`
    - `UPDATER_GITHUB_OWNER`
    - `UPDATER_GITHUB_REPO`
@@ -41,9 +43,8 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - core health: `http://<host>:8787/api/health`
    - updater health: `http://<host>:8788/health`
 5. In app -> `Settings -> Updates`:
-   - updater URL: `http://<host>:8788`
-   - updater token: `UPDATER_AUTH_TOKEN`
    - click `Check`, then `Update`
+   - app talks to backend `/api/updates/*`; no separate updater token input in UI
 
 ## How updates are delivered
 
