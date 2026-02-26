@@ -7,6 +7,7 @@ ARG FYREFLOW_CLAUDE_CLI_NPM_VERSION=latest
 ARG FYREFLOW_CODEX_CLI_NPM_PACKAGE=@openai/codex
 ARG FYREFLOW_CODEX_CLI_NPM_VERSION=latest
 ENV FYREFLOW_BUILD_VERSION=${FYREFLOW_BUILD_VERSION}
+RUN apk add --no-cache util-linux-misc
 COPY package.json package-lock.json ./
 COPY scripts/patch-electron-plist.mjs ./scripts/patch-electron-plist.mjs
 RUN npm ci

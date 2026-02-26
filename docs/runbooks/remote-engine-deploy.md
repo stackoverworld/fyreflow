@@ -67,6 +67,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 - Desktop app can run startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured in desktop runtime environment.
 - For production, use strong random tokens and restricted `CORS_ORIGINS`.
 - Provider OAuth in `remote` mode opens only the pairing/authorization URL returned by backend OAuth start; if backend cannot provide a URL, the UI keeps browser closed and prompts you to run the shown CLI command on the remote host terminal to copy/open the printed URL manually. For Claude flows that show browser `Authentication Code`, paste that code (or full callback URL) into the dashboard `Submit code` field so backend CLI can complete login.
+- Claude OAuth submit to remote CLI requires a PTY helper on backend (`script` command). In Alpine-based images install `util-linux-misc` (already included in this repo `Dockerfile`).
 - Root `Dockerfile` installs provider CLIs by default during image build (`@anthropic-ai/claude-code`, `@openai/codex`). To disable/pin versions, use build args:
   - `FYREFLOW_INSTALL_PROVIDER_CLIS=0|1`
   - `FYREFLOW_CLAUDE_CLI_NPM_VERSION=<version>`

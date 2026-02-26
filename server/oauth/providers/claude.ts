@@ -37,6 +37,7 @@ interface ActiveClaudeLoginSession {
   finished: boolean;
   exitCode: number | null;
   authState?: string;
+  usesPtyShim: boolean;
 }
 
 let activeClaudeLoginSession: ActiveClaudeLoginSession | null = null;
@@ -299,7 +300,8 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
   logClaudeOAuth("launch_start", {
     command: launchSpec.command,
     args: launchSpec.args,
-    canUseScript
+    canUseScript,
+    usesPtyShim: launchSpec.usesPtyShim
   });
 
   return new Promise<ActiveClaudeLoginSession>((resolve, reject) => {
@@ -313,7 +315,8 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
       startedAt: Date.now(),
       finished: false,
       exitCode: null,
-      authState: undefined
+      authState: undefined,
+      usesPtyShim: launchSpec.usesPtyShim
     };
 
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -368,25 +371,30 @@ function shellEscapeForSingleQuotes(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function resolveClaudeLoginLaunchSpec(canUseScript: boolean): { command: string; args: string[] } {
+function resolveClaudeLoginLaunchSpec(
+  canUseScript: boolean
+): { command: string; args: string[]; usesPtyShim: boolean } {
   if (!canUseScript) {
     return {
       command: CLAUDE_CLI_COMMAND,
-      args: ["auth", "login"]
+      args: ["auth", "login"],
+      usesPtyShim: false
     };
   }
 
   if (process.platform === "darwin" || process.platform === "freebsd") {
     return {
       command: SCRIPT_COMMAND,
-      args: ["-q", "/dev/null", CLAUDE_CLI_COMMAND, "auth", "login"]
+      args: ["-q", "/dev/null", CLAUDE_CLI_COMMAND, "auth", "login"],
+      usesPtyShim: true
     };
   }
 
   const escapedClaudeCommand = shellEscapeForSingleQuotes(CLAUDE_CLI_COMMAND);
   return {
     command: SCRIPT_COMMAND,
-    args: ["-q", "-e", "-c", `${escapedClaudeCommand} auth login`, "/dev/null"]
+    args: ["-q", "-e", "-c", `${escapedClaudeCommand} auth login`, "/dev/null"],
+    usesPtyShim: true
   };
 }
 
@@ -450,6 +458,9 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     bootstrap.awaitingManualCode
       ? "If browser shows Authentication Code, copy it and submit it in this dashboard."
       : "",
+    session.usesPtyShim
+      ? ""
+      : "Server is missing PTY helper (`script` command); code submit may not be accepted until backend image installs it.",
     "If the browser did not open, run `claude auth login` on the remote server terminal."
   ].filter((value) => value.length > 0);
 
@@ -590,12 +601,15 @@ export async function submitClaudeOAuthCode(
   }
 
   logClaudeOAuth("submit_pending", {
+    usesPtyShim: session.usesPtyShim,
     outputTail: summarizeOutputForLogs(session.capturedOutput)
   });
   return {
     providerId,
     accepted: false,
-    message: "Authorization code was sent, but Claude CLI is still waiting. Click Refresh or reconnect and retry."
+    message: session.usesPtyShim
+      ? "Authorization code was sent, but Claude CLI is still waiting. Click Refresh or reconnect and retry."
+      : "Authorization code was sent, but CLI did not consume stdin. Backend is missing PTY helper (`script`). Install it (Alpine: `apk add util-linux-misc`) and redeploy."
   };
 }
 
