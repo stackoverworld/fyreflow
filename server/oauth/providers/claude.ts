@@ -117,6 +117,37 @@ function combineCallbackCodeAndState(code: string, state: string | undefined): s
   return `${trimmedCode}#${trimmedState}`;
 }
 
+function extractStateFromAuthCode(codeWithOptionalState: string): string | undefined {
+  const trimmed = codeWithOptionalState.trim();
+  const hashIndex = trimmed.indexOf("#");
+  if (hashIndex < 0 || hashIndex >= trimmed.length - 1) {
+    return undefined;
+  }
+  const state = trimmed.slice(hashIndex + 1).trim();
+  return state.length > 0 ? state : undefined;
+}
+
+function extractStateFromRawCodeInput(rawInput: string): string | undefined {
+  const trimmed = rawInput.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const queryStateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
+  if (queryStateMatch?.[1]) {
+    const state = decodeCodeValue(queryStateMatch[1]).trim();
+    if (state.length > 0) {
+      return state;
+    }
+  }
+
+  return extractStateFromAuthCode(trimmed);
+}
+
+export function extractClaudeAuthorizationStateInput(rawInput: string): string | undefined {
+  return extractStateFromRawCodeInput(rawInput);
+}
+
 function extractStateFromAuthUrl(authUrl: string | undefined): string | undefined {
   const trimmed = (authUrl ?? "").trim();
   if (trimmed.length === 0) {
@@ -444,6 +475,7 @@ export async function submitClaudeOAuthCode(
   if (normalizedRaw.length === 0) {
     throw new Error("Authorization code is required.");
   }
+  const providedState = extractStateFromRawCodeInput(normalizedRaw);
 
   const session = activeClaudeLoginSession;
   if (!session || session.finished) {
@@ -462,6 +494,34 @@ export async function submitClaudeOAuthCode(
   const normalizedCode = normalizeClaudeAuthorizationCodeInput(normalizedRaw, session.authState);
   if (normalizedCode.length === 0) {
     throw new Error("Authorization code is required.");
+  }
+  const normalizedState = extractStateFromAuthCode(normalizedCode);
+  const sessionState = (session.authState ?? "").trim();
+  if (!providedState) {
+    logClaudeOAuth("submit_missing_state", {
+      rawLength: normalizedRaw.length,
+      rawHash: hashForLogs(normalizedRaw),
+      sessionAuthStateLength: sessionState.length
+    });
+    return {
+      providerId,
+      accepted: false,
+      message:
+        "Incomplete code: paste the full Authentication Code from browser (must include #state), or paste the full callback URL with code and state."
+    };
+  }
+  if (sessionState.length > 0 && normalizedState && normalizedState !== sessionState) {
+    logClaudeOAuth("submit_state_mismatch", {
+      providedStateHash: hashForLogs(normalizedState),
+      sessionStateHash: hashForLogs(sessionState),
+      rawHash: hashForLogs(normalizedRaw)
+    });
+    return {
+      providerId,
+      accepted: false,
+      message:
+        "This code belongs to a different login attempt (state mismatch). Click Connect again and submit the code from the newest browser page."
+    };
   }
   logClaudeOAuth("submit_received", {
     rawLength: normalizedRaw.length,

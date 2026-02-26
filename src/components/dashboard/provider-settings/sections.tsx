@@ -219,7 +219,7 @@ export function ProviderSettingsSection({
                     autoCorrect="off"
                     autoCapitalize="none"
                     spellCheck={false}
-                    placeholder="Paste auth code or full platform.claude.com/oauth/code/callback URL"
+                    placeholder="Paste full Authentication Code (with #state) or full callback URL"
                   />
                   <Button
                     size="sm"
@@ -233,7 +233,7 @@ export function ProviderSettingsSection({
                   </Button>
                 </div>
                 <p className="text-xs text-ink-500">
-                  If browser shows “Authentication Code”, paste the code here (or full callback URL) and submit it to the remote Claude CLI session.
+                  If browser shows “Authentication Code”, paste the entire value including `#state` (or paste full callback URL) and submit it to the remote Claude CLI session.
                 </p>
               </div>
             ) : null}

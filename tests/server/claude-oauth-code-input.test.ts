@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeClaudeAuthorizationCodeInput } from "../../server/oauth/providers/claude.js";
+import {
+  extractClaudeAuthorizationStateInput,
+  normalizeClaudeAuthorizationCodeInput
+} from "../../server/oauth/providers/claude.js";
 
 describe("normalizeClaudeAuthorizationCodeInput", () => {
   it("keeps plain authorization code unchanged", () => {
@@ -27,5 +30,23 @@ describe("normalizeClaudeAuthorizationCodeInput", () => {
     expect(normalizeClaudeAuthorizationCodeInput("raw-code-only", "session-state-1")).toBe(
       "raw-code-only#session-state-1"
     );
+  });
+});
+
+describe("extractClaudeAuthorizationStateInput", () => {
+  it("extracts state from callback url", () => {
+    expect(
+      extractClaudeAuthorizationStateInput(
+        "https://platform.claude.com/oauth/code/callback?code=abc123%2Bz&state=state-value-1"
+      )
+    ).toBe("state-value-1");
+  });
+
+  it("extracts state from code#state input", () => {
+    expect(extractClaudeAuthorizationStateInput("abc123#state-value-2")).toBe("state-value-2");
+  });
+
+  it("returns undefined when state is missing", () => {
+    expect(extractClaudeAuthorizationStateInput("abc123")).toBeUndefined();
   });
 });
