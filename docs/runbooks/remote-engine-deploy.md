@@ -66,9 +66,10 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 - Frontend source files inside repo do not start a separate frontend service on Railway.
 - Desktop app can run startup auto-update checks when `FYREFLOW_DESKTOP_UPDATE_FEED_URL` is configured in desktop runtime environment.
 - For production, use strong random tokens and restricted `CORS_ORIGINS`.
-- Provider OAuth in `remote` mode opens only the pairing/authorization URL returned by backend OAuth start; if backend cannot provide a URL, the UI keeps browser closed and prompts you to run the shown CLI command on the remote host terminal to copy/open the printed URL manually.
+- Provider OAuth in `remote` mode opens only the pairing/authorization URL returned by backend OAuth start; if backend cannot provide a URL, the UI keeps browser closed and prompts you to run the shown CLI command on the remote host terminal to copy/open the printed URL manually. For Claude flows that show browser `Authentication Code`, paste that code into the dashboard `Submit code` field so backend CLI can complete login.
 - Root `Dockerfile` installs provider CLIs by default during image build (`@anthropic-ai/claude-code`, `@openai/codex`). To disable/pin versions, use build args:
   - `FYREFLOW_INSTALL_PROVIDER_CLIS=0|1`
   - `FYREFLOW_CLAUDE_CLI_NPM_VERSION=<version>`
   - `FYREFLOW_CODEX_CLI_NPM_VERSION=<version>`
+- Codex device auth prerequisite: if browser login page shows `Enable device code authorization`, open ChatGPT Settings -> Security and enable device code authorization for Codex, then retry `Connect`.
 - If provider status still shows `CLI unavailable`, verify binaries on backend (`which claude`, `which codex`) and set `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` when binaries are outside `PATH`.

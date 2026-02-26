@@ -47,6 +47,26 @@ export function resolveProviderOAuthLoginUrl(providerId: ProviderId, apiAuthUrl?
   return getProviderOAuthLoginUrl(providerId);
 }
 
+function buildProviderAuthCodeHint(providerId: ProviderId, authCode: string): string {
+  if (authCode.length === 0) {
+    return "";
+  }
+
+  if (providerId === "claude") {
+    return `Enter one-time code ${authCode} on the Claude authorization page.`;
+  }
+
+  return `Enter one-time code ${authCode} on the Codex device page.`;
+}
+
+function buildProviderRemoteTroubleshootingHint(providerId: ProviderId): string {
+  if (providerId !== "openai") {
+    return "";
+  }
+
+  return 'If Codex login shows "Enable device code authorization", open ChatGPT Settings -> Security, enable device code authorization for Codex, then click Connect again.';
+}
+
 export function buildProviderOAuthStartMessage(args: BuildProviderOAuthStartMessageArgs): string {
   const apiMessage = normalizeWhitespace(args.apiMessage);
   if (args.connectionMode !== "remote") {
@@ -66,14 +86,16 @@ export function buildProviderOAuthStartMessage(args: BuildProviderOAuthStartMess
       : command.length > 0
         ? `Remote server did not return an OAuth URL yet. Run "${command}" on the remote server terminal and open the URL it prints.`
         : "Remote server did not return an OAuth URL yet. Run the provider CLI login command on the remote server terminal and open the URL it prints.";
-  const codeHint = authCode.length > 0 ? `Use one-time code ${authCode} if prompted.` : "";
+  const codeHint = buildProviderAuthCodeHint(args.providerId, authCode);
+  const troubleshootingHint = buildProviderRemoteTroubleshootingHint(args.providerId);
   const prefix = apiMessage.length > 0 ? `${apiMessage} ` : "";
 
   const remoteParts = [
     `${prefix}Remote mode is active, so the server cannot open a browser tab on this device.`,
     remoteLoginHint,
     codeHint,
-    remoteCommandHint
+    remoteCommandHint,
+    troubleshootingHint
   ].filter((value) => value.length > 0);
 
   return remoteParts.join(" ");

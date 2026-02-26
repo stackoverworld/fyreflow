@@ -9,7 +9,12 @@ import type {
   mergeRunInputsWithSecure,
   upsertPipelineSecureInputs
 } from "../../../secureInputs.js";
-import type { getProviderOAuthStatus, startProviderOAuthLogin, syncProviderOAuthToken } from "../../../oauth.js";
+import type {
+  getProviderOAuthStatus,
+  startProviderOAuthLogin,
+  submitProviderOAuthCode,
+  syncProviderOAuthToken
+} from "../../../oauth.js";
 import type { normalizeRunInputs } from "../../../runInputs.js";
 
 export interface PipelineRouteContext {
@@ -24,6 +29,7 @@ export interface PipelineRouteContext {
   isRunPreflightError: (error: unknown) => error is { failedChecks: SmartRunCheck[] };
   getProviderOAuthStatus: typeof getProviderOAuthStatus;
   startProviderOAuthLogin: typeof startProviderOAuthLogin;
+  submitProviderOAuthCode: typeof submitProviderOAuthCode;
   syncProviderOAuthToken: typeof syncProviderOAuthToken;
   buildSmartRunPlan: typeof buildSmartRunPlan;
   buildRunStartupCheck: typeof buildRunStartupCheck;

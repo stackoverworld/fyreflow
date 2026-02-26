@@ -2,7 +2,12 @@ import type { Server } from "node:http";
 
 import { generateFlowDraft } from "../flowBuilder.js";
 import { createApp } from "../http/appFactory.js";
-import { getProviderOAuthStatus, startProviderOAuthLogin, syncProviderOAuthToken } from "../oauth.js";
+import {
+  getProviderOAuthStatus,
+  startProviderOAuthLogin,
+  submitProviderOAuthCode,
+  syncProviderOAuthToken
+} from "../oauth.js";
 import { PairingService } from "../pairing/service.js";
 import { normalizeRunInputs } from "../runInputs.js";
 import {
@@ -151,6 +156,7 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       isRunPreflightError,
       getProviderOAuthStatus,
       startProviderOAuthLogin,
+      submitProviderOAuthCode,
       syncProviderOAuthToken,
       buildSmartRunPlan,
       buildRunStartupCheck,

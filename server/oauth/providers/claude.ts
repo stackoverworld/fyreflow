@@ -1,7 +1,9 @@
-import { execFileAsync, isCommandAvailable, launchDetachedAndCapture } from "../commandUtils.js";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileAsync, isCommandAvailable } from "../commandUtils.js";
 import { CLAUDE_CLI_COMMAND } from "../config.js";
 import type {
   ClaudeStatusJson,
+  ProviderOAuthCodeSubmitResult,
   ProviderOAuthLoginResult,
   ProviderOAuthStatus,
   ProviderOAuthStatusOptions,
@@ -11,13 +13,173 @@ import { extractDeviceCode, extractFirstAuthUrl } from "../loginOutputParser.js"
 import { probeClaudeRuntime } from "../runtimeProbe.js";
 import { nowIso } from "../time.js";
 
-const CLAUDE_CAPTURE_TIMEOUT_MS = 15_000;
-const CLAUDE_CAPTURE_SETTLE_MS = 600;
+const CLAUDE_LOGIN_BOOTSTRAP_TIMEOUT_MS = 20_000;
+const CLAUDE_LOGIN_BOOTSTRAP_POLL_INTERVAL_MS = 150;
+const CLAUDE_LOGIN_BOOTSTRAP_SETTLE_MS = 700;
+const CLAUDE_LOGIN_CAPTURE_MAX_CHARS = 32 * 1024;
+const CLAUDE_LOGIN_SESSION_RETENTION_MS = 5 * 60 * 1_000;
+const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 25_000;
+const CLAUDE_CODE_SUBMIT_STATUS_POLL_MS = 1_200;
 const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
+const CLAUDE_MANUAL_CODE_PROMPT_PATTERN = /(paste this into claude code|authentication code|paste.+code)/i;
+
+interface ActiveClaudeLoginSession {
+  child: ChildProcessWithoutNullStreams;
+  capturedOutput: string;
+  startedAt: number;
+  finished: boolean;
+  exitCode: number | null;
+}
+
+let activeClaudeLoginSession: ActiveClaudeLoginSession | null = null;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function appendCapturedOutput(session: ActiveClaudeLoginSession, chunk: Buffer | string): void {
+  const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  session.capturedOutput = `${session.capturedOutput}${text}`;
+  if (session.capturedOutput.length > CLAUDE_LOGIN_CAPTURE_MAX_CHARS) {
+    session.capturedOutput = session.capturedOutput.slice(-CLAUDE_LOGIN_CAPTURE_MAX_CHARS);
+  }
+}
 
 function hasPreferredClaudeAuthUrl(capturedOutput: string): boolean {
-  const url = extractFirstAuthUrl(capturedOutput);
-  return typeof url === "string" && !GENERIC_CLAUDE_LOGIN_URL_PATTERN.test(url);
+  const authUrl = extractFirstAuthUrl(capturedOutput);
+  return typeof authUrl === "string" && !GENERIC_CLAUDE_LOGIN_URL_PATTERN.test(authUrl);
+}
+
+function extractLoginBootstrap(capturedOutput: string): {
+  authUrl?: string;
+  authCode?: string;
+  awaitingManualCode: boolean;
+} {
+  const authUrl = extractFirstAuthUrl(capturedOutput);
+  const authCode = extractDeviceCode(capturedOutput);
+  const awaitingManualCode = CLAUDE_MANUAL_CODE_PROMPT_PATTERN.test(capturedOutput);
+  return {
+    authUrl,
+    authCode,
+    awaitingManualCode
+  };
+}
+
+async function waitForLoginBootstrap(session: ActiveClaudeLoginSession): Promise<{
+  authUrl?: string;
+  authCode?: string;
+  awaitingManualCode: boolean;
+}> {
+  const startedAt = Date.now();
+  let lastOutput = session.capturedOutput;
+  let lastOutputChangedAt = startedAt;
+
+  while (Date.now() - startedAt < CLAUDE_LOGIN_BOOTSTRAP_TIMEOUT_MS) {
+    const nextOutput = session.capturedOutput;
+    if (nextOutput !== lastOutput) {
+      lastOutput = nextOutput;
+      lastOutputChangedAt = Date.now();
+    }
+
+    const bootstrap = extractLoginBootstrap(nextOutput);
+    if (hasPreferredClaudeAuthUrl(nextOutput)) {
+      return bootstrap;
+    }
+
+    if (
+      nextOutput.length > 0 &&
+      Date.now() - lastOutputChangedAt >= CLAUDE_LOGIN_BOOTSTRAP_SETTLE_MS &&
+      (bootstrap.awaitingManualCode || typeof bootstrap.authCode === "string")
+    ) {
+      return bootstrap;
+    }
+
+    if (session.finished && nextOutput.length > 0) {
+      return bootstrap;
+    }
+
+    await sleep(CLAUDE_LOGIN_BOOTSTRAP_POLL_INTERVAL_MS);
+  }
+
+  return extractLoginBootstrap(session.capturedOutput);
+}
+
+async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
+  const previous = activeClaudeLoginSession;
+  if (previous && !previous.finished) {
+    try {
+      previous.child.kill();
+    } catch {
+      // Ignore kill errors.
+    }
+  }
+
+  activeClaudeLoginSession = null;
+
+  return new Promise<ActiveClaudeLoginSession>((resolve, reject) => {
+    const child = spawn(CLAUDE_CLI_COMMAND, ["auth", "login"], {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const session: ActiveClaudeLoginSession = {
+      child,
+      capturedOutput: "",
+      startedAt: Date.now(),
+      finished: false,
+      exitCode: null
+    };
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      appendCapturedOutput(session, chunk);
+    });
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      appendCapturedOutput(session, chunk);
+    });
+
+    child.once("exit", (code) => {
+      session.finished = true;
+      session.exitCode = code;
+      const cleanupTimer = setTimeout(() => {
+        if (activeClaudeLoginSession === session) {
+          activeClaudeLoginSession = null;
+        }
+      }, CLAUDE_LOGIN_SESSION_RETENTION_MS);
+      cleanupTimer.unref();
+    });
+
+    child.once("error", (error) => {
+      session.finished = true;
+      session.exitCode = 1;
+      if (activeClaudeLoginSession === session) {
+        activeClaudeLoginSession = null;
+      }
+      reject(error);
+    });
+
+    child.once("spawn", () => {
+      activeClaudeLoginSession = session;
+      resolve(session);
+    });
+  });
+}
+
+async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await getClaudeLoggedInStatus();
+    if (status.loggedIn === true) {
+      return true;
+    }
+
+    await sleep(CLAUDE_CODE_SUBMIT_STATUS_POLL_MS);
+  }
+
+  const finalStatus = await getClaudeLoggedInStatus();
+  return finalStatus.loggedIn === true;
 }
 
 async function getClaudeLoggedInStatus(): Promise<ClaudeStatusJson> {
@@ -39,19 +201,19 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  const launchResult = await launchDetachedAndCapture(CLAUDE_CLI_COMMAND, ["auth", "login"], {
-    captureTimeoutMs: CLAUDE_CAPTURE_TIMEOUT_MS,
-    settleTimeMs: CLAUDE_CAPTURE_SETTLE_MS,
-    isOutputSufficient: hasPreferredClaudeAuthUrl
-  });
-  const authUrl = extractFirstAuthUrl(launchResult.capturedOutput);
-  const authCode = extractDeviceCode(launchResult.capturedOutput);
+  const session = await launchClaudeLoginSession();
+  const bootstrap = await waitForLoginBootstrap(session);
+  const authUrl = bootstrap.authUrl;
+  const authCode = bootstrap.authCode;
 
   const messageParts = [
     "Claude browser login started.",
     authUrl ? `Open ${authUrl}.` : "",
-    authCode ? `Use code ${authCode}.` : "",
-    "If the browser did not open, run `claude auth login` in your terminal."
+    authCode ? `Enter code ${authCode} in Claude Code if prompted.` : "",
+    bootstrap.awaitingManualCode
+      ? "If browser shows Authentication Code, copy it and submit it in this dashboard."
+      : "",
+    "If the browser did not open, run `claude auth login` on the remote server terminal."
   ].filter((value) => value.length > 0);
 
   return {
@@ -60,6 +222,68 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     message: messageParts.join(" "),
     authUrl,
     authCode
+  };
+}
+
+export async function submitClaudeOAuthCode(
+  providerId: "claude",
+  code: string
+): Promise<ProviderOAuthCodeSubmitResult> {
+  const available = await isCommandAvailable(CLAUDE_CLI_COMMAND);
+  if (!available) {
+    throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
+  }
+
+  const normalizedCode = code.trim();
+  if (normalizedCode.length === 0) {
+    throw new Error("Authorization code is required.");
+  }
+
+  const session = activeClaudeLoginSession;
+  if (!session || session.finished) {
+    const status = await getClaudeLoggedInStatus();
+    if (status.loggedIn === true) {
+      return {
+        providerId,
+        accepted: true,
+        message: "Claude CLI is already authenticated."
+      };
+    }
+
+    throw new Error("No active Claude login session. Click Connect first, then submit the browser code.");
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    session.child.stdin.write(`${normalizedCode}\n`, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+
+  const loggedIn = await waitForClaudeLoggedIn(CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS);
+  if (loggedIn) {
+    return {
+      providerId,
+      accepted: true,
+      message: "Authorization code submitted. Claude CLI login is connected."
+    };
+  }
+
+  if (session.finished && session.exitCode !== 0) {
+    return {
+      providerId,
+      accepted: false,
+      message: "Authorization code was submitted, but Claude login did not complete. Click Connect and try again."
+    };
+  }
+
+  return {
+    providerId,
+    accepted: true,
+    message: "Authorization code submitted. Waiting for Claude CLI to finish login. Click Refresh in a few seconds."
   };
 }
 

@@ -156,6 +156,10 @@
 - optional `authUrl`: provider/device pairing URL extracted from CLI output when available.
 - optional `authCode`: one-time user/device code extracted from CLI output when available.
 - Client behavior should prefer `result.authUrl` for opening browser in remote mode and fall back to provider defaults only when missing.
+- `POST /api/providers/:providerId/oauth/submit-code` with `{ code }` -> `{ result, status }`.
+- `result` fields:
+- `providerId`, `accepted`, `message`
+- Intended for OAuth flows that require entering a browser-provided authorization code back into CLI (for example Claude callback code flows in remote mode).
 - `POST /api/providers/:providerId/oauth/sync-token` -> `{ provider, result }` where `result` includes sync message, optional token, and latest OAuth status.
 
 ## Error Model

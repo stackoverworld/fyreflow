@@ -1044,6 +1044,16 @@ export async function startProviderOAuthLogin(providerId: ProviderId) {
   );
 }
 
+export async function submitProviderOAuthCode(providerId: ProviderId, code: string) {
+  return request<{ result: { message: string; accepted: boolean }; status: ProviderOAuthStatus }>(
+    `/api/providers/${providerId}/oauth/submit-code`,
+    {
+      method: "POST",
+      body: JSON.stringify({ code })
+    }
+  );
+}
+
 export async function syncProviderOAuthToken(providerId: ProviderId) {
   return request<{
     provider: ProviderConfig;

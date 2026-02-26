@@ -144,6 +144,9 @@ export const providerUpdateSchema = z.object({
 });
 
 export const providerIdSchema = z.enum(["openai", "claude"]);
+export const providerOAuthCodeSubmitSchema = z.object({
+  code: z.string().min(1).max(4096)
+});
 
 export const mcpServerSchema = z.object({
   name: z.string().min(2).max(120),

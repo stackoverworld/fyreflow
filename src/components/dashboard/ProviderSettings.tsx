@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getProviderOAuthStatus,
   startProviderOAuthLogin,
+  submitProviderOAuthCode,
   syncProviderOAuthToken
 } from "@/lib/api";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
@@ -46,6 +47,10 @@ export function ProviderSettings({
   const [drafts, setDrafts] = useState(providers);
   const [savingId, setSavingId] = useState<ProviderId | null>(null);
   const [oauthBusyId, setOauthBusyId] = useState<ProviderId | null>(null);
+  const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<ProviderId, string>>({
+    openai: "",
+    claude: ""
+  });
   const autoSwitchedProvidersRef = useRef<Set<ProviderId>>(new Set());
   const oauthBootstrapLoadingRef = useRef<Set<ProviderId>>(new Set());
   const runtimeProbeBootstrapRef = useRef<Set<ProviderId>>(new Set());
@@ -198,6 +203,7 @@ export function ProviderSettings({
     },
     [oauthMessages, oauthStatuses]
   );
+  const connectionMode = getActiveConnectionSettings().mode;
 
   const handleStartOAuthLogin = useCallback(
     async (providerId: ProviderId) => {
@@ -257,6 +263,13 @@ export function ProviderSettings({
       try {
         const response = await startProviderOAuthLogin(providerId);
         const loginUrl = (response.result.authUrl ?? "").trim();
+        const authCode = (response.result.authCode ?? "").trim();
+        if (authCode.length > 0) {
+          setOauthCodeDrafts((current) => ({
+            ...current,
+            [providerId]: authCode
+          }));
+        }
         if (shouldOpenBrowser && loginUrl.length > 0) {
           openBrowserUrl(loginUrl);
         } else if (shouldOpenBrowser) {
@@ -292,6 +305,39 @@ export function ProviderSettings({
       }
     },
     [loadOAuthStatus, onOAuthMessageChange, pollOAuthStatus]
+  );
+
+  const handleOAuthCodeChange = useCallback((providerId: ProviderId, value: string) => {
+    setOauthCodeDrafts((current) => ({
+      ...current,
+      [providerId]: value
+    }));
+  }, []);
+
+  const handleSubmitOAuthCode = useCallback(
+    async (providerId: ProviderId) => {
+      const code = (oauthCodeDrafts[providerId] ?? "").trim();
+      if (code.length === 0) {
+        onOAuthMessageChange(providerId, "Paste the authorization code from browser first.");
+        return;
+      }
+
+      setOauthBusyId(providerId);
+      try {
+        const response = await submitProviderOAuthCode(providerId, code);
+        onOAuthMessageChange(providerId, response.result.message);
+        if (response.result.accepted) {
+          setOauthCodeDrafts((current) => ({
+            ...current,
+            [providerId]: ""
+          }));
+        }
+        await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+      } finally {
+        setOauthBusyId(null);
+      }
+    },
+    [loadOAuthStatus, oauthCodeDrafts, onOAuthMessageChange]
   );
 
   const handleSyncOAuthToken = useCallback(
@@ -363,6 +409,10 @@ export function ProviderSettings({
             onBaseUrlChange={handleBaseUrlChange}
             onDefaultModelChange={handleDefaultModelChange}
             onConnect={handleStartOAuthLogin}
+            connectionMode={connectionMode}
+            oauthCodeValue={oauthCodeDrafts[providerId] ?? ""}
+            onOAuthCodeChange={handleOAuthCodeChange}
+            onSubmitOAuthCode={handleSubmitOAuthCode}
             onImportToken={handleSyncOAuthToken}
             onRefresh={handleRefreshOAuthStatus}
             onSave={handleSaveProvider}

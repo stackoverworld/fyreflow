@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { execFileAsync, isCommandAvailable, launchDetachedAndCapture } from "../commandUtils.js";
 import { CODEX_AUTH_PATH, CODEX_CLI_COMMAND } from "../config.js";
 import type {
+  ProviderOAuthCodeSubmitResult,
   ProviderOAuthLoginResult,
   ProviderOAuthStatus,
   ProviderOAuthStatusOptions,
@@ -123,5 +124,17 @@ export async function syncOpenAiOAuthToken(providerId: "openai"): Promise<Provid
     oauthToken: token,
     message: "Imported token from Codex local auth cache.",
     status
+  };
+}
+
+export async function submitOpenAiOAuthCode(
+  providerId: "openai",
+  _code: string
+): Promise<ProviderOAuthCodeSubmitResult> {
+  return {
+    providerId,
+    accepted: false,
+    message:
+      "Codex device auth code must be entered on the browser page. If blocked, enable device code authorization in ChatGPT Settings -> Security and reconnect."
   };
 }

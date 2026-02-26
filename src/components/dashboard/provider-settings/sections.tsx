@@ -12,6 +12,7 @@ import { Badge } from "@/components/optics/badge";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
 import { Select } from "@/components/optics/select";
+import type { RuntimeConnectionMode } from "@/lib/connectionSettingsStorage";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
 import { PROVIDER_DISPLAY_LABEL, getProviderModelOptions } from "./mappers";
 import {
@@ -25,14 +26,18 @@ interface ProviderSettingsSectionProps {
   provider: ProviderConfig;
   providerIndex: number;
   status: ProviderOAuthStatus | null;
+  connectionMode: RuntimeConnectionMode;
   busy: boolean;
   saving: boolean;
+  oauthCodeValue: string;
   oauthStatusText: string;
   onAuthModeChange: (providerId: ProviderId, nextAuthMode: AuthMode) => void;
   onCredentialChange: (providerId: ProviderId, value: string) => void;
   onBaseUrlChange: (providerId: ProviderId, value: string) => void;
   onDefaultModelChange: (providerId: ProviderId, value: string) => void;
+  onOAuthCodeChange: (providerId: ProviderId, value: string) => void;
   onConnect: (providerId: ProviderId) => Promise<void>;
+  onSubmitOAuthCode: (providerId: ProviderId) => Promise<void>;
   onImportToken: (providerId: ProviderId) => Promise<void>;
   onRefresh: (providerId: ProviderId) => Promise<void>;
   onSave: (providerId: ProviderId) => Promise<void>;
@@ -43,14 +48,18 @@ export function ProviderSettingsSection({
   provider,
   providerIndex,
   status,
+  connectionMode,
   busy,
   saving,
+  oauthCodeValue,
   oauthStatusText,
   onAuthModeChange,
   onCredentialChange,
   onBaseUrlChange,
   onDefaultModelChange,
+  onOAuthCodeChange,
   onConnect,
+  onSubmitOAuthCode,
   onImportToken,
   onRefresh,
   onSave
@@ -193,6 +202,34 @@ export function ProviderSettingsSection({
                 <RefreshCw className="mr-1 h-4 w-4" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} /> Refresh
               </Button>
             </div>
+
+            {providerId === "claude" && connectionMode === "remote" ? (
+              <div className="space-y-1.5">
+                <span className="text-xs text-ink-400">Authentication code from browser</span>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    value={oauthCodeValue}
+                    onChange={(event) => {
+                      onOAuthCodeChange(providerId, event.target.value);
+                    }}
+                    placeholder="Paste code from platform.claude.com/oauth/code/callback"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={async () => {
+                      await onSubmitOAuthCode(providerId);
+                    }}
+                  >
+                    Submit code
+                  </Button>
+                </div>
+                <p className="text-xs text-ink-500">
+                  If browser shows “Authentication Code”, copy it here and submit to the remote Claude CLI session.
+                </p>
+              </div>
+            ) : null}
 
             {providerId === "claude" ? <p className="text-xs text-ink-500">In OAuth mode the dashboard uses Claude CLI auth automatically when no token is set.</p> : null}
           </div>

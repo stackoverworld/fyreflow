@@ -7,11 +7,13 @@ import {
   getCachedCodexAccessToken as getCachedCodexAccessTokenImpl,
   getOpenAiOAuthStatus,
   startOpenAiOAuthLogin,
+  submitOpenAiOAuthCode,
   syncOpenAiOAuthToken
 } from "./oauth/providers/openai.js";
 import {
   getClaudeOAuthStatus,
   startClaudeOAuthLogin,
+  submitClaudeOAuthCode,
   syncClaudeOAuthToken
 } from "./oauth/providers/claude.js";
 
@@ -57,4 +59,16 @@ export async function syncProviderOAuthToken(providerId: ProviderId): Promise<{
   }
 
   return syncClaudeOAuthToken(providerId);
+}
+
+export async function submitProviderOAuthCode(providerId: ProviderId, code: string): Promise<{
+  providerId: ProviderId;
+  accepted: boolean;
+  message: string;
+}> {
+  if (providerId === "openai") {
+    return submitOpenAiOAuthCode(providerId, code);
+  }
+
+  return submitClaudeOAuthCode(providerId, code);
 }

@@ -44,6 +44,12 @@ export interface ProviderOAuthLoginResult {
   authCode?: string;
 }
 
+export interface ProviderOAuthCodeSubmitResult {
+  providerId: ProviderId;
+  accepted: boolean;
+  message: string;
+}
+
 export interface ProviderOAuthSyncResult {
   providerId: ProviderId;
   oauthToken?: string;

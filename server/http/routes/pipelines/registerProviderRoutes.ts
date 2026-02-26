@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import { MASK_VALUE } from "../../../secureInputs.js";
 import type { PipelineRouteContext } from "./contracts.js";
 import { firstParam, sanitizeProviderConfig, sendZodError } from "./helpers.js";
-import { providerIdSchema, providerUpdateSchema } from "./schemas.js";
+import { providerIdSchema, providerOAuthCodeSubmitSchema, providerUpdateSchema } from "./schemas.js";
 
 export function registerProviderRoutes(app: Express, deps: PipelineRouteContext): void {
   app.put("/api/providers/:providerId", (request: Request, response: Response) => {
@@ -32,6 +32,18 @@ export function registerProviderRoutes(app: Express, deps: PipelineRouteContext)
     try {
       const providerId = providerIdSchema.parse(firstParam(request.params.providerId));
       const result = await deps.startProviderOAuthLogin(providerId);
+      const status = await deps.getProviderOAuthStatus(providerId);
+      response.status(202).json({ result, status });
+    } catch (error) {
+      sendZodError(error, response);
+    }
+  });
+
+  app.post("/api/providers/:providerId/oauth/submit-code", async (request: Request, response: Response) => {
+    try {
+      const providerId = providerIdSchema.parse(firstParam(request.params.providerId));
+      const { code } = providerOAuthCodeSubmitSchema.parse(request.body);
+      const result = await deps.submitProviderOAuthCode(providerId, code);
       const status = await deps.getProviderOAuthStatus(providerId);
       response.status(202).json({ result, status });
     } catch (error) {

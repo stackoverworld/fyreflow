@@ -43,11 +43,14 @@ describe("provider oauth connect model", () => {
       providerId: "claude",
       apiMessage: "Claude browser login started.",
       command: "claude auth login",
-      authUrl: "https://claude.ai/device?pairing=abc123"
+      authUrl: "https://claude.ai/device?pairing=abc123",
+      authCode: "CLAUDE-PAIR-777"
     });
 
     expect(message).toContain("Remote mode is active");
     expect(message).toContain("https://claude.ai/device?pairing=abc123");
+    expect(message).toContain("Enter one-time code");
+    expect(message).toContain("Claude authorization page");
     expect(message).toContain("\"claude auth login\"");
   });
 
@@ -61,8 +64,10 @@ describe("provider oauth connect model", () => {
     });
 
     expect(message).toContain("did not return an OAuth URL yet");
-    expect(message).toContain("ABC-123-XYZ");
+    expect(message).toContain("Enter one-time code ABC-123-XYZ on the Codex device page.");
     expect(message).toContain("Run the provider CLI login command on the remote server terminal");
+    expect(message).toContain('Enable device code authorization');
+    expect(message).toContain("ChatGPT Settings -> Security");
   });
 
   it("instructs manual remote CLI run when backend did not return auth url", () => {
@@ -77,6 +82,21 @@ describe("provider oauth connect model", () => {
     expect(message).toContain("did not return an OAuth URL yet");
     expect(message).toContain("\"claude auth login\"");
     expect(message).not.toContain("https://claude.ai/login");
+  });
+
+  it("includes codex security setting troubleshooting for remote oauth", () => {
+    const message = buildProviderOAuthStartMessage({
+      connectionMode: "remote",
+      providerId: "openai",
+      apiMessage: "Codex browser login started.",
+      command: "codex login --device-auth",
+      authUrl: "https://chatgpt.com/codex/device",
+      authCode: "CODE-1234"
+    });
+
+    expect(message).toContain("https://chatgpt.com/codex/device");
+    expect(message).toContain("Enter one-time code CODE-1234 on the Codex device page.");
+    expect(message).toContain("device code authorization");
   });
 
   it("explains that remote oauth requires cli on the server when missing", () => {
