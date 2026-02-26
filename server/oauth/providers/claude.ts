@@ -33,6 +33,7 @@ interface ActiveClaudeLoginSession {
   startedAt: number;
   finished: boolean;
   exitCode: number | null;
+  authState?: string;
 }
 
 let activeClaudeLoginSession: ActiveClaudeLoginSession | null = null;
@@ -74,7 +75,30 @@ function combineCallbackCodeAndState(code: string, state: string | undefined): s
   return `${trimmedCode}#${trimmedState}`;
 }
 
-export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string {
+function extractStateFromAuthUrl(authUrl: string | undefined): string | undefined {
+  const trimmed = (authUrl ?? "").trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const state = parsed.searchParams.get("state");
+    if (!state || state.trim().length === 0) {
+      return undefined;
+    }
+    return state.trim();
+  } catch {
+    const stateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
+    if (!stateMatch?.[1]) {
+      return undefined;
+    }
+    const state = decodeCodeValue(stateMatch[1]).trim();
+    return state.length > 0 ? state : undefined;
+  }
+}
+
+export function normalizeClaudeAuthorizationCodeInput(rawInput: string, fallbackState?: string): string {
   const trimmed = rawInput.trim();
   if (trimmed.length === 0) {
     return "";
@@ -103,7 +127,7 @@ export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string 
     }
   }
 
-  return trimmed;
+  return combineCallbackCodeAndState(trimmed, fallbackState);
 }
 
 async function writeInputToSession(session: ActiveClaudeLoginSession, value: string): Promise<void> {
@@ -207,7 +231,8 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
       capturedOutput: "",
       startedAt: Date.now(),
       finished: false,
-      exitCode: null
+      exitCode: null,
+      authState: undefined
     };
 
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -249,7 +274,14 @@ async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const status = await getClaudeLoggedInStatus();
+    const elapsed = Date.now() - startedAt;
+    const remaining = timeoutMs - elapsed;
+    if (remaining <= 0) {
+      break;
+    }
+
+    const statusTimeoutMs = Math.max(900, Math.min(2500, remaining));
+    const status = await getClaudeLoggedInStatus(statusTimeoutMs);
     if (status.loggedIn === true) {
       return true;
     }
@@ -257,13 +289,13 @@ async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
     await sleep(CLAUDE_CODE_SUBMIT_STATUS_POLL_MS);
   }
 
-  const finalStatus = await getClaudeLoggedInStatus();
+  const finalStatus = await getClaudeLoggedInStatus(1500);
   return finalStatus.loggedIn === true;
 }
 
-async function getClaudeLoggedInStatus(): Promise<ClaudeStatusJson> {
+async function getClaudeLoggedInStatus(timeoutMs = 4000): Promise<ClaudeStatusJson> {
   try {
-    const { stdout } = await execFileAsync(CLAUDE_CLI_COMMAND, ["auth", "status", "--json"], { timeout: 12000 });
+    const { stdout } = await execFileAsync(CLAUDE_CLI_COMMAND, ["auth", "status", "--json"], { timeout: timeoutMs });
     return JSON.parse(stdout) as ClaudeStatusJson;
   } catch {
     return {
@@ -283,6 +315,7 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const session = await launchClaudeLoginSession();
   const bootstrap = await waitForLoginBootstrap(session);
   const authUrl = bootstrap.authUrl;
+  session.authState = extractStateFromAuthUrl(authUrl);
   const authCode = bootstrap.authCode;
 
   const messageParts = [
@@ -312,8 +345,8 @@ export async function submitClaudeOAuthCode(
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  const normalizedCode = normalizeClaudeAuthorizationCodeInput(code);
-  if (normalizedCode.length === 0) {
+  const normalizedRaw = code.trim();
+  if (normalizedRaw.length === 0) {
     throw new Error("Authorization code is required.");
   }
 
@@ -329,6 +362,11 @@ export async function submitClaudeOAuthCode(
     }
 
     throw new Error("No active Claude login session. Click Connect first, then submit the browser code.");
+  }
+
+  const normalizedCode = normalizeClaudeAuthorizationCodeInput(normalizedRaw, session.authState);
+  if (normalizedCode.length === 0) {
+    throw new Error("Authorization code is required.");
   }
 
   if (CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput)) {

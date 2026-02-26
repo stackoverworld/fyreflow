@@ -22,4 +22,10 @@ describe("normalizeClaudeAuthorizationCodeInput", () => {
   it("returns trimmed raw input when callback code is absent", () => {
     expect(normalizeClaudeAuthorizationCodeInput("   just-some-string   ")).toBe("just-some-string");
   });
+
+  it("appends fallback state when raw code has no state suffix", () => {
+    expect(normalizeClaudeAuthorizationCodeInput("raw-code-only", "session-state-1")).toBe(
+      "raw-code-only#session-state-1"
+    );
+  });
 });
