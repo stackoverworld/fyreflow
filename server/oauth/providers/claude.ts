@@ -19,8 +19,10 @@ const CLAUDE_LOGIN_BOOTSTRAP_POLL_INTERVAL_MS = 150;
 const CLAUDE_LOGIN_BOOTSTRAP_SETTLE_MS = 700;
 const CLAUDE_LOGIN_CAPTURE_MAX_CHARS = 32 * 1024;
 const CLAUDE_LOGIN_SESSION_RETENTION_MS = 5 * 60 * 1_000;
-const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 10_000;
+const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 30_000;
 const CLAUDE_CODE_SUBMIT_STATUS_POLL_MS = 1_200;
+const CLAUDE_CODE_SUBMIT_RETRY_INTERVAL_MS = 3_000;
+const CLAUDE_CODE_SUBMIT_MAX_ATTEMPTS = 4;
 const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
 const CLAUDE_MANUAL_CODE_PROMPT_PATTERN = /(paste this into claude code|authentication code|paste.+code)/i;
 const CLAUDE_CALLBACK_CODE_PATTERN = /(?:[?&#]|^)code=([^&#\s]+)/i;
@@ -214,6 +216,22 @@ async function writeInputToSession(session: ActiveClaudeLoginSession, value: str
       resolve();
     });
   });
+}
+
+async function writeTerminalEnterToSession(session: ActiveClaudeLoginSession): Promise<void> {
+  // Some TTY flows react only to carriage return, others to newline.
+  await writeInputToSession(session, "\r");
+  await sleep(60);
+  await writeInputToSession(session, "\n");
+}
+
+async function writeAuthCodeSequenceToSession(session: ActiveClaudeLoginSession, code: string): Promise<void> {
+  // Nudge interactive prompt, then paste code, then confirm with Enter.
+  await writeTerminalEnterToSession(session);
+  await sleep(100);
+  await writeInputToSession(session, code);
+  await sleep(40);
+  await writeTerminalEnterToSession(session);
 }
 
 function extractSubmitFailureHint(output: string): string | undefined {
@@ -550,13 +568,15 @@ export async function submitClaudeOAuthCode(
     logClaudeOAuth("submit_press_enter_prompt_detected", {
       outputTail: summarizeOutputForLogs(session.capturedOutput)
     });
-    await writeInputToSession(session, "\n");
+    await writeTerminalEnterToSession(session);
     await sleep(200);
   }
 
-  await writeInputToSession(session, `${normalizedCode}\n`);
+  let submitAttempt = 1;
+  await writeAuthCodeSequenceToSession(session, normalizedCode);
   logClaudeOAuth("submit_written", {
-    normalizedHash: hashForLogs(normalizedCode)
+    normalizedHash: hashForLogs(normalizedCode),
+    submitAttempt
   });
 
   const loggedIn = await waitForClaudeLoggedIn(CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS);
@@ -600,7 +620,46 @@ export async function submitClaudeOAuthCode(
     };
   }
 
+  while (submitAttempt < CLAUDE_CODE_SUBMIT_MAX_ATTEMPTS && !session.finished) {
+    submitAttempt += 1;
+    await sleep(CLAUDE_CODE_SUBMIT_RETRY_INTERVAL_MS);
+
+    const retryHint = extractSubmitFailureHint(session.capturedOutput);
+    if (retryHint) {
+      logClaudeOAuth("submit_retry_cancelled_invalid_code", {
+        submitAttempt,
+        outputTail: summarizeOutputForLogs(session.capturedOutput)
+      });
+      return {
+        providerId,
+        accepted: false,
+        message: retryHint
+      };
+    }
+
+    await writeAuthCodeSequenceToSession(session, normalizedCode);
+    logClaudeOAuth("submit_retry_written", {
+      submitAttempt,
+      normalizedHash: hashForLogs(normalizedCode),
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
+
+    const retryLoggedIn = await waitForClaudeLoggedIn(8_000);
+    if (retryLoggedIn) {
+      logClaudeOAuth("submit_success_after_retry", {
+        submitAttempt,
+        runtimeMs: Date.now() - session.startedAt
+      });
+      return {
+        providerId,
+        accepted: true,
+        message: "Authorization code submitted. Claude CLI login is connected."
+      };
+    }
+  }
+
   logClaudeOAuth("submit_pending", {
+    submitAttempt,
     usesPtyShim: session.usesPtyShim,
     outputTail: summarizeOutputForLogs(session.capturedOutput)
   });
