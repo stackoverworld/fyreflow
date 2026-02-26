@@ -76,7 +76,7 @@ describe("AppShell fallback", () => {
       })
     );
 
-    expect(html).toContain("Backend is not available. Open Settings &gt; Remote to configure connection.");
+    expect(html).toContain("Backend is not available. Open Settings \u203A Remote to configure connection.");
   });
 
   it("shows neutral loading copy while initial state is still loading", () => {
@@ -112,7 +112,7 @@ describe("AppShell fallback", () => {
       })
     );
 
-    expect(html).toContain("Connecting to backend...");
+    expect(html).toContain("Connecting\u2026");
     expect(html).not.toContain("Backend is not available.");
   });
 });

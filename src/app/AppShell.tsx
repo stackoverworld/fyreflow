@@ -74,7 +74,7 @@ function FallbackShell({ state }: { state: AppShellProps["state"] }) {
               className="flex flex-col items-center gap-4"
             >
               <Loader2 className="h-6 w-6 animate-spin text-ember-500/70" />
-              <p className="font-body text-xs text-ink-500">Connecting\u2026</p>
+              <p className="font-body text-xs text-ink-500">{`Connecting\u2026`}</p>
             </motion.div>
           ) : (
             <motion.div

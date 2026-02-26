@@ -26,6 +26,7 @@ const CLAUDE_CALLBACK_CODE_PATTERN = /(?:[?&#]|^)code=([^&#\s]+)/i;
 const CLAUDE_CALLBACK_STATE_PATTERN = /(?:[?&#]|^)state=([^&#\s]+)/i;
 const CLAUDE_PRESS_ENTER_PROMPT_PATTERN = /press enter/i;
 const CLAUDE_INVALID_CODE_PATTERN = /oauth error:\s*invalid code|invalid code/i;
+const SCRIPT_COMMAND = "script";
 
 interface ActiveClaudeLoginSession {
   child: ChildProcessWithoutNullStreams;
@@ -221,8 +222,11 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
 
   activeClaudeLoginSession = null;
 
+  const canUseScript = await isCommandAvailable(SCRIPT_COMMAND);
+  const launchSpec = resolveClaudeLoginLaunchSpec(canUseScript);
+
   return new Promise<ActiveClaudeLoginSession>((resolve, reject) => {
-    const child = spawn(CLAUDE_CLI_COMMAND, ["auth", "login"], {
+    const child = spawn(launchSpec.command, launchSpec.args, {
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -268,6 +272,35 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
       resolve(session);
     });
   });
+}
+
+function shellEscapeForSingleQuotes(value: string): string {
+  if (value.length === 0) {
+    return "''";
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function resolveClaudeLoginLaunchSpec(canUseScript: boolean): { command: string; args: string[] } {
+  if (!canUseScript) {
+    return {
+      command: CLAUDE_CLI_COMMAND,
+      args: ["auth", "login"]
+    };
+  }
+
+  if (process.platform === "darwin" || process.platform === "freebsd") {
+    return {
+      command: SCRIPT_COMMAND,
+      args: ["-q", "/dev/null", CLAUDE_CLI_COMMAND, "auth", "login"]
+    };
+  }
+
+  const escapedClaudeCommand = shellEscapeForSingleQuotes(CLAUDE_CLI_COMMAND);
+  return {
+    command: SCRIPT_COMMAND,
+    args: ["-q", "-e", "-c", `${escapedClaudeCommand} auth login`, "/dev/null"]
+  };
 }
 
 async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
