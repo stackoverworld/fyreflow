@@ -49,8 +49,7 @@ describe("provider oauth connect model", () => {
 
     expect(message).toContain("Remote mode is active");
     expect(message).toContain("https://claude.ai/device?pairing=abc123");
-    expect(message).toContain("Enter one-time code");
-    expect(message).toContain("Claude authorization page");
+    expect(message).not.toContain("Enter one-time code");
     expect(message).toContain("\"claude auth login\"");
   });
 

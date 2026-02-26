@@ -263,13 +263,6 @@ export function ProviderSettings({
       try {
         const response = await startProviderOAuthLogin(providerId);
         const loginUrl = (response.result.authUrl ?? "").trim();
-        const authCode = (response.result.authCode ?? "").trim();
-        if (authCode.length > 0) {
-          setOauthCodeDrafts((current) => ({
-            ...current,
-            [providerId]: authCode
-          }));
-        }
         if (shouldOpenBrowser && loginUrl.length > 0) {
           openBrowserUrl(loginUrl);
         } else if (shouldOpenBrowser) {
@@ -287,8 +280,12 @@ export function ProviderSettings({
             authCode: response.result.authCode
           })
         );
-        await pollOAuthStatus(providerId);
-        await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+        void (async () => {
+          await pollOAuthStatus(providerId);
+          await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+        })().catch(() => {
+          // Keep connect flow resilient; user can refresh status manually.
+        });
       } catch (error) {
         onOAuthMessageChange(
           providerId,
@@ -326,13 +323,32 @@ export function ProviderSettings({
       try {
         const response = await submitProviderOAuthCode(providerId, code);
         onOAuthMessageChange(providerId, response.result.message);
-        if (response.result.accepted) {
+        if (response.result.accepted && response.status.loggedIn) {
           setOauthCodeDrafts((current) => ({
             ...current,
             [providerId]: ""
           }));
         }
         await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+        if (response.result.accepted && !response.status.loggedIn) {
+          void (async () => {
+            const settledStatus = await pollOAuthStatus(providerId, 12);
+            if (!settledStatus?.loggedIn) {
+              return;
+            }
+
+            setOauthCodeDrafts((current) => ({
+              ...current,
+              [providerId]: ""
+            }));
+            await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+          })().catch(() => {
+            // Silent background polling failure; manual refresh still works.
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to submit authorization code";
+        onOAuthMessageChange(providerId, message);
       } finally {
         setOauthBusyId(null);
       }

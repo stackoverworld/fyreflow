@@ -22,6 +22,7 @@ const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 25_000;
 const CLAUDE_CODE_SUBMIT_STATUS_POLL_MS = 1_200;
 const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
 const CLAUDE_MANUAL_CODE_PROMPT_PATTERN = /(paste this into claude code|authentication code|paste.+code)/i;
+const CLAUDE_CALLBACK_CODE_PATTERN = /(?:[?&#]|^)code=([^&#\s]+)/i;
 
 interface ActiveClaudeLoginSession {
   child: ChildProcessWithoutNullStreams;
@@ -45,6 +46,43 @@ function appendCapturedOutput(session: ActiveClaudeLoginSession, chunk: Buffer |
   if (session.capturedOutput.length > CLAUDE_LOGIN_CAPTURE_MAX_CHARS) {
     session.capturedOutput = session.capturedOutput.slice(-CLAUDE_LOGIN_CAPTURE_MAX_CHARS);
   }
+}
+
+function decodeCodeValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string {
+  const trimmed = rawInput.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+
+  const directMatch = CLAUDE_CALLBACK_CODE_PATTERN.exec(trimmed);
+  if (directMatch?.[1]) {
+    const extracted = decodeCodeValue(directMatch[1]).trim();
+    if (extracted.length > 0) {
+      return extracted;
+    }
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const codeParam = parsed.searchParams.get("code");
+      if (codeParam && codeParam.trim().length > 0) {
+        return codeParam.trim();
+      }
+    } catch {
+      // Ignore invalid URL parse; fallback to raw trimmed input.
+    }
+  }
+
+  return trimmed;
 }
 
 function hasPreferredClaudeAuthUrl(capturedOutput: string): boolean {
@@ -209,7 +247,6 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const messageParts = [
     "Claude browser login started.",
     authUrl ? `Open ${authUrl}.` : "",
-    authCode ? `Enter code ${authCode} in Claude Code if prompted.` : "",
     bootstrap.awaitingManualCode
       ? "If browser shows Authentication Code, copy it and submit it in this dashboard."
       : "",
@@ -234,7 +271,7 @@ export async function submitClaudeOAuthCode(
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  const normalizedCode = code.trim();
+  const normalizedCode = normalizeClaudeAuthorizationCodeInput(code);
   if (normalizedCode.length === 0) {
     throw new Error("Authorization code is required.");
   }

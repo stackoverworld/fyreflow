@@ -67,7 +67,7 @@ export function ProviderSettingsSection({
   const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const authMode: AuthMode = provider.authMode;
   const isLoggedIn = status?.loggedIn === true;
-  const canUseCli = status?.canUseCli === true;
+  const cliAvailable = status?.cliAvailable === true;
   const runtimeProbe = status?.runtimeProbe;
   const showOauthTokenInput = shouldShowOAuthTokenInput(authMode, providerId);
   const showAutoConnectedNote = shouldShowOAuthConnectedNote(provider, status);
@@ -142,7 +142,7 @@ export function ProviderSettingsSection({
                   <XCircle className="mr-1 h-3 w-3" /> Auth missing
                 </Badge>
               )}
-              {canUseCli ? <Badge variant="running">CLI ready</Badge> : <Badge variant="warning">CLI unavailable</Badge>}
+              {cliAvailable ? <Badge variant="running">CLI installed</Badge> : <Badge variant="warning">CLI missing</Badge>}
               {runtimeProbe ? (
                 <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
                   {runtimeProbe.status === "pass" ? "Runtime ready" : "Runtime issue"}
@@ -212,7 +212,7 @@ export function ProviderSettingsSection({
                     onChange={(event) => {
                       onOAuthCodeChange(providerId, event.target.value);
                     }}
-                    placeholder="Paste code from platform.claude.com/oauth/code/callback"
+                    placeholder="Paste auth code or full platform.claude.com/oauth/code/callback URL"
                   />
                   <Button
                     size="sm"
@@ -226,7 +226,7 @@ export function ProviderSettingsSection({
                   </Button>
                 </div>
                 <p className="text-xs text-ink-500">
-                  If browser shows “Authentication Code”, copy it here and submit to the remote Claude CLI session.
+                  If browser shows “Authentication Code”, paste the code here (or full callback URL) and submit it to the remote Claude CLI session.
                 </p>
               </div>
             ) : null}

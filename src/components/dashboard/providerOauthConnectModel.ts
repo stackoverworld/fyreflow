@@ -48,12 +48,8 @@ export function resolveProviderOAuthLoginUrl(providerId: ProviderId, apiAuthUrl?
 }
 
 function buildProviderAuthCodeHint(providerId: ProviderId, authCode: string): string {
-  if (authCode.length === 0) {
+  if (providerId !== "openai" || authCode.length === 0) {
     return "";
-  }
-
-  if (providerId === "claude") {
-    return `Enter one-time code ${authCode} on the Claude authorization page.`;
   }
 
   return `Enter one-time code ${authCode} on the Codex device page.`;
