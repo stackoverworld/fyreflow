@@ -55,10 +55,15 @@ export function ProviderSettings({
   const autoSwitchedProvidersRef = useRef<Set<ProviderId>>(new Set());
   const oauthBootstrapLoadingRef = useRef<Set<ProviderId>>(new Set());
   const runtimeProbeBootstrapRef = useRef<Set<ProviderId>>(new Set());
+  const oauthStatusesRef = useRef(oauthStatuses);
 
   useEffect(() => {
     setDrafts(providers);
   }, [providers]);
+
+  useEffect(() => {
+    oauthStatusesRef.current = oauthStatuses;
+  }, [oauthStatuses]);
 
   const loadOAuthStatus = useCallback(
     async (
@@ -70,13 +75,8 @@ export function ProviderSettings({
     ): Promise<ProviderOAuthStatus | null> => {
       try {
         const response = await getProviderOAuthStatus(providerId, options);
-        const previousStatus = oauthStatuses[providerId];
-        const shouldReuseRuntimeProbe =
-          options?.includeRuntimeProbe !== true &&
-          !response.status.runtimeProbe &&
-          Boolean(previousStatus?.runtimeProbe);
-
-        const nextStatus = shouldReuseRuntimeProbe
+        const previousStatus = oauthStatusesRef.current[providerId];
+        const nextStatus = !response.status.runtimeProbe && previousStatus?.runtimeProbe
           ? {
               ...response.status,
               runtimeProbe: previousStatus?.runtimeProbe
@@ -94,7 +94,7 @@ export function ProviderSettings({
         return null;
       }
     },
-    [oauthStatuses, onOAuthMessageChange, onOAuthStatusChange]
+    [onOAuthMessageChange, onOAuthStatusChange]
   );
 
   const pollOAuthStatus = useCallback(

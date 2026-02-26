@@ -214,6 +214,11 @@ export function ProviderSettingsSection({
                     onChange={(event) => {
                       onOAuthCodeChange(providerId, event.target.value);
                     }}
+                    name={`${providerId}-oauth-code`}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
                     placeholder="Paste auth code or full platform.claude.com/oauth/code/callback URL"
                   />
                   <Button

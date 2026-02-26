@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { execFileAsync, isCommandAvailable } from "../commandUtils.js";
 import { CLAUDE_CLI_COMMAND } from "../config.js";
 import type {
@@ -27,6 +28,7 @@ const CLAUDE_CALLBACK_STATE_PATTERN = /(?:[?&#]|^)state=([^&#\s]+)/i;
 const CLAUDE_PRESS_ENTER_PROMPT_PATTERN = /press enter/i;
 const CLAUDE_INVALID_CODE_PATTERN = /oauth error:\s*invalid code|invalid code/i;
 const SCRIPT_COMMAND = "script";
+const CLAUDE_OAUTH_LOG_PREFIX = "[provider-oauth][claude]";
 
 interface ActiveClaudeLoginSession {
   child: ChildProcessWithoutNullStreams;
@@ -50,6 +52,45 @@ function appendCapturedOutput(session: ActiveClaudeLoginSession, chunk: Buffer |
   session.capturedOutput = `${session.capturedOutput}${text}`;
   if (session.capturedOutput.length > CLAUDE_LOGIN_CAPTURE_MAX_CHARS) {
     session.capturedOutput = session.capturedOutput.slice(-CLAUDE_LOGIN_CAPTURE_MAX_CHARS);
+  }
+}
+
+function sanitizeForLogs(value: string): string {
+  return value
+    .replace(/(code=)[^&\s]+/gi, "$1<redacted>")
+    .replace(/(state=)[^&\s]+/gi, "$1<redacted>")
+    .replace(/[A-Za-z0-9][A-Za-z0-9_-]{16,}#[A-Za-z0-9][A-Za-z0-9_-]{3,}/g, "<auth_code_with_state:redacted>")
+    .replace(/[A-Za-z0-9][A-Za-z0-9_-]{24,}/g, "<token_like:redacted>");
+}
+
+function summarizeOutputForLogs(capturedOutput: string): string {
+  const normalized = capturedOutput.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return "";
+  }
+
+  const tail = normalized.slice(-800);
+  return sanitizeForLogs(tail);
+}
+
+function hashForLogs(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return "";
+  }
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+function logClaudeOAuth(event: string, details: Record<string, unknown>): void {
+  try {
+    console.log(
+      `${CLAUDE_OAUTH_LOG_PREFIX} ${event} ${JSON.stringify({
+        ...details,
+        ts: new Date().toISOString()
+      })}`
+    );
+  } catch {
+    // Ignore logging failures.
   }
 }
 
@@ -224,6 +265,11 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
 
   const canUseScript = await isCommandAvailable(SCRIPT_COMMAND);
   const launchSpec = resolveClaudeLoginLaunchSpec(canUseScript);
+  logClaudeOAuth("launch_start", {
+    command: launchSpec.command,
+    args: launchSpec.args,
+    canUseScript
+  });
 
   return new Promise<ActiveClaudeLoginSession>((resolve, reject) => {
     const child = spawn(launchSpec.command, launchSpec.args, {
@@ -250,6 +296,11 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
     child.once("exit", (code) => {
       session.finished = true;
       session.exitCode = code;
+      logClaudeOAuth("session_exit", {
+        exitCode: code,
+        runtimeMs: Date.now() - session.startedAt,
+        outputTail: summarizeOutputForLogs(session.capturedOutput)
+      });
       const cleanupTimer = setTimeout(() => {
         if (activeClaudeLoginSession === session) {
           activeClaudeLoginSession = null;
@@ -261,6 +312,11 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
     child.once("error", (error) => {
       session.finished = true;
       session.exitCode = 1;
+      logClaudeOAuth("session_error", {
+        error: error instanceof Error ? error.message : String(error),
+        runtimeMs: Date.now() - session.startedAt,
+        outputTail: summarizeOutputForLogs(session.capturedOutput)
+      });
       if (activeClaudeLoginSession === session) {
         activeClaudeLoginSession = null;
       }
@@ -350,10 +406,16 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const authUrl = bootstrap.authUrl;
   session.authState = extractStateFromAuthUrl(authUrl);
   const authCode = bootstrap.authCode;
+  logClaudeOAuth("start_bootstrap", {
+    authUrl: authUrl ? sanitizeForLogs(authUrl) : "",
+    hasAuthCode: typeof authCode === "string" && authCode.length > 0,
+    awaitingManualCode: bootstrap.awaitingManualCode,
+    authStateLength: session.authState?.length ?? 0
+  });
 
   const messageParts = [
     "Claude browser login started.",
-    authUrl ? `Open ${authUrl}.` : "",
+    authUrl ? "Browser authorization URL was generated." : "",
     bootstrap.awaitingManualCode
       ? "If browser shows Authentication Code, copy it and submit it in this dashboard."
       : "",
@@ -401,16 +463,36 @@ export async function submitClaudeOAuthCode(
   if (normalizedCode.length === 0) {
     throw new Error("Authorization code is required.");
   }
+  logClaudeOAuth("submit_received", {
+    rawLength: normalizedRaw.length,
+    rawHash: hashForLogs(normalizedRaw),
+    hasHashFragment: normalizedRaw.includes("#"),
+    normalizedLength: normalizedCode.length,
+    normalizedHash: hashForLogs(normalizedCode),
+    sessionFinished: session.finished,
+    sessionRuntimeMs: Date.now() - session.startedAt,
+    sessionAuthStateLength: session.authState?.length ?? 0,
+    outputTail: summarizeOutputForLogs(session.capturedOutput)
+  });
 
   if (CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput)) {
+    logClaudeOAuth("submit_press_enter_prompt_detected", {
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
     await writeInputToSession(session, "\n");
     await sleep(200);
   }
 
   await writeInputToSession(session, `${normalizedCode}\n`);
+  logClaudeOAuth("submit_written", {
+    normalizedHash: hashForLogs(normalizedCode)
+  });
 
   const loggedIn = await waitForClaudeLoggedIn(CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS);
   if (loggedIn) {
+    logClaudeOAuth("submit_success", {
+      runtimeMs: Date.now() - session.startedAt
+    });
     return {
       providerId,
       accepted: true,
@@ -420,6 +502,11 @@ export async function submitClaudeOAuthCode(
 
   if (session.finished && session.exitCode !== 0) {
     const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
+    logClaudeOAuth("submit_failed_process_exit", {
+      exitCode: session.exitCode,
+      submitFailureHint: submitFailureHint ?? "",
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
     return {
       providerId,
       accepted: false,
@@ -431,6 +518,10 @@ export async function submitClaudeOAuthCode(
 
   const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
   if (submitFailureHint) {
+    logClaudeOAuth("submit_failed_invalid_code", {
+      submitFailureHint,
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
     return {
       providerId,
       accepted: false,
@@ -438,6 +529,9 @@ export async function submitClaudeOAuthCode(
     };
   }
 
+  logClaudeOAuth("submit_pending", {
+    outputTail: summarizeOutputForLogs(session.capturedOutput)
+  });
   return {
     providerId,
     accepted: false,
