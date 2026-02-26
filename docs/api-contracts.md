@@ -150,6 +150,7 @@
 
 ## Provider OAuth Contract (2026-02-25)
 - `GET /api/providers/:providerId/oauth/status` -> `{ status }` where status includes login source, cli availability, login state, token availability, and runtime probe details.
+- Claude special-case (remote fallback): when Claude provider is in `authMode=oauth` and dashboard already has a stored `oauthToken` (for example setup-token), status is normalized to `canUseApi=true` / `tokenAvailable=true` even if Claude CLI login is missing.
 - `POST /api/providers/:providerId/oauth/start` -> `{ result, status }`.
 - `result` fields:
 - `providerId`, `command`, `message`

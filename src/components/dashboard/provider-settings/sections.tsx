@@ -69,6 +69,7 @@ export function ProviderSettingsSection({
   const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const authMode: AuthMode = provider.authMode;
   const isLoggedIn = status?.loggedIn === true;
+  const isAuthReady = status ? status.canUseApi || status.canUseCli || status.loggedIn : false;
   const cliAvailable = status?.cliAvailable === true;
   const runtimeProbe = status?.runtimeProbe;
   const showOauthTokenInput = shouldShowOAuthTokenInput(authMode, providerId);
@@ -108,20 +109,27 @@ export function ProviderSettingsSection({
         </div>
 
         {showOauthTokenInput ? (
-          <label className="block space-y-1.5">
-            <span className="flex items-center gap-1 text-xs text-ink-400">
-              {authMode === "oauth" ? <LockKeyhole className="h-3 w-3" /> : <KeyRound className="h-3 w-3" />}
-              {authMode === "oauth" ? "OAuth token (optional)" : "API key"}
-            </span>
-            <Input
-              type="password"
-              value={authMode === "oauth" ? provider.oauthToken : provider.apiKey}
-              onChange={(event) => {
-                onCredentialChange(providerId, event.target.value);
-              }}
-              placeholder={authMode === "oauth" ? "Auto-managed or paste token" : "sk-..."}
-            />
-          </label>
+          <div className="space-y-1.5">
+            <label className="block space-y-1.5">
+              <span className="flex items-center gap-1 text-xs text-ink-400">
+                {authMode === "oauth" ? <LockKeyhole className="h-3 w-3" /> : <KeyRound className="h-3 w-3" />}
+                {authMode === "oauth" ? "OAuth token / setup-token (optional)" : "API key"}
+              </span>
+              <Input
+                type="password"
+                value={authMode === "oauth" ? provider.oauthToken : provider.apiKey}
+                onChange={(event) => {
+                  onCredentialChange(providerId, event.target.value);
+                }}
+                placeholder={authMode === "oauth" ? "Auto-managed by CLI or paste setup-token (sk-ant-oat01-...)" : "sk-..."}
+              />
+            </label>
+            {providerId === "claude" && authMode === "oauth" ? (
+              <p className="text-[11px] text-ink-500">
+                Remote fallback: paste Claude setup-token here, click Save, then run without CLI browser login.
+              </p>
+            ) : null}
+          </div>
         ) : (
           <div className="space-y-1.5">
             <span className="flex items-center gap-1 text-xs text-ink-400">
@@ -135,7 +143,7 @@ export function ProviderSettingsSection({
         {authMode === "oauth" ? (
           <div className="space-y-2 pt-1">
             <div className="flex flex-wrap items-center gap-2">
-              {isLoggedIn ? (
+              {isAuthReady ? (
                 <Badge variant="success">
                   <CheckCircle2 className="mr-1 h-3 w-3" /> Auth connected
                 </Badge>

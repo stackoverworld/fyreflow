@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { oauthStatusLine } from "../../src/components/dashboard/provider-settings/validation";
+import {
+  oauthStatusLine,
+  shouldShowOAuthTokenInput
+} from "../../src/components/dashboard/provider-settings/validation";
 import type { ProviderOAuthStatus } from "../../src/lib/types";
 
 function buildStatus(message: string): ProviderOAuthStatus {
@@ -28,5 +31,16 @@ describe("oauthStatusLine", () => {
   it("uses backend status message when no explicit UI message is provided", () => {
     const line = oauthStatusLine(buildStatus("Logged in with Claude Code."), "");
     expect(line).toContain("Logged in with Claude Code.");
+  });
+});
+
+describe("shouldShowOAuthTokenInput", () => {
+  it("shows token input for Claude in OAuth mode (setup-token fallback)", () => {
+    expect(shouldShowOAuthTokenInput("oauth", "claude")).toBe(true);
+  });
+
+  it("keeps token input hidden only for providers without OAuth token support", () => {
+    expect(shouldShowOAuthTokenInput("oauth", "openai")).toBe(true);
+    expect(shouldShowOAuthTokenInput("api_key", "claude")).toBe(true);
   });
 });

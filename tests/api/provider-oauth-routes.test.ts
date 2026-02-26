@@ -96,4 +96,55 @@ describe("Provider OAuth Routes", () => {
       await cleanup();
     }
   });
+
+  it("marks Claude OAuth as API-ready when setup-token is stored in dashboard", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      store.upsertProvider("claude", {
+        authMode: "oauth",
+        oauthToken: "sk-ant-oat01-example-token"
+      });
+
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => ({
+          ...buildStatus("claude"),
+          runtimeProbe: {
+            status: "fail",
+            message: "Claude CLI is not logged in.",
+            checkedAt: "2026-02-26T03:00:01.000Z"
+          }
+        })),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("GET", "/api/providers/:providerId/oauth/status");
+      const response = await invokeRoute(handler, {
+        method: "GET",
+        params: { providerId: "claude" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.status).toEqual(
+        expect.objectContaining({
+          providerId: "claude",
+          tokenAvailable: true,
+          canUseApi: true,
+          message: "Setup token is stored in dashboard. Claude API auth is ready without CLI login."
+        })
+      );
+      expect(response.body.status.runtimeProbe).toEqual(
+        expect.objectContaining({
+          status: "pass",
+          message: "Setup token is stored in dashboard. API runtime path is available."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
 });

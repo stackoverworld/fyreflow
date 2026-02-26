@@ -47,7 +47,7 @@ export function oauthStatusLine(
 }
 
 export function shouldShowOAuthTokenInput(authMode: AuthMode, providerId: ProviderId): boolean {
-  return authMode !== "oauth" || providerId === "openai";
+  return authMode !== "oauth" || providerId === "openai" || providerId === "claude";
 }
 
 export function shouldShowOAuthConnectedNote(provider: ProviderConfig, status: ProviderOAuthStatus | null): boolean {
