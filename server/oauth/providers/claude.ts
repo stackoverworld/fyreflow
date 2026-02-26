@@ -18,11 +18,14 @@ const CLAUDE_LOGIN_BOOTSTRAP_POLL_INTERVAL_MS = 150;
 const CLAUDE_LOGIN_BOOTSTRAP_SETTLE_MS = 700;
 const CLAUDE_LOGIN_CAPTURE_MAX_CHARS = 32 * 1024;
 const CLAUDE_LOGIN_SESSION_RETENTION_MS = 5 * 60 * 1_000;
-const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 25_000;
+const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 10_000;
 const CLAUDE_CODE_SUBMIT_STATUS_POLL_MS = 1_200;
 const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
 const CLAUDE_MANUAL_CODE_PROMPT_PATTERN = /(paste this into claude code|authentication code|paste.+code)/i;
 const CLAUDE_CALLBACK_CODE_PATTERN = /(?:[?&#]|^)code=([^&#\s]+)/i;
+const CLAUDE_CALLBACK_STATE_PATTERN = /(?:[?&#]|^)state=([^&#\s]+)/i;
+const CLAUDE_PRESS_ENTER_PROMPT_PATTERN = /press enter/i;
+const CLAUDE_INVALID_CODE_PATTERN = /oauth error:\s*invalid code|invalid code/i;
 
 interface ActiveClaudeLoginSession {
   child: ChildProcessWithoutNullStreams;
@@ -56,6 +59,21 @@ function decodeCodeValue(value: string): string {
   }
 }
 
+function combineCallbackCodeAndState(code: string, state: string | undefined): string {
+  const trimmedCode = code.trim();
+  if (trimmedCode.length === 0) {
+    return "";
+  }
+  if (trimmedCode.includes("#")) {
+    return trimmedCode;
+  }
+  const trimmedState = (state ?? "").trim();
+  if (trimmedState.length === 0) {
+    return trimmedCode;
+  }
+  return `${trimmedCode}#${trimmedState}`;
+}
+
 export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string {
   const trimmed = rawInput.trim();
   if (trimmed.length === 0) {
@@ -65,8 +83,10 @@ export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string 
   const directMatch = CLAUDE_CALLBACK_CODE_PATTERN.exec(trimmed);
   if (directMatch?.[1]) {
     const extracted = decodeCodeValue(directMatch[1]).trim();
+    const stateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
+    const extractedState = stateMatch?.[1] ? decodeCodeValue(stateMatch[1]).trim() : "";
     if (extracted.length > 0) {
-      return extracted;
+      return combineCallbackCodeAndState(extracted, extractedState);
     }
   }
 
@@ -75,7 +95,8 @@ export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string 
       const parsed = new URL(trimmed);
       const codeParam = parsed.searchParams.get("code");
       if (codeParam && codeParam.trim().length > 0) {
-        return codeParam.trim();
+        const stateParam = parsed.searchParams.get("state");
+        return combineCallbackCodeAndState(codeParam.trim(), stateParam?.trim());
       }
     } catch {
       // Ignore invalid URL parse; fallback to raw trimmed input.
@@ -83,6 +104,26 @@ export function normalizeClaudeAuthorizationCodeInput(rawInput: string): string 
   }
 
   return trimmed;
+}
+
+async function writeInputToSession(session: ActiveClaudeLoginSession, value: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    session.child.stdin.write(value, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function extractSubmitFailureHint(output: string): string | undefined {
+  if (!CLAUDE_INVALID_CODE_PATTERN.test(output)) {
+    return undefined;
+  }
+
+  return "Claude rejected this authentication code. Copy the full Authentication Code from browser and submit again.";
 }
 
 function hasPreferredClaudeAuthUrl(capturedOutput: string): boolean {
@@ -290,15 +331,12 @@ export async function submitClaudeOAuthCode(
     throw new Error("No active Claude login session. Click Connect first, then submit the browser code.");
   }
 
-  await new Promise<void>((resolve, reject) => {
-    session.child.stdin.write(`${normalizedCode}\n`, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+  if (CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput)) {
+    await writeInputToSession(session, "\n");
+    await sleep(200);
+  }
+
+  await writeInputToSession(session, `${normalizedCode}\n`);
 
   const loggedIn = await waitForClaudeLoggedIn(CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS);
   if (loggedIn) {
@@ -310,17 +348,29 @@ export async function submitClaudeOAuthCode(
   }
 
   if (session.finished && session.exitCode !== 0) {
+    const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
     return {
       providerId,
       accepted: false,
-      message: "Authorization code was submitted, but Claude login did not complete. Click Connect and try again."
+      message:
+        submitFailureHint ??
+        "Authorization code was submitted, but Claude login did not complete. Click Connect and try again."
+    };
+  }
+
+  const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
+  if (submitFailureHint) {
+    return {
+      providerId,
+      accepted: false,
+      message: submitFailureHint
     };
   }
 
   return {
     providerId,
-    accepted: true,
-    message: "Authorization code submitted. Waiting for Claude CLI to finish login. Click Refresh in a few seconds."
+    accepted: false,
+    message: "Authorization code was sent, but Claude CLI is still waiting. Click Refresh or reconnect and retry."
   };
 }
 

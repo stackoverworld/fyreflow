@@ -69,6 +69,23 @@ describe("provider oauth connect model", () => {
     expect(message).toContain("ChatGPT Settings -> Security");
   });
 
+  it("avoids duplicating long auth url from backend api message in remote mode", () => {
+    const longUrl =
+      "https://claude.ai/oauth/authorize?code=true&client_id=demo&response_type=code&redirect_uri=https%3A%2F%2Fplatform.example.com%2Fcallback";
+    const truncatedStatusUrl = "https://claude.ai/oauth/authorize";
+    const message = buildProviderOAuthStartMessage({
+      connectionMode: "remote",
+      providerId: "claude",
+      apiMessage: `Claude browser login started. Open ${longUrl}.`,
+      command: "claude auth login",
+      authUrl: longUrl
+    });
+
+    expect(message).toContain("Browser login started.");
+    expect(message).toContain(truncatedStatusUrl);
+    expect(message).not.toContain("response_type=code");
+  });
+
   it("instructs manual remote CLI run when backend did not return auth url", () => {
     const message = buildProviderOAuthStartMessage({
       connectionMode: "remote",

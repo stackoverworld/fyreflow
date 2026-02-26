@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getProviderOAuthStatus,
   startProviderOAuthLogin,
@@ -47,6 +47,7 @@ export function ProviderSettings({
   const [drafts, setDrafts] = useState(providers);
   const [savingId, setSavingId] = useState<ProviderId | null>(null);
   const [oauthBusyId, setOauthBusyId] = useState<ProviderId | null>(null);
+  const [oauthSubmittingId, setOauthSubmittingId] = useState<ProviderId | null>(null);
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<ProviderId, string>>({
     openai: "",
     claude: ""
@@ -64,26 +65,42 @@ export function ProviderSettings({
       providerId: ProviderId,
       options?: {
         includeRuntimeProbe?: boolean;
+        preserveMessage?: boolean;
       }
     ): Promise<ProviderOAuthStatus | null> => {
       try {
         const response = await getProviderOAuthStatus(providerId, options);
-        onOAuthStatusChange(providerId, response.status);
-        onOAuthMessageChange(providerId, response.status.message);
-        return response.status;
+        const previousStatus = oauthStatuses[providerId];
+        const shouldReuseRuntimeProbe =
+          options?.includeRuntimeProbe !== true &&
+          !response.status.runtimeProbe &&
+          Boolean(previousStatus?.runtimeProbe);
+
+        const nextStatus = shouldReuseRuntimeProbe
+          ? {
+              ...response.status,
+              runtimeProbe: previousStatus?.runtimeProbe
+            }
+          : response.status;
+
+        onOAuthStatusChange(providerId, nextStatus);
+        if (!options?.preserveMessage) {
+          onOAuthMessageChange(providerId, nextStatus.message);
+        }
+        return nextStatus;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load OAuth status";
         onOAuthMessageChange(providerId, message);
         return null;
       }
     },
-    [onOAuthMessageChange, onOAuthStatusChange]
+    [oauthStatuses, onOAuthMessageChange, onOAuthStatusChange]
   );
 
   const pollOAuthStatus = useCallback(
     async (providerId: ProviderId, attempts = 18): Promise<ProviderOAuthStatus | null> => {
       for (let index = 0; index < attempts; index += 1) {
-        const status = await loadOAuthStatus(providerId);
+        const status = await loadOAuthStatus(providerId, { preserveMessage: true });
         if (status?.loggedIn) {
           return status;
         }
@@ -93,7 +110,7 @@ export function ProviderSettings({
         });
       }
 
-      return loadOAuthStatus(providerId);
+      return loadOAuthStatus(providerId, { preserveMessage: true });
     },
     [loadOAuthStatus]
   );
@@ -282,7 +299,10 @@ export function ProviderSettings({
         );
         void (async () => {
           await pollOAuthStatus(providerId);
-          await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
+          await loadOAuthStatus(providerId, {
+            includeRuntimeProbe: true,
+            preserveMessage: true
+          });
         })().catch(() => {
           // Keep connect flow resilient; user can refresh status manually.
         });
@@ -296,7 +316,7 @@ export function ProviderSettings({
           })
         );
         closePendingWindow();
-        await loadOAuthStatus(providerId);
+        await loadOAuthStatus(providerId, { preserveMessage: true });
       } finally {
         setOauthBusyId(null);
       }
@@ -320,17 +340,21 @@ export function ProviderSettings({
       }
 
       setOauthBusyId(providerId);
+      setOauthSubmittingId(providerId);
       try {
         const response = await submitProviderOAuthCode(providerId, code);
+        const statusAfterSubmit = await loadOAuthStatus(providerId, {
+          includeRuntimeProbe: true,
+          preserveMessage: true
+        });
         onOAuthMessageChange(providerId, response.result.message);
-        if (response.result.accepted && response.status.loggedIn) {
+        if (response.result.accepted && statusAfterSubmit?.loggedIn) {
           setOauthCodeDrafts((current) => ({
             ...current,
             [providerId]: ""
           }));
         }
-        await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
-        if (response.result.accepted && !response.status.loggedIn) {
+        if (response.result.accepted && !statusAfterSubmit?.loggedIn) {
           void (async () => {
             const settledStatus = await pollOAuthStatus(providerId, 12);
             if (!settledStatus?.loggedIn) {
@@ -350,10 +374,11 @@ export function ProviderSettings({
         const message = error instanceof Error ? error.message : "Failed to submit authorization code";
         onOAuthMessageChange(providerId, message);
       } finally {
+        setOauthSubmittingId(null);
         setOauthBusyId(null);
       }
     },
-    [loadOAuthStatus, oauthCodeDrafts, onOAuthMessageChange]
+    [loadOAuthStatus, oauthCodeDrafts, onOAuthMessageChange, pollOAuthStatus]
   );
 
   const handleSyncOAuthToken = useCallback(
@@ -402,8 +427,11 @@ export function ProviderSettings({
     },
     [drafts, loadOAuthStatus, onSaveProvider]
   );
-
-  const busy = useMemo(() => savingId !== null || oauthBusyId !== null, [oauthBusyId, savingId]);
+  const isProviderBusy = useCallback(
+    (providerId: ProviderId) =>
+      savingId === providerId || oauthBusyId === providerId || oauthSubmittingId === providerId,
+    [oauthBusyId, oauthSubmittingId, savingId]
+  );
 
   return (
     <div>
@@ -418,8 +446,9 @@ export function ProviderSettings({
             provider={provider}
             status={oauthStatuses[providerId]}
             oauthStatusText={buildOAuthStatusText(providerId)}
-            busy={busy}
+            busy={isProviderBusy(providerId)}
             saving={savingId === providerId}
+            submittingOAuthCode={oauthSubmittingId === providerId}
             onAuthModeChange={handleAuthModeChange}
             onCredentialChange={handleCredentialChange}
             onBaseUrlChange={handleBaseUrlChange}

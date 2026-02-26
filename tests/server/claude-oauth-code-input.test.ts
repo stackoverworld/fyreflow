@@ -10,12 +10,12 @@ describe("normalizeClaudeAuthorizationCodeInput", () => {
   it("extracts code from full callback url", () => {
     const input =
       "https://platform.claude.com/oauth/code/callback?code=abc123%2Bz&state=state-value";
-    expect(normalizeClaudeAuthorizationCodeInput(input)).toBe("abc123+z");
+    expect(normalizeClaudeAuthorizationCodeInput(input)).toBe("abc123+z#state-value");
   });
 
   it("extracts code from raw query payload", () => {
     expect(normalizeClaudeAuthorizationCodeInput("code=token-value-1&state=foo")).toBe(
-      "token-value-1"
+      "token-value-1#foo"
     );
   });
 

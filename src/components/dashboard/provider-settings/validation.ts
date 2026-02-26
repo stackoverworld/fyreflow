@@ -37,6 +37,12 @@ export function oauthStatusLine(
     return fallbackMessage || "Checking status...";
   }
 
+  const explicitMessage = fallbackMessage.trim();
+  const statusMessage = status.message.trim();
+  if (explicitMessage.length > 0 && explicitMessage !== statusMessage) {
+    return `${explicitMessage} Last checked ${new Date(status.checkedAt).toLocaleTimeString()}.`;
+  }
+
   return `${status.message} Last checked ${new Date(status.checkedAt).toLocaleTimeString()}.`;
 }
 

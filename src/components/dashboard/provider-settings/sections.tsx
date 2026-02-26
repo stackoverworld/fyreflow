@@ -29,6 +29,7 @@ interface ProviderSettingsSectionProps {
   connectionMode: RuntimeConnectionMode;
   busy: boolean;
   saving: boolean;
+  submittingOAuthCode: boolean;
   oauthCodeValue: string;
   oauthStatusText: string;
   onAuthModeChange: (providerId: ProviderId, nextAuthMode: AuthMode) => void;
@@ -51,6 +52,7 @@ export function ProviderSettingsSection({
   connectionMode,
   busy,
   saving,
+  submittingOAuthCode,
   oauthCodeValue,
   oauthStatusText,
   onAuthModeChange,
@@ -152,15 +154,15 @@ export function ProviderSettingsSection({
               )}
             </div>
 
-            <p className="text-xs text-ink-500">{oauthStatusText}</p>
-            {status?.cliCommand ? <p className="text-xs text-ink-600">CLI command: {status.cliCommand}</p> : null}
+            <p className="text-xs text-ink-500 break-words">{oauthStatusText}</p>
+            {status?.cliCommand ? <p className="text-xs text-ink-600 break-all">CLI command: {status.cliCommand}</p> : null}
             {runtimeProbe ? (
-              <p className={runtimeProbe.status === "pass" ? "text-xs text-ink-500" : "text-xs text-red-400"}>
+              <p className={runtimeProbe.status === "pass" ? "text-xs text-ink-500 break-words" : "text-xs text-red-400 break-words"}>
                 {runtimeProbe.message}
                 {runtimeProbe.latencyMs !== undefined ? ` (${runtimeProbe.latencyMs}ms)` : ""}
               </p>
             ) : (
-              <p className="text-xs text-ink-600">
+              <p className="text-xs text-ink-600 break-words">
                 Runtime probe was not executed yet. Click Refresh to validate real run capability.
               </p>
             )}
@@ -222,7 +224,7 @@ export function ProviderSettingsSection({
                       await onSubmitOAuthCode(providerId);
                     }}
                   >
-                    Submit code
+                    {submittingOAuthCode ? "Submitting..." : "Submit code"}
                   </Button>
                 </div>
                 <p className="text-xs text-ink-500">

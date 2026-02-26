@@ -30,6 +30,33 @@ function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function formatLoginUrlForStatus(rawUrl: string): string {
+  const normalized = normalizeWhitespace(rawUrl);
+  if (normalized.length <= 96 && !/[?&](redirect_uri|response_type|code_challenge|state)=/i.test(normalized)) {
+    return normalized;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return `${normalized.slice(0, 137)}...`;
+  }
+}
+
+function extractRemoteStartPrefix(apiMessage: string): string {
+  const normalized = normalizeWhitespace(apiMessage);
+  if (normalized.length === 0) {
+    return "";
+  }
+
+  if (/browser login started/i.test(normalized)) {
+    return "Browser login started.";
+  }
+
+  return "";
+}
+
 export function shouldOpenProviderOAuthBrowser(connectionMode: RuntimeConnectionMode): boolean {
   return connectionMode === "remote";
 }
@@ -78,16 +105,18 @@ export function buildProviderOAuthStartMessage(args: BuildProviderOAuthStartMess
       : "Run the provider CLI login command on the remote server terminal if login is still pending.";
   const remoteLoginHint =
     loginUrl.length > 0
-      ? `Open ${PROVIDER_LABEL[args.providerId]} login in this browser: ${loginUrl}.`
+      ? `Open ${PROVIDER_LABEL[args.providerId]} login in this browser: ${formatLoginUrlForStatus(loginUrl)}.`
       : command.length > 0
         ? `Remote server did not return an OAuth URL yet. Run "${command}" on the remote server terminal and open the URL it prints.`
         : "Remote server did not return an OAuth URL yet. Run the provider CLI login command on the remote server terminal and open the URL it prints.";
   const codeHint = buildProviderAuthCodeHint(args.providerId, authCode);
   const troubleshootingHint = buildProviderRemoteTroubleshootingHint(args.providerId);
-  const prefix = apiMessage.length > 0 ? `${apiMessage} ` : "";
+  const remoteStartPrefix = extractRemoteStartPrefix(apiMessage);
 
   const remoteParts = [
-    `${prefix}Remote mode is active, so the server cannot open a browser tab on this device.`,
+    [remoteStartPrefix, "Remote mode is active, so the server cannot open a browser tab on this device."].filter(
+      (value) => value.length > 0
+    ).join(" "),
     remoteLoginHint,
     codeHint,
     remoteCommandHint,
