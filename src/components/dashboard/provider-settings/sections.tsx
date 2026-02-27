@@ -137,7 +137,7 @@ export function ProviderSettingsSection({
   const showAutoConnectedNote = shouldShowOAuthConnectedNote(provider, status);
   const isRemoteMode = connectionMode === "remote";
   const saveButtonLabel = saving ? "Saving..." : hasUnsavedChanges ? "Save changes" : "Saved";
-  const hasAuthCode = (pendingConnect?.authCode ?? "").length > 0;
+  const hasAuthCode = providerId === "openai" && (pendingConnect?.authCode ?? "").length > 0;
   const hasAuthUrl = !hasAuthCode && isRemoteMode && (pendingConnect?.authUrl ?? "").length > 0;
 
   return (

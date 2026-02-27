@@ -17,6 +17,7 @@ import {
   hasProviderDraftChanges,
   isLikelyClaudeSetupToken,
   oauthStatusLine,
+  shouldPersistClaudeTokenAfterSubmitFailure,
   shouldAutoSwitchToOAuth
 } from "./provider-settings/validation";
 import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
@@ -394,9 +395,49 @@ export function ProviderSettings({
 
         if (shouldSubmitClaudeBrowserCode) {
           const response = await submitProviderOAuthCode(providerId, oauthValue);
-          onOAuthMessageChange(providerId, response.result.message);
-          setDrafts((current) => setProviderCredential(current, providerId, "oauth", ""));
-          await loadOAuthStatus(providerId, {
+          const submitMessage =
+            typeof response.result.message === "string" && response.result.message.trim().length > 0
+              ? response.result.message.trim()
+              : "Authorization code processing did not complete.";
+
+          if (response.result.accepted) {
+            onOAuthMessageChange(providerId, submitMessage);
+            setDrafts((current) => setProviderCredential(current, providerId, "oauth", ""));
+            setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
+            await loadOAuthStatus(providerId, { preserveMessage: true });
+            void loadOAuthStatus(providerId, {
+              includeRuntimeProbe: true,
+              preserveMessage: true
+            });
+            return;
+          }
+
+          if (shouldPersistClaudeTokenAfterSubmitFailure(submitMessage, oauthValue)) {
+            await onSaveProvider(providerId, {
+              authMode: "oauth",
+              oauthToken: oauthValue
+            });
+            onOAuthMessageChange(
+              providerId,
+              `${submitMessage} Saved as dashboard token for API auth fallback.`
+            );
+            setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
+            await loadOAuthStatus(providerId, { preserveMessage: true });
+            void loadOAuthStatus(providerId, {
+              includeRuntimeProbe: true,
+              preserveMessage: true
+            });
+            return;
+          }
+
+          onOAuthMessageChange(
+            providerId,
+            providerId === "claude" && !isLikelyClaudeSetupToken(oauthValue)
+              ? `${submitMessage} Browser auth code cannot be used as API token. Paste Claude setup-token (sk-ant-oat...) and save.`
+              : submitMessage
+          );
+          await loadOAuthStatus(providerId, { preserveMessage: true });
+          void loadOAuthStatus(providerId, {
             includeRuntimeProbe: true,
             preserveMessage: true
           });
@@ -405,6 +446,10 @@ export function ProviderSettings({
 
         await onSaveProvider(providerId, provider);
         await loadOAuthStatus(providerId);
+        void loadOAuthStatus(providerId, {
+          includeRuntimeProbe: true,
+          preserveMessage: true
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to save provider";
         onOAuthMessageChange(providerId, message);

@@ -15,10 +15,22 @@ const DEFAULT_PROVIDER_API_BACKOFF_MS = 1_000;
 const MAX_PROVIDER_API_BACKOFF_MS = 20_000;
 const MAX_RETRY_AFTER_MS = 60_000;
 
+function isClaudeSetupToken(value: string): boolean {
+  return /^sk-ant-oat/i.test(value.trim());
+}
+
 function credentialFromProvider(provider: ProviderConfig): string | undefined {
   const isUsableStoredCredential = (value: string): boolean => {
     const trimmed = value.trim();
-    return trimmed.length > 0 && !isEncryptedSecret(trimmed);
+    if (trimmed.length === 0 || isEncryptedSecret(trimmed)) {
+      return false;
+    }
+
+    if (provider.id === "claude" && provider.authMode === "oauth") {
+      return isClaudeSetupToken(trimmed);
+    }
+
+    return true;
   };
 
   if (provider.authMode === "oauth") {
@@ -33,6 +45,19 @@ function hasEncryptedPlaceholderCredential(provider: ProviderConfig): boolean {
     return isEncryptedSecret(provider.oauthToken.trim());
   }
   return isEncryptedSecret(provider.apiKey.trim());
+}
+
+function hasInvalidClaudeOauthCredential(provider: ProviderConfig): boolean {
+  if (provider.id !== "claude" || provider.authMode !== "oauth") {
+    return false;
+  }
+
+  const token = provider.oauthToken.trim();
+  if (token.length === 0 || isEncryptedSecret(token)) {
+    return false;
+  }
+
+  return !isClaudeSetupToken(token);
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
@@ -250,6 +275,12 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
     if (hasEncryptedPlaceholderCredential(effectiveInput.provider)) {
       throw new Error(
         "Stored provider credential cannot be decrypted. Verify DASHBOARD_SECRETS_KEY and persistent backend data volume, then reconnect provider auth."
+      );
+    }
+
+    if (hasInvalidClaudeOauthCredential(effectiveInput.provider)) {
+      throw new Error(
+        "Stored Claude OAuth value is not a setup-token. Paste Claude setup-token (sk-ant-oat...) in Provider Auth and save."
       );
     }
 

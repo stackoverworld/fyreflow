@@ -4,6 +4,7 @@ import {
   hasProviderDraftChanges,
   isLikelyClaudeSetupToken,
   oauthStatusLine,
+  shouldPersistClaudeTokenAfterSubmitFailure,
   shouldShowOAuthTokenInput
 } from "../../src/components/dashboard/provider-settings/validation";
 import type { ProviderConfig, ProviderOAuthStatus } from "../../src/lib/types";
@@ -82,5 +83,34 @@ describe("isLikelyClaudeSetupToken", () => {
 
   it("does not flag non setup-token browser code", () => {
     expect(isLikelyClaudeSetupToken("abc123#state-1")).toBe(false);
+  });
+});
+
+describe("shouldPersistClaudeTokenAfterSubmitFailure", () => {
+  it("returns true for no-manual-prompt submit message", () => {
+    expect(
+      shouldPersistClaudeTokenAfterSubmitFailure(
+        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes.",
+        "sk-ant-oat01-example"
+      )
+    ).toBe(true);
+  });
+
+  it("returns false for invalid-code message", () => {
+    expect(
+      shouldPersistClaudeTokenAfterSubmitFailure(
+        "Claude rejected this authentication code. Copy the full Authentication Code from browser and submit again.",
+        "sk-ant-oat01-example"
+      )
+    ).toBe(false);
+  });
+
+  it("returns false for non setup-token even when message suggests setup-token fallback", () => {
+    expect(
+      shouldPersistClaudeTokenAfterSubmitFailure(
+        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes.",
+        "XADbhD5WjGH0ORuYcWLea#state"
+      )
+    ).toBe(false);
   });
 });

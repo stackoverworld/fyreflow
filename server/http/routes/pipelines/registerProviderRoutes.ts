@@ -6,6 +6,10 @@ import type { PipelineRouteContext } from "./contracts.js";
 import { firstParam, sanitizeProviderConfig, sendZodError } from "./helpers.js";
 import { providerIdSchema, providerOAuthCodeSubmitSchema, providerUpdateSchema } from "./schemas.js";
 
+function isClaudeSetupToken(value: string): boolean {
+  return /^sk-ant-oat/i.test(value.trim());
+}
+
 function withStoredClaudeSetupTokenStatus(
   deps: PipelineRouteContext,
   providerId: "openai" | "claude",
@@ -27,6 +31,15 @@ function withStoredClaudeSetupTokenStatus(
       canUseApi: false,
       message:
         "Stored setup token cannot be decrypted. Keep DASHBOARD_SECRETS_KEY stable and persist backend data volume, then reconnect."
+    };
+  }
+
+  if (!isClaudeSetupToken(provider.oauthToken)) {
+    return {
+      ...status,
+      tokenAvailable: false,
+      canUseApi: false,
+      message: "Stored OAuth value is not a Claude setup-token. Paste setup-token (sk-ant-oat...) and save."
     };
   }
 

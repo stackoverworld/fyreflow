@@ -134,4 +134,21 @@ describe("executeProviderStep fast-mode gating", () => {
     expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
     expect(mocks.executeViaCli).not.toHaveBeenCalled();
   });
+
+  it("fails fast when Claude OAuth value is not a setup-token", async () => {
+    await expect(
+      executeProviderStep({
+        provider: createProvider({
+          authMode: "oauth",
+          oauthToken: "XADbhD5WjGH0ORuYcWlealQ#QouSHToVDbDZTQDEMnhGk88"
+        }),
+        step: createStep({ fastMode: false }),
+        context: "ctx",
+        task: "task"
+      })
+    ).rejects.toThrow("Stored Claude OAuth value is not a setup-token");
+
+    expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
+    expect(mocks.executeViaCli).not.toHaveBeenCalled();
+  });
 });

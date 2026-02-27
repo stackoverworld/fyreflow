@@ -70,3 +70,20 @@ export function hasProviderDraftChanges(
 export function isLikelyClaudeSetupToken(value: string): boolean {
   return /^sk-ant-oat/i.test(value.trim());
 }
+
+export function shouldPersistClaudeTokenAfterSubmitFailure(message: string, tokenCandidate: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  const shouldFallbackPersist =
+    normalized.includes("did not request manual authentication code input") ||
+    normalized.includes("use setup-token in dashboard");
+
+  if (!shouldFallbackPersist) {
+    return false;
+  }
+
+  return isLikelyClaudeSetupToken(tokenCandidate);
+}
