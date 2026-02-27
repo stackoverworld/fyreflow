@@ -14,6 +14,8 @@ import {
   setProviderField
 } from "./provider-settings/mappers";
 import {
+  hasProviderDraftChanges,
+  isLikelyClaudeSetupToken,
   oauthStatusLine,
   shouldAutoSwitchToOAuth
 } from "./provider-settings/validation";
@@ -47,11 +49,6 @@ export function ProviderSettings({
   const [drafts, setDrafts] = useState(providers);
   const [savingId, setSavingId] = useState<ProviderId | null>(null);
   const [oauthBusyId, setOauthBusyId] = useState<ProviderId | null>(null);
-  const [oauthSubmittingId, setOauthSubmittingId] = useState<ProviderId | null>(null);
-  const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<ProviderId, string>>({
-    openai: "",
-    claude: ""
-  });
   const autoSwitchedProvidersRef = useRef<Set<ProviderId>>(new Set());
   const oauthBootstrapLoadingRef = useRef<Set<ProviderId>>(new Set());
   const runtimeProbeBootstrapRef = useRef<Set<ProviderId>>(new Set());
@@ -324,63 +321,6 @@ export function ProviderSettings({
     [loadOAuthStatus, onOAuthMessageChange, pollOAuthStatus]
   );
 
-  const handleOAuthCodeChange = useCallback((providerId: ProviderId, value: string) => {
-    setOauthCodeDrafts((current) => ({
-      ...current,
-      [providerId]: value
-    }));
-  }, []);
-
-  const handleSubmitOAuthCode = useCallback(
-    async (providerId: ProviderId) => {
-      const code = (oauthCodeDrafts[providerId] ?? "").trim();
-      if (code.length === 0) {
-        onOAuthMessageChange(providerId, "Paste the authorization code from browser first.");
-        return;
-      }
-
-      setOauthBusyId(providerId);
-      setOauthSubmittingId(providerId);
-      try {
-        const response = await submitProviderOAuthCode(providerId, code);
-        const statusAfterSubmit = await loadOAuthStatus(providerId, {
-          includeRuntimeProbe: true,
-          preserveMessage: true
-        });
-        onOAuthMessageChange(providerId, response.result.message);
-        if (response.result.accepted && statusAfterSubmit?.loggedIn) {
-          setOauthCodeDrafts((current) => ({
-            ...current,
-            [providerId]: ""
-          }));
-        }
-        if (response.result.accepted && !statusAfterSubmit?.loggedIn) {
-          void (async () => {
-            const settledStatus = await pollOAuthStatus(providerId, 12);
-            if (!settledStatus?.loggedIn) {
-              return;
-            }
-
-            setOauthCodeDrafts((current) => ({
-              ...current,
-              [providerId]: ""
-            }));
-            await loadOAuthStatus(providerId, { includeRuntimeProbe: true });
-          })().catch(() => {
-            // Silent background polling failure; manual refresh still works.
-          });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to submit authorization code";
-        onOAuthMessageChange(providerId, message);
-      } finally {
-        setOauthSubmittingId(null);
-        setOauthBusyId(null);
-      }
-    },
-    [loadOAuthStatus, oauthCodeDrafts, onOAuthMessageChange, pollOAuthStatus]
-  );
-
   const handleSyncOAuthToken = useCallback(
     async (providerId: ProviderId) => {
       setOauthBusyId(providerId);
@@ -419,24 +359,47 @@ export function ProviderSettings({
       const provider = drafts[providerId];
       setSavingId(providerId);
       try {
+        const oauthValue = provider.authMode === "oauth" ? provider.oauthToken.trim() : "";
+        const shouldSubmitClaudeBrowserCode =
+          providerId === "claude" &&
+          provider.authMode === "oauth" &&
+          oauthValue.length > 0 &&
+          !isLikelyClaudeSetupToken(oauthValue);
+
+        if (shouldSubmitClaudeBrowserCode) {
+          const response = await submitProviderOAuthCode(providerId, oauthValue);
+          onOAuthMessageChange(providerId, response.result.message);
+          setDrafts((current) => setProviderCredential(current, providerId, "oauth", ""));
+          await loadOAuthStatus(providerId, {
+            includeRuntimeProbe: true,
+            preserveMessage: true
+          });
+          return;
+        }
+
         await onSaveProvider(providerId, provider);
         await loadOAuthStatus(providerId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to save provider";
+        onOAuthMessageChange(providerId, message);
       } finally {
         setSavingId(null);
       }
     },
-    [drafts, loadOAuthStatus, onSaveProvider]
+    [drafts, loadOAuthStatus, onOAuthMessageChange, onSaveProvider]
   );
   const isProviderBusy = useCallback(
-    (providerId: ProviderId) =>
-      savingId === providerId || oauthBusyId === providerId || oauthSubmittingId === providerId,
-    [oauthBusyId, oauthSubmittingId, savingId]
+    (providerId: ProviderId) => savingId === providerId || oauthBusyId === providerId,
+    [oauthBusyId, savingId]
   );
 
   return (
     <div>
       {PROVIDER_ORDER.map((providerId, providerIndex) => {
         const provider = drafts[providerId];
+        const savedProvider = providers[providerId];
+        const hasUnsavedChanges =
+          provider && savedProvider ? hasProviderDraftChanges(provider, savedProvider) : false;
 
         return (
           <ProviderSettingsSection
@@ -446,18 +409,15 @@ export function ProviderSettings({
             provider={provider}
             status={oauthStatuses[providerId]}
             oauthStatusText={buildOAuthStatusText(providerId)}
+            hasUnsavedChanges={hasUnsavedChanges}
             busy={isProviderBusy(providerId)}
             saving={savingId === providerId}
-            submittingOAuthCode={oauthSubmittingId === providerId}
             onAuthModeChange={handleAuthModeChange}
             onCredentialChange={handleCredentialChange}
             onBaseUrlChange={handleBaseUrlChange}
             onDefaultModelChange={handleDefaultModelChange}
             onConnect={handleStartOAuthLogin}
             connectionMode={connectionMode}
-            oauthCodeValue={oauthCodeDrafts[providerId] ?? ""}
-            onOAuthCodeChange={handleOAuthCodeChange}
-            onSubmitOAuthCode={handleSubmitOAuthCode}
             onImportToken={handleSyncOAuthToken}
             onRefresh={handleRefreshOAuthStatus}
             onSave={handleSaveProvider}

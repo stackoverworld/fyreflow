@@ -134,9 +134,9 @@ test.describe("Critical AI Regression Flows", () => {
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 
     await page.getByRole("button", { name: "Provider Auth" }).click();
-    const openAiSection = page.locator("section", { hasText: "OpenAI / Codex" }).first();
+    const openAiSection = page.getByTestId("provider-settings-openai");
     await openAiSection.getByLabel("Base URL").fill("https://api.openai.com/v1/mock");
-    await openAiSection.getByRole("button", { name: "Save" }).click();
+    await openAiSection.getByRole("button", { name: "Save changes" }).click();
 
     await expect(page.getByText("OpenAI / Codex settings saved.")).toBeVisible();
   });
@@ -158,8 +158,8 @@ test.describe("Critical AI Regression Flows", () => {
     await page.getByRole("button", { name: "Provider Auth" }).click();
 
     const popupPromise = context.waitForEvent("page");
-    const claudeSection = page.locator("section", { hasText: "Anthropic" }).first();
-    await claudeSection.getByRole("button", { name: "Connect", exact: true }).click();
+    const claudeSection = page.getByTestId("provider-settings-claude");
+    await claudeSection.getByRole("button", { name: "Connect CLI", exact: true }).click();
 
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");

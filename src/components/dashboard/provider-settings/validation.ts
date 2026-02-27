@@ -53,3 +53,20 @@ export function shouldShowOAuthTokenInput(authMode: AuthMode, providerId: Provid
 export function shouldShowOAuthConnectedNote(provider: ProviderConfig, status: ProviderOAuthStatus | null): boolean {
   return provider.authMode === "api_key" && status?.loggedIn === true && provider.apiKey.trim().length === 0;
 }
+
+export function hasProviderDraftChanges(
+  draft: ProviderConfig,
+  saved: ProviderConfig
+): boolean {
+  return (
+    draft.authMode !== saved.authMode ||
+    draft.apiKey !== saved.apiKey ||
+    draft.oauthToken !== saved.oauthToken ||
+    draft.baseUrl !== saved.baseUrl ||
+    draft.defaultModel !== saved.defaultModel
+  );
+}
+
+export function isLikelyClaudeSetupToken(value: string): boolean {
+  return /^sk-ant-oat/i.test(value.trim());
+}

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasProviderDraftChanges,
+  isLikelyClaudeSetupToken,
   oauthStatusLine,
   shouldShowOAuthTokenInput
 } from "../../src/components/dashboard/provider-settings/validation";
-import type { ProviderOAuthStatus } from "../../src/lib/types";
+import type { ProviderConfig, ProviderOAuthStatus } from "../../src/lib/types";
 
 function buildStatus(message: string): ProviderOAuthStatus {
   return {
@@ -18,6 +20,20 @@ function buildStatus(message: string): ProviderOAuthStatus {
     canUseCli: false,
     message,
     checkedAt: "2026-02-26T05:00:00.000Z"
+  };
+}
+
+function buildProvider(partial: Partial<ProviderConfig> = {}): ProviderConfig {
+  return {
+    id: "claude",
+    label: "Anthropic",
+    authMode: "oauth",
+    apiKey: "",
+    oauthToken: "",
+    baseUrl: "https://api.anthropic.com/v1",
+    defaultModel: "claude-sonnet-4-6",
+    updatedAt: "2026-02-26T05:00:00.000Z",
+    ...partial
   };
 }
 
@@ -42,5 +58,29 @@ describe("shouldShowOAuthTokenInput", () => {
   it("keeps token input hidden only for providers without OAuth token support", () => {
     expect(shouldShowOAuthTokenInput("oauth", "openai")).toBe(true);
     expect(shouldShowOAuthTokenInput("api_key", "claude")).toBe(true);
+  });
+});
+
+describe("hasProviderDraftChanges", () => {
+  it("returns false when editable provider fields are unchanged", () => {
+    const saved = buildProvider({ oauthToken: "[secure]" });
+    const draft = buildProvider({ oauthToken: "[secure]" });
+    expect(hasProviderDraftChanges(draft, saved)).toBe(false);
+  });
+
+  it("returns true when auth mode or credentials are edited", () => {
+    const saved = buildProvider({ authMode: "api_key", apiKey: "" });
+    const draft = buildProvider({ authMode: "oauth", oauthToken: "sk-ant-oat01-updated" });
+    expect(hasProviderDraftChanges(draft, saved)).toBe(true);
+  });
+});
+
+describe("isLikelyClaudeSetupToken", () => {
+  it("detects setup-token prefix", () => {
+    expect(isLikelyClaudeSetupToken("sk-ant-oat01-example")).toBe(true);
+  });
+
+  it("does not flag non setup-token browser code", () => {
+    expect(isLikelyClaudeSetupToken("abc123#state-1")).toBe(false);
   });
 });

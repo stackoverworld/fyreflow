@@ -26,7 +26,7 @@ function withStoredClaudeSetupTokenStatus(
       ? {
           ...status.runtimeProbe,
           status: "pass" as const,
-          message: "Setup token is stored in dashboard. API runtime path is available."
+          message: "Setup token is stored in dashboard. API path will be validated on first request."
         }
       : status.runtimeProbe;
 
@@ -36,7 +36,7 @@ function withStoredClaudeSetupTokenStatus(
     canUseApi: true,
     message: status.loggedIn
       ? status.message
-      : "Setup token is stored in dashboard. Claude API auth is ready without CLI login.",
+      : "Setup token is stored in dashboard. Save changes and run once to validate token-based API auth.",
     ...(runtimeProbe ? { runtimeProbe } : {})
   };
 }

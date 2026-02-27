@@ -114,4 +114,56 @@ describe("API runner streaming mode", () => {
     expect(logs.some((line) => line.includes("Claude stream event: ping"))).toBe(true);
     expect(logs.some((line) => line.includes("Model summary:"))).toBe(true);
   });
+
+  it("retries Claude OAuth token with x-api-key header when bearer auth is rejected", async () => {
+    const logs: string[] = [];
+    const capturedHeaders: Array<Record<string, string>> = [];
+
+    global.fetch = vi.fn(async (_url, init) => {
+      capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
+      if (capturedHeaders.length === 1) {
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "authentication_error",
+              message: "Invalid bearer token"
+            }
+          }),
+          {
+            status: 401,
+            headers: {
+              "content-type": "application/json",
+              "request-id": "req_invalid_bearer"
+            }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "Recovered with setup-token compatibility path" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "request-id": "req_retry_ok"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    const input = createInput("claude");
+    input.provider.authMode = "oauth";
+
+    const output = await executeClaudeWithApi({ ...input, log: (line) => logs.push(line) }, "sk-ant-oat01-test");
+    expect(output).toContain("Recovered with setup-token compatibility path");
+    expect(capturedHeaders).toHaveLength(2);
+    expect(capturedHeaders[0]?.Authorization).toBe("Bearer sk-ant-oat01-test");
+    expect(capturedHeaders[0]?.["x-api-key"]).toBeUndefined();
+    expect(capturedHeaders[1]?.["x-api-key"]).toBe("sk-ant-oat01-test");
+    expect(capturedHeaders[1]?.Authorization).toBeUndefined();
+    expect(logs.some((line) => line.includes("setup-token compatibility"))).toBe(true);
+  });
 });

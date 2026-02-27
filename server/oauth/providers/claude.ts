@@ -151,6 +151,36 @@ export function extractClaudeAuthorizationStateInput(rawInput: string): string |
   return extractStateFromRawCodeInput(rawInput);
 }
 
+export function resolveClaudeAuthorizationSubmissionState(
+  rawInput: string,
+  sessionState?: string
+): {
+  providedState?: string;
+  effectiveState?: string;
+  usedSessionStateFallback: boolean;
+} {
+  const providedState = extractStateFromRawCodeInput(rawInput);
+  if (providedState && providedState.length > 0) {
+    return {
+      providedState,
+      effectiveState: providedState,
+      usedSessionStateFallback: false
+    };
+  }
+
+  const normalizedSessionState = (sessionState ?? "").trim();
+  if (normalizedSessionState.length > 0) {
+    return {
+      effectiveState: normalizedSessionState,
+      usedSessionStateFallback: true
+    };
+  }
+
+  return {
+    usedSessionStateFallback: false
+  };
+}
+
 function extractStateFromAuthUrl(authUrl: string | undefined): string | undefined {
   const trimmed = (authUrl ?? "").trim();
   if (trimmed.length === 0) {
@@ -504,7 +534,6 @@ export async function submitClaudeOAuthCode(
   if (normalizedRaw.length === 0) {
     throw new Error("Authorization code is required.");
   }
-  const providedState = extractStateFromRawCodeInput(normalizedRaw);
 
   const session = activeClaudeLoginSession;
   if (!session || session.finished) {
@@ -524,9 +553,28 @@ export async function submitClaudeOAuthCode(
   if (normalizedCode.length === 0) {
     throw new Error("Authorization code is required.");
   }
+  const hasManualCodePrompt = (): boolean =>
+    CLAUDE_MANUAL_CODE_PROMPT_PATTERN.test(session.capturedOutput) ||
+    CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput);
+  if (!hasManualCodePrompt()) {
+    await sleep(320);
+  }
+  if (!hasManualCodePrompt()) {
+    logClaudeOAuth("submit_no_manual_prompt", {
+      sessionRuntimeMs: Date.now() - session.startedAt,
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
+    return {
+      providerId,
+      accepted: false,
+      message:
+        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes, or restart Connect and retry from the latest browser page."
+    };
+  }
   const normalizedState = extractStateFromAuthCode(normalizedCode);
   const sessionState = (session.authState ?? "").trim();
-  if (!providedState) {
+  const stateResolution = resolveClaudeAuthorizationSubmissionState(normalizedRaw, sessionState);
+  if (!stateResolution.effectiveState) {
     logClaudeOAuth("submit_missing_state", {
       rawLength: normalizedRaw.length,
       rawHash: hashForLogs(normalizedRaw),
@@ -561,6 +609,7 @@ export async function submitClaudeOAuthCode(
     sessionFinished: session.finished,
     sessionRuntimeMs: Date.now() - session.startedAt,
     sessionAuthStateLength: session.authState?.length ?? 0,
+    usedSessionStateFallback: stateResolution.usedSessionStateFallback,
     outputTail: summarizeOutputForLogs(session.capturedOutput)
   });
 

@@ -16,8 +16,7 @@ import type { RuntimeConnectionMode } from "@/lib/connectionSettingsStorage";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
 import { PROVIDER_DISPLAY_LABEL, getProviderModelOptions } from "./mappers";
 import {
-  shouldShowOAuthConnectedNote,
-  shouldShowOAuthTokenInput
+  shouldShowOAuthConnectedNote
 } from "./validation";
 import { useIconSpin } from "@/lib/useIconSpin";
 
@@ -27,18 +26,15 @@ interface ProviderSettingsSectionProps {
   providerIndex: number;
   status: ProviderOAuthStatus | null;
   connectionMode: RuntimeConnectionMode;
+  hasUnsavedChanges: boolean;
   busy: boolean;
   saving: boolean;
-  submittingOAuthCode: boolean;
-  oauthCodeValue: string;
   oauthStatusText: string;
   onAuthModeChange: (providerId: ProviderId, nextAuthMode: AuthMode) => void;
   onCredentialChange: (providerId: ProviderId, value: string) => void;
   onBaseUrlChange: (providerId: ProviderId, value: string) => void;
   onDefaultModelChange: (providerId: ProviderId, value: string) => void;
-  onOAuthCodeChange: (providerId: ProviderId, value: string) => void;
   onConnect: (providerId: ProviderId) => Promise<void>;
-  onSubmitOAuthCode: (providerId: ProviderId) => Promise<void>;
   onImportToken: (providerId: ProviderId) => Promise<void>;
   onRefresh: (providerId: ProviderId) => Promise<void>;
   onSave: (providerId: ProviderId) => Promise<void>;
@@ -50,18 +46,15 @@ export function ProviderSettingsSection({
   providerIndex,
   status,
   connectionMode,
+  hasUnsavedChanges,
   busy,
   saving,
-  submittingOAuthCode,
-  oauthCodeValue,
   oauthStatusText,
   onAuthModeChange,
   onCredentialChange,
   onBaseUrlChange,
   onDefaultModelChange,
-  onOAuthCodeChange,
   onConnect,
-  onSubmitOAuthCode,
   onImportToken,
   onRefresh,
   onSave
@@ -72,12 +65,13 @@ export function ProviderSettingsSection({
   const isAuthReady = status ? status.canUseApi || status.canUseCli || status.loggedIn : false;
   const cliAvailable = status?.cliAvailable === true;
   const runtimeProbe = status?.runtimeProbe;
-  const showOauthTokenInput = shouldShowOAuthTokenInput(authMode, providerId);
   const showAutoConnectedNote = shouldShowOAuthConnectedNote(provider, status);
   const shouldShowOAuthModeConnectedNote = authMode === "api_key" && showAutoConnectedNote;
+  const isRemoteMode = connectionMode === "remote";
+  const saveButtonLabel = saving ? "Saving..." : hasUnsavedChanges ? "Save changes" : "Saved";
 
   return (
-    <div>
+    <div data-testid={`provider-settings-${providerId}`}>
       {providerIndex > 0 ? <div className="my-5 h-px bg-[var(--divider)]" /> : null}
 
       <section className="space-y-4">
@@ -89,7 +83,7 @@ export function ProviderSettingsSection({
           <span className="text-[11px] text-ink-600">{new Date(provider.updatedAt).toLocaleString()}</span>
         </div>
 
-        <div className="space-y-1.5">
+        <label className="block space-y-1.5">
           <span className="text-xs text-ink-400">Auth mode</span>
           <Select
             value={authMode}
@@ -106,52 +100,37 @@ export function ProviderSettingsSection({
               OAuth is already connected via CLI. This provider will switch to OAuth automatically.
             </p>
           ) : null}
+        </label>
+
+        <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5 text-[11px] text-ink-400">
+          {hasUnsavedChanges
+            ? "You have unsaved provider changes. Click Save changes to apply auth mode, token, and model updates."
+            : "Provider settings are applied."}
         </div>
+      </section>
 
-        {showOauthTokenInput ? (
-          <div className="space-y-1.5">
-            <label className="block space-y-1.5">
-              <span className="flex items-center gap-1 text-xs text-ink-400">
-                {authMode === "oauth" ? <LockKeyhole className="h-3 w-3" /> : <KeyRound className="h-3 w-3" />}
-                {authMode === "oauth" ? "OAuth token / setup-token (optional)" : "API key"}
-              </span>
-              <Input
-                type="password"
-                value={authMode === "oauth" ? provider.oauthToken : provider.apiKey}
-                onChange={(event) => {
-                  onCredentialChange(providerId, event.target.value);
-                }}
-                placeholder={authMode === "oauth" ? "Auto-managed by CLI or paste setup-token (sk-ant-oat01-...)" : "sk-..."}
-              />
-            </label>
-            {providerId === "claude" && authMode === "oauth" ? (
-              <p className="text-[11px] text-ink-500">
-                Remote fallback: paste Claude setup-token here, click Save, then run without CLI browser login.
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            <span className="flex items-center gap-1 text-xs text-ink-400">
-              <LockKeyhole className="h-3 w-3" />
-              OAuth managed by CLI
-            </span>
-            <p className="text-xs text-ink-500">Claude stores OAuth credentials internally. No token will appear in this panel.</p>
-          </div>
-        )}
+      <div className="my-5 h-px bg-[var(--divider)]" />
 
-        {authMode === "oauth" ? (
-          <div className="space-y-2 pt-1">
-            <div className="flex flex-wrap items-center gap-2">
+      {authMode === "oauth" ? (
+        <>
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-ink-400">
+                <Link2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider">Connect CLI</span>
+              </div>
               {isAuthReady ? (
                 <Badge variant="success">
-                  <CheckCircle2 className="mr-1 h-3 w-3" /> Auth connected
+                  <CheckCircle2 className="mr-1 h-3 w-3" /> Connected
                 </Badge>
               ) : (
                 <Badge variant="danger">
-                  <XCircle className="mr-1 h-3 w-3" /> Auth missing
+                  <XCircle className="mr-1 h-3 w-3" /> Not connected
                 </Badge>
               )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
               {cliAvailable ? <Badge variant="running">CLI installed</Badge> : <Badge variant="warning">CLI missing</Badge>}
               {runtimeProbe ? (
                 <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
@@ -162,18 +141,20 @@ export function ProviderSettingsSection({
               )}
             </div>
 
-            <p className="text-xs text-ink-500 break-words">{oauthStatusText}</p>
-            {status?.cliCommand ? <p className="text-xs text-ink-600 break-all">CLI command: {status.cliCommand}</p> : null}
-            {runtimeProbe ? (
-              <p className={runtimeProbe.status === "pass" ? "text-xs text-ink-500 break-words" : "text-xs text-red-400 break-words"}>
-                {runtimeProbe.message}
-                {runtimeProbe.latencyMs !== undefined ? ` (${runtimeProbe.latencyMs}ms)` : ""}
-              </p>
-            ) : (
-              <p className="text-xs text-ink-600 break-words">
-                Runtime probe was not executed yet. Click Refresh to validate real run capability.
-              </p>
-            )}
+            <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
+              <p className="text-xs text-ink-400 break-words">{oauthStatusText}</p>
+              {status?.cliCommand ? <p className="mt-1 text-[11px] text-ink-600 break-all">CLI command: {status.cliCommand}</p> : null}
+              {runtimeProbe ? (
+                <p className="mt-1 text-[11px] text-ink-500 break-words">
+                  {runtimeProbe.status === "pass" ? runtimeProbe.message : `Runtime issue: ${runtimeProbe.message}`}
+                  {runtimeProbe.latencyMs !== undefined ? ` (${runtimeProbe.latencyMs}ms)` : ""}
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-ink-600 break-words">
+                  Runtime probe was not executed yet. Click Refresh to validate run capability.
+                </p>
+              )}
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <Button
@@ -184,13 +165,13 @@ export function ProviderSettingsSection({
                   await onConnect(providerId);
                 }}
               >
-                <Link2 className="mr-1 h-4 w-4" /> {isLoggedIn ? "Reconnect" : "Connect"}
+                <Link2 className="mr-1 h-4 w-4" /> {isLoggedIn ? "Reconnect CLI" : "Connect CLI"}
               </Button>
 
               {providerId === "openai" ? (
                 <Button
                   size="sm"
-                  variant="secondary"
+                  variant="ghost"
                   disabled={busy}
                   onClick={async () => {
                     await onImportToken(providerId);
@@ -209,47 +190,79 @@ export function ProviderSettingsSection({
                   await onRefresh(providerId);
                 }}
               >
-                <RefreshCw className="mr-1 h-4 w-4" style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }} /> Refresh
+                <RefreshCw
+                  className="mr-1 h-4 w-4"
+                  style={{ transform: `rotate(${refreshRotation}deg)`, transition: "transform 0.45s ease-in-out" }}
+                />
+                Refresh
               </Button>
             </div>
 
-            {providerId === "claude" && connectionMode === "remote" ? (
-              <div className="space-y-1.5">
-                <span className="text-xs text-ink-400">Authentication code from browser</span>
-                <div className="flex flex-wrap gap-2">
-                  <Input
-                    value={oauthCodeValue}
-                    onChange={(event) => {
-                      onOAuthCodeChange(providerId, event.target.value);
-                    }}
-                    name={`${providerId}-oauth-code`}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    placeholder="Paste full Authentication Code (with #state) or full callback URL"
-                  />
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={async () => {
-                      await onSubmitOAuthCode(providerId);
-                    }}
-                  >
-                    {submittingOAuthCode ? "Submitting..." : "Submit code"}
-                  </Button>
-                </div>
-                <p className="text-xs text-ink-500">
-                  If browser shows “Authentication Code”, paste the entire value including `#state` (or paste full callback URL) and submit it to the remote Claude CLI session.
-                </p>
-              </div>
-            ) : null}
+          </section>
 
-            {providerId === "claude" ? <p className="text-xs text-ink-500">In OAuth mode the dashboard uses Claude CLI auth automatically when no token is set.</p> : null}
+          <div className="my-5 h-px bg-[var(--divider)]" />
+
+          <section className="space-y-4">
+            <div className="flex items-center gap-2 text-ink-400">
+              <LockKeyhole className="h-3.5 w-3.5 shrink-0" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider">
+                {providerId === "claude" ? "OAuth Credential" : "Optional OAuth Token"}
+              </span>
+            </div>
+
+            <label className="block space-y-1.5">
+              <span className="text-xs text-ink-400">
+                {providerId === "claude"
+                  ? "Setup-token OR browser Authentication Code / callback URL"
+                  : "OAuth token (optional)"}
+              </span>
+              <Input
+                type="password"
+                value={provider.oauthToken}
+                onChange={(event) => {
+                  onCredentialChange(providerId, event.target.value);
+                }}
+                placeholder={
+                  providerId === "claude"
+                    ? "sk-ant-oat01-... OR CODE#STATE OR callback URL"
+                    : "sk-..."
+                }
+              />
+            </label>
+
+            {providerId === "claude" ? (
+              <p className="text-[11px] text-ink-500">
+                One field flow: paste setup-token (`sk-ant-oat...`) or browser Authentication Code (or full callback URL), then
+                click Save changes. {isRemoteMode ? "In remote mode setup-token is the most reliable path." : ""}
+              </p>
+            ) : (
+              <p className="text-[11px] text-ink-500">If you edit this token manually, click Save changes to apply it.</p>
+            )}
+          </section>
+        </>
+      ) : (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 text-ink-400">
+            <KeyRound className="h-3.5 w-3.5 shrink-0" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">API Credentials</span>
           </div>
-        ) : null}
+          <label className="block space-y-1.5">
+            <span className="text-xs text-ink-400">API key</span>
+            <Input
+              type="password"
+              value={provider.apiKey}
+              onChange={(event) => {
+                onCredentialChange(providerId, event.target.value);
+              }}
+              placeholder="sk-..."
+            />
+          </label>
+        </section>
+      )}
 
+      <div className="my-5 h-px bg-[var(--divider)]" />
+
+      <section className="space-y-4">
         <label className="block space-y-1.5">
           <span className="text-xs text-ink-400">Base URL</span>
           <Input
@@ -272,15 +285,24 @@ export function ProviderSettingsSection({
             placeholder="Select model..."
           />
         </div>
+      </section>
 
+      <div className="my-5 h-px bg-[var(--divider)]" />
+
+      <section className="space-y-3">
+        <p className="text-[11px] text-ink-500">
+          {hasUnsavedChanges
+            ? "Unsaved changes will not apply until you click Save changes."
+            : "No pending provider changes."}
+        </p>
         <Button
           variant="secondary"
           onClick={async () => {
             await onSave(providerId);
           }}
-          disabled={busy}
+          disabled={busy || !hasUnsavedChanges}
         >
-          <Save className="mr-2 h-4 w-4" /> {saving ? "Saving..." : "Save"}
+          <Save className="mr-2 h-4 w-4" /> {saveButtonLabel}
         </Button>
       </section>
     </div>

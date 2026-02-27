@@ -134,13 +134,13 @@ describe("Provider OAuth Routes", () => {
           providerId: "claude",
           tokenAvailable: true,
           canUseApi: true,
-          message: "Setup token is stored in dashboard. Claude API auth is ready without CLI login."
+          message: "Setup token is stored in dashboard. Save changes and run once to validate token-based API auth."
         })
       );
       expect(response.body.status.runtimeProbe).toEqual(
         expect.objectContaining({
           status: "pass",
-          message: "Setup token is stored in dashboard. API runtime path is available."
+          message: "Setup token is stored in dashboard. API path will be validated on first request."
         })
       );
     } finally {

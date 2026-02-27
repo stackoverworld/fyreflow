@@ -204,6 +204,12 @@ function buildClaudeOutputFormat(
   };
 }
 
+type ClaudeAuthHeaderMode = "oauth_bearer" | "api_key";
+
+function isClaudeInvalidBearerTokenResponse(statusCode: number, responseBody: string): boolean {
+  return statusCode === 401 && /\binvalid bearer token\b/i.test(responseBody);
+}
+
 async function readWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   idleTimeoutMs: number,
@@ -908,7 +914,7 @@ export async function executeClaudeWithApi(
   options?: ClaudeApiOptions
 ): Promise<string> {
   const endpoint = `${(input.provider.baseUrl || CLAUDE_DEFAULT_URL).replace(/\/$/, "")}/messages`;
-  const headers: Record<string, string> = {
+  const baseHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     "anthropic-version": "2023-06-01"
   };
@@ -921,13 +927,7 @@ export async function executeClaudeWithApi(
     betas.push("context-1m-2025-08-07");
   }
   if (betas.length > 0) {
-    headers["anthropic-beta"] = betas.join(",");
-  }
-
-  if (input.provider.authMode === "oauth") {
-    headers.Authorization = `Bearer ${credential}`;
-  } else {
-    headers["x-api-key"] = credential;
+    baseHeaders["anthropic-beta"] = betas.join(",");
   }
 
   const requestBody: Record<string, unknown> = {
@@ -955,13 +955,28 @@ export async function executeClaudeWithApi(
     requestBody.output_config = outputConfig;
   }
 
+  const buildClaudeHeaders = (mode: ClaudeAuthHeaderMode): Record<string, string> => {
+    const headers = { ...baseHeaders };
+    if (mode === "oauth_bearer") {
+      headers.Authorization = `Bearer ${credential}`;
+      return headers;
+    }
+
+    headers["x-api-key"] = credential;
+    return headers;
+  };
+
   const requestSignal = mergeAbortSignals([input.signal]);
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(requestBody),
-    signal: requestSignal
-  });
+  const requestBodyJson = JSON.stringify(requestBody);
+  const executeRequest = async (mode: ClaudeAuthHeaderMode): Promise<Response> =>
+    fetch(endpoint, {
+      method: "POST",
+      headers: buildClaudeHeaders(mode),
+      body: requestBodyJson,
+      signal: requestSignal
+    });
+  const primaryAuthMode: ClaudeAuthHeaderMode = input.provider.authMode === "oauth" ? "oauth_bearer" : "api_key";
+  let response = await executeRequest(primaryAuthMode);
 
   const requestId = resolveRequestId(response.headers);
   if (requestId) {
@@ -969,13 +984,31 @@ export async function executeClaudeWithApi(
   }
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new ProviderApiError({
-      providerId: "claude",
-      statusCode: response.status,
-      responseSnippet: errorBody.slice(0, 320),
-      retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after"))
-    });
+    let errorBody = await response.text();
+    if (
+      primaryAuthMode === "oauth_bearer" &&
+      isClaudeInvalidBearerTokenResponse(response.status, errorBody)
+    ) {
+      input.log?.("Claude bearer token was rejected; retrying once with x-api-key header for setup-token compatibility.");
+      response = await executeRequest("api_key");
+      const fallbackRequestId = resolveRequestId(response.headers);
+      if (fallbackRequestId) {
+        input.log?.(`Claude request id: ${fallbackRequestId}`);
+      }
+
+      if (!response.ok) {
+        errorBody = await response.text();
+      }
+    }
+
+    if (!response.ok) {
+      throw new ProviderApiError({
+        providerId: "claude",
+        statusCode: response.status,
+        responseSnippet: errorBody.slice(0, 320),
+        retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after"))
+      });
+    }
   }
 
   const contentType = response.headers.get("content-type") ?? "";
