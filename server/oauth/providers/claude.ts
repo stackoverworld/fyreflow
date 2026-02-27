@@ -419,31 +419,39 @@ function shellEscapeForSingleQuotes(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function resolveClaudeLoginLaunchSpec(
-  canUseScript: boolean
+export function resolveClaudeLoginLaunchSpecForPlatform(
+  canUseScript: boolean,
+  platform: NodeJS.Platform = process.platform,
+  claudeCommand: string = CLAUDE_CLI_COMMAND
 ): { command: string; args: string[]; usesPtyShim: boolean } {
   if (!canUseScript) {
     return {
-      command: CLAUDE_CLI_COMMAND,
+      command: claudeCommand,
       args: ["auth", "login"],
       usesPtyShim: false
     };
   }
 
-  if (process.platform === "darwin" || process.platform === "freebsd") {
+  if (platform === "darwin" || platform === "freebsd") {
     return {
       command: SCRIPT_COMMAND,
-      args: ["-q", "/dev/null", CLAUDE_CLI_COMMAND, "auth", "login"],
+      args: ["-q", "-F", "/dev/null", claudeCommand, "auth", "login"],
       usesPtyShim: true
     };
   }
 
-  const escapedClaudeCommand = shellEscapeForSingleQuotes(CLAUDE_CLI_COMMAND);
+  const escapedClaudeCommand = shellEscapeForSingleQuotes(claudeCommand);
   return {
     command: SCRIPT_COMMAND,
-    args: ["-q", "-e", "-c", `${escapedClaudeCommand} auth login`, "/dev/null"],
+    args: ["-q", "-f", "-e", "-c", `${escapedClaudeCommand} auth login`, "/dev/null"],
     usesPtyShim: true
   };
+}
+
+function resolveClaudeLoginLaunchSpec(
+  canUseScript: boolean
+): { command: string; args: string[]; usesPtyShim: boolean } {
+  return resolveClaudeLoginLaunchSpecForPlatform(canUseScript);
 }
 
 async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
@@ -503,9 +511,7 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const messageParts = [
     "Claude browser login started.",
     authUrl ? "Browser authorization URL was generated." : "",
-    bootstrap.awaitingManualCode
-      ? "If browser shows Authentication Code, copy it and submit it in this dashboard."
-      : "",
+    "If browser shows Authentication Code, copy the full code (including #state) and submit it in this dashboard.",
     session.usesPtyShim
       ? ""
       : "Server is missing PTY helper (`script` command); code submit may not be accepted until backend image installs it.",
@@ -560,6 +566,18 @@ export async function submitClaudeOAuthCode(
     await sleep(320);
   }
   if (!hasManualCodePrompt()) {
+    const loggedInWithoutManualPrompt = await waitForClaudeLoggedIn(12_000);
+    if (loggedInWithoutManualPrompt) {
+      logClaudeOAuth("submit_success_without_manual_prompt", {
+        runtimeMs: Date.now() - session.startedAt
+      });
+      return {
+        providerId,
+        accepted: true,
+        message: "Claude CLI login is connected (browser flow completed)."
+      };
+    }
+
     logClaudeOAuth("submit_no_manual_prompt", {
       sessionRuntimeMs: Date.now() - session.startedAt,
       outputTail: summarizeOutputForLogs(session.capturedOutput)
@@ -568,7 +586,7 @@ export async function submitClaudeOAuthCode(
       providerId,
       accepted: false,
       message:
-        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes, or restart Connect and retry from the latest browser page."
+        "Claude CLI did not request manual Authentication Code input for this attempt. Click Connect, approve in browser, wait 5-10 seconds, then click Refresh. If needed, reconnect and use code from the newest page."
     };
   }
   const normalizedState = extractStateFromAuthCode(normalizedCode);
