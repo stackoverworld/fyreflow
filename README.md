@@ -28,6 +28,7 @@ This is the simplest flow for your users.
 After this, backend is online and users can connect from desktop app.
 Verify persistence health:
 - `GET https://<railway-domain>/api/health` should include `persistence.status="pass"`.
+- Docker runtime stores provider CLI auth under `/app/data/home` (`HOME` + `XDG_CONFIG_HOME`), so Claude/Codex CLI login survives restarts when `/app/data` volume is attached.
 
 ### Provider CLI install in Docker image (default)
 

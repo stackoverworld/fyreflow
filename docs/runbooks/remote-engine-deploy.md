@@ -26,6 +26,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
    - `GET https://<railway-domain>/api/health`
    - `GET https://<railway-domain>/api/health` should include realtime metadata when WS is enabled.
    - `GET https://<railway-domain>/api/health` should include `persistence.status="pass"` and no persistence issues.
+   - provider CLI auth state is persisted under `/app/data/home` in this image; keep `/app/data` volume attached to preserve Claude/Codex login across restarts.
 8. In desktop/web app -> `Settings -> Remote`:
    - mode: `remote`
    - API URL: `https://<railway-domain>`

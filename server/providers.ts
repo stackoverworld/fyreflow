@@ -279,8 +279,8 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
     }
 
     if (hasInvalidClaudeOauthCredential(effectiveInput.provider)) {
-      throw new Error(
-        "Stored Claude OAuth value is not a setup-token. Paste Claude setup-token (sk-ant-oat...) in Provider Auth and save."
+      effectiveInput.log?.(
+        "Stored Claude OAuth value is not a setup-token; ignoring dashboard token and attempting CLI-auth path."
       );
     }
 

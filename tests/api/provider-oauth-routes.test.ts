@@ -224,4 +224,47 @@ describe("Provider OAuth Routes", () => {
       await cleanup();
     }
   });
+
+  it("keeps connected status when CLI auth is active but stored value is not setup-token", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      store.upsertProvider("claude", {
+        authMode: "oauth",
+        oauthToken: "XADbhD5WjGH0ORuYcWlealQ#QouSHToVDbDZTQDEMnhGk88"
+      });
+
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => ({
+          ...buildStatus("claude"),
+          loggedIn: true,
+          canUseCli: true
+        })),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("GET", "/api/providers/:providerId/oauth/status");
+      const response = await invokeRoute(handler, {
+        method: "GET",
+        params: { providerId: "claude" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.status).toEqual(
+        expect.objectContaining({
+          providerId: "claude",
+          loggedIn: true,
+          canUseCli: true,
+          canUseApi: false,
+          message: "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
 });

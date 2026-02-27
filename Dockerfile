@@ -7,6 +7,8 @@ ARG FYREFLOW_CLAUDE_CLI_NPM_VERSION=latest
 ARG FYREFLOW_CODEX_CLI_NPM_PACKAGE=@openai/codex
 ARG FYREFLOW_CODEX_CLI_NPM_VERSION=latest
 ENV FYREFLOW_BUILD_VERSION=${FYREFLOW_BUILD_VERSION}
+ENV HOME=/app/data/home
+ENV XDG_CONFIG_HOME=/app/data/home/.config
 RUN apk add --no-cache util-linux-misc
 COPY package.json package-lock.json ./
 COPY scripts/patch-electron-plist.mjs ./scripts/patch-electron-plist.mjs
@@ -19,6 +21,6 @@ RUN if [ "$FYREFLOW_INSTALL_PROVIDER_CLIS" = "1" ]; then \
       echo "Skipping provider CLI installation (FYREFLOW_INSTALL_PROVIDER_CLIS=${FYREFLOW_INSTALL_PROVIDER_CLIS})."; \
     fi
 COPY . .
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/data/home /app/data/home/.config
 EXPOSE 8787
 CMD ["npm", "run", "start:api"]

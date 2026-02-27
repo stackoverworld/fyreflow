@@ -35,11 +35,14 @@ function withStoredClaudeSetupTokenStatus(
   }
 
   if (!isClaudeSetupToken(provider.oauthToken)) {
+    const hasCliAuth = status.loggedIn || status.canUseCli;
     return {
       ...status,
       tokenAvailable: false,
       canUseApi: false,
-      message: "Stored OAuth value is not a Claude setup-token. Paste setup-token (sk-ant-oat...) and save."
+      message: hasCliAuth
+        ? "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable."
+        : "Stored OAuth value is not a Claude setup-token. Paste setup-token (sk-ant-oat...) and save."
     };
   }
 
