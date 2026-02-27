@@ -559,36 +559,6 @@ export async function submitClaudeOAuthCode(
   if (normalizedCode.length === 0) {
     throw new Error("Authorization code is required.");
   }
-  const hasManualCodePrompt = (): boolean =>
-    CLAUDE_MANUAL_CODE_PROMPT_PATTERN.test(session.capturedOutput) ||
-    CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput);
-  if (!hasManualCodePrompt()) {
-    await sleep(320);
-  }
-  if (!hasManualCodePrompt()) {
-    const loggedInWithoutManualPrompt = await waitForClaudeLoggedIn(12_000);
-    if (loggedInWithoutManualPrompt) {
-      logClaudeOAuth("submit_success_without_manual_prompt", {
-        runtimeMs: Date.now() - session.startedAt
-      });
-      return {
-        providerId,
-        accepted: true,
-        message: "Claude CLI login is connected (browser flow completed)."
-      };
-    }
-
-    logClaudeOAuth("submit_no_manual_prompt", {
-      sessionRuntimeMs: Date.now() - session.startedAt,
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-    return {
-      providerId,
-      accepted: false,
-      message:
-        "Claude CLI did not request manual Authentication Code input for this attempt. Click Connect, approve in browser, wait 5-10 seconds, then click Refresh. If needed, reconnect and use code from the newest page."
-    };
-  }
   const normalizedState = extractStateFromAuthCode(normalizedCode);
   const sessionState = (session.authState ?? "").trim();
   const stateResolution = resolveClaudeAuthorizationSubmissionState(normalizedRaw, sessionState);
@@ -616,6 +586,59 @@ export async function submitClaudeOAuthCode(
       accepted: false,
       message:
         "This code belongs to a different login attempt (state mismatch). Click Connect again and submit the code from the newest browser page."
+    };
+  }
+  const hasManualCodePrompt = (): boolean =>
+    CLAUDE_MANUAL_CODE_PROMPT_PATTERN.test(session.capturedOutput) ||
+    CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput);
+  if (!hasManualCodePrompt()) {
+    await sleep(320);
+  }
+  if (!hasManualCodePrompt()) {
+    const loggedInWithoutManualPrompt = await waitForClaudeLoggedIn(12_000);
+    if (loggedInWithoutManualPrompt) {
+      logClaudeOAuth("submit_success_without_manual_prompt", {
+        runtimeMs: Date.now() - session.startedAt
+      });
+      return {
+        providerId,
+        accepted: true,
+        message: "Claude CLI login is connected (browser flow completed)."
+      };
+    }
+
+    try {
+      await writeAuthCodeSequenceToSession(session, normalizedCode);
+      logClaudeOAuth("submit_written_without_prompt", {
+        normalizedHash: hashForLogs(normalizedCode),
+        sessionRuntimeMs: Date.now() - session.startedAt
+      });
+      const loggedInAfterBlindSubmit = await waitForClaudeLoggedIn(18_000);
+      if (loggedInAfterBlindSubmit) {
+        logClaudeOAuth("submit_success_without_prompt_after_blind_submit", {
+          runtimeMs: Date.now() - session.startedAt
+        });
+        return {
+          providerId,
+          accepted: true,
+          message: "Authorization code submitted. Claude CLI login is connected."
+        };
+      }
+    } catch (error) {
+      logClaudeOAuth("submit_blind_write_error", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    logClaudeOAuth("submit_no_manual_prompt", {
+      sessionRuntimeMs: Date.now() - session.startedAt,
+      outputTail: summarizeOutputForLogs(session.capturedOutput)
+    });
+    return {
+      providerId,
+      accepted: false,
+      message:
+        "Claude CLI did not request manual Authentication Code input for this attempt, and code submit was not accepted. Click Connect, approve in browser, wait 10 seconds, then click Refresh. If needed, reconnect and use code from the newest page."
     };
   }
   logClaudeOAuth("submit_received", {
