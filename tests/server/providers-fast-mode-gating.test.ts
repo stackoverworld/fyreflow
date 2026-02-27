@@ -118,21 +118,20 @@ describe("executeProviderStep fast-mode gating", () => {
     expect(mocks.executeClaudeWithApi.mock.calls[0][0].step.fastMode).toBe(true);
   });
 
-  it("fails fast when stored oauth token is still encrypted placeholder", async () => {
-    await expect(
-      executeProviderStep({
-        provider: createProvider({
-          authMode: "oauth",
-          oauthToken: "enc:v1:iv.tag.payload"
-        }),
-        step: createStep({ fastMode: false }),
-        context: "ctx",
-        task: "task"
-      })
-    ).rejects.toThrow("Stored provider credential cannot be decrypted");
+  it("uses CLI path when Claude OAuth token is encrypted placeholder but CLI auth is available", async () => {
+    const output = await executeProviderStep({
+      provider: createProvider({
+        authMode: "oauth",
+        oauthToken: "enc:v1:iv.tag.payload"
+      }),
+      step: createStep({ fastMode: false }),
+      context: "ctx",
+      task: "task"
+    });
 
+    expect(output).toBe("cli-output");
     expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
-    expect(mocks.executeViaCli).not.toHaveBeenCalled();
+    expect(mocks.executeViaCli).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to CLI when Claude OAuth value is not a setup-token", async () => {
@@ -149,5 +148,21 @@ describe("executeProviderStep fast-mode gating", () => {
     expect(output).toBe("cli-output");
     expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
     expect(mocks.executeViaCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers CLI path when Claude OAuth CLI session is available", async () => {
+    const output = await executeProviderStep({
+      provider: createProvider({
+        authMode: "oauth",
+        oauthToken: "sk-ant-oat01-example-token"
+      }),
+      step: createStep({ fastMode: false }),
+      context: "ctx",
+      task: "task"
+    });
+
+    expect(output).toBe("cli-output");
+    expect(mocks.executeViaCli).toHaveBeenCalledTimes(1);
+    expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
   });
 });

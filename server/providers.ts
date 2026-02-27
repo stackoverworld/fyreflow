@@ -255,46 +255,9 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
       }
     | null = null;
 
-  if (!credential && effectiveInput.provider.id === "openai") {
-    credential = getCachedCodexAccessToken();
-  }
-
-  if (!credential && effectiveInput.provider.authMode === "oauth") {
+  const executeCliWithGuidance = async (reason?: string): Promise<string> => {
     try {
-      oauthStatus = await getProviderOAuthStatus(effectiveInput.provider.id);
-      effectiveInput.log?.(
-        `OAuth status: canUseApi=${oauthStatus.canUseApi}, canUseCli=${oauthStatus.canUseCli}, message=${oauthStatus.message}`
-      );
-    } catch {
-      oauthStatus = null;
-      effectiveInput.log?.("OAuth status probe failed; proceeding with available credentials/fallbacks.");
-    }
-  }
-
-  if (!credential) {
-    if (hasEncryptedPlaceholderCredential(effectiveInput.provider)) {
-      throw new Error(
-        "Stored provider credential cannot be decrypted. Verify DASHBOARD_SECRETS_KEY and persistent backend data volume, then reconnect provider auth."
-      );
-    }
-
-    if (hasInvalidClaudeOauthCredential(effectiveInput.provider)) {
-      effectiveInput.log?.(
-        "Stored Claude OAuth value is not a setup-token; ignoring dashboard token and attempting CLI-auth path."
-      );
-    }
-
-    if (
-      effectiveInput.provider.authMode === "oauth" &&
-      oauthStatus &&
-      !oauthStatus.canUseCli &&
-      !oauthStatus.canUseApi
-    ) {
-      throw new Error(`Provider OAuth is not ready. ${oauthStatus.message} Open Provider Auth and reconnect.`);
-    }
-
-    try {
-      effectiveInput.log?.("No dashboard credential; executing via CLI.");
+      effectiveInput.log?.(reason ?? "No dashboard credential; executing via CLI.");
       return await executeViaCli(effectiveInput);
     } catch (error) {
       let retryFailureDetails = "";
@@ -326,6 +289,64 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
 
       throw new Error(`${credentialHint} ${timeoutHint} Details: ${message}${retryFailureDetails}`);
     }
+  };
+
+  if (!credential && effectiveInput.provider.id === "openai") {
+    credential = getCachedCodexAccessToken();
+  }
+
+  if (effectiveInput.provider.authMode === "oauth") {
+    try {
+      oauthStatus = await getProviderOAuthStatus(effectiveInput.provider.id);
+      effectiveInput.log?.(
+        `OAuth status: canUseApi=${oauthStatus.canUseApi}, canUseCli=${oauthStatus.canUseCli}, message=${oauthStatus.message}`
+      );
+    } catch {
+      oauthStatus = null;
+      effectiveInput.log?.("OAuth status probe failed; proceeding with available credentials/fallbacks.");
+    }
+  }
+
+  const preferClaudeCliOAuthPath =
+    effectiveInput.provider.id === "claude" &&
+    effectiveInput.provider.authMode === "oauth" &&
+    oauthStatus?.canUseCli === true;
+
+  if (preferClaudeCliOAuthPath) {
+    effectiveInput.log?.("Claude OAuth CLI session is available; using CLI path first.");
+    try {
+      return await executeCliWithGuidance("Claude OAuth CLI session is available; executing via CLI path.");
+    } catch (error) {
+      if (!credential) {
+        throw error;
+      }
+      effectiveInput.log?.("CLI-preferred OAuth path failed; falling back to API credential.");
+    }
+  }
+
+  if (!credential) {
+    if (hasEncryptedPlaceholderCredential(effectiveInput.provider)) {
+      throw new Error(
+        "Stored provider credential cannot be decrypted. Verify DASHBOARD_SECRETS_KEY and persistent backend data volume, then reconnect provider auth."
+      );
+    }
+
+    if (hasInvalidClaudeOauthCredential(effectiveInput.provider)) {
+      effectiveInput.log?.(
+        "Stored Claude OAuth value is not a setup-token; ignoring dashboard token and attempting CLI-auth path."
+      );
+    }
+
+    if (
+      effectiveInput.provider.authMode === "oauth" &&
+      oauthStatus &&
+      !oauthStatus.canUseCli &&
+      !oauthStatus.canUseApi
+    ) {
+      throw new Error(`Provider OAuth is not ready. ${oauthStatus.message} Open Provider Auth and reconnect.`);
+    }
+
+    return await executeCliWithGuidance();
   }
 
   try {
