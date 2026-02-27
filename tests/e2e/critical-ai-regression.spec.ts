@@ -156,10 +156,11 @@ test.describe("Critical AI Regression Flows", () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
     await page.getByRole("button", { name: "Provider Auth" }).click();
+    await page.getByRole("button", { name: "Anthropic", exact: true }).click();
 
     const popupPromise = context.waitForEvent("page");
     const claudeSection = page.getByTestId("provider-settings-claude");
-    await claudeSection.getByRole("button", { name: "Connect CLI", exact: true }).click();
+    await claudeSection.getByRole("button", { name: /^(Connect|Reconnect)( CLI)?$/i }).click();
 
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");

@@ -20,12 +20,21 @@ export interface SystemRouteDependencies {
     message: string;
     downloadUrl?: string;
   } | null;
+  getPersistenceStatus?: () => {
+    status: "pass" | "warn";
+    dataDir: string;
+    secretsKeyConfigured: boolean;
+    runningInContainer: boolean;
+    dedicatedVolumeMounted: boolean | null;
+    issues: string[];
+  };
 }
 
 export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies): void {
   app.get("/api/health", (request, response) => {
     const realtimeStatus = deps.getRealtimeStatus?.();
     const updaterStatus = deps.getUpdaterStatus?.();
+    const persistenceStatus = deps.getPersistenceStatus?.();
     const version = deps.getVersion?.();
     const clientVersionHeader = (() => {
       const raw = request.headers["x-fyreflow-client-version"];
@@ -54,6 +63,11 @@ export function registerSystemRoutes(app: Express, deps: SystemRouteDependencies
       ...(updaterStatus
         ? {
             updater: updaterStatus
+          }
+        : {}),
+      ...(persistenceStatus
+        ? {
+            persistence: persistenceStatus
           }
         : {}),
       ...(clientCompatibility

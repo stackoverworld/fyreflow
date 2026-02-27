@@ -84,6 +84,14 @@ export interface ApiHealthStatus {
   updater?: {
     configured: boolean;
   };
+  persistence?: {
+    status: "pass" | "warn";
+    dataDir: string;
+    secretsKeyConfigured: boolean;
+    runningInContainer: boolean;
+    dedicatedVolumeMounted: boolean | null;
+    issues: string[];
+  };
   client?: {
     minimumDesktopVersion: string;
     clientVersion?: string;

@@ -147,4 +147,43 @@ describe("Provider OAuth Routes", () => {
       await cleanup();
     }
   });
+
+  it("surfaces undecryptable stored Claude setup-token as disconnected", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      store.upsertProvider("claude", {
+        authMode: "oauth",
+        oauthToken: "enc:v1:broken.iv.payload"
+      });
+
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("GET", "/api/providers/:providerId/oauth/status");
+      const response = await invokeRoute(handler, {
+        method: "GET",
+        params: { providerId: "claude" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.status).toEqual(
+        expect.objectContaining({
+          providerId: "claude",
+          tokenAvailable: false,
+          canUseApi: false,
+          message:
+            "Stored setup token cannot be decrypted. Keep DASHBOARD_SECRETS_KEY stable and persist backend data volume, then reconnect."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
 });

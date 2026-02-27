@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveDataPath } from "./runtime/dataPaths.js";
 
 interface SchedulerStateFile {
   version: 1;
@@ -7,7 +8,7 @@ interface SchedulerStateFile {
   markers: Record<string, string>;
 }
 
-const SCHEDULER_STATE_PATH = path.resolve(process.cwd(), "data", "scheduler-state.json");
+const SCHEDULER_STATE_PATH = resolveDataPath("scheduler-state.json");
 
 function nowIso(): string {
   return new Date().toISOString();

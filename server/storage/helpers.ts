@@ -6,6 +6,7 @@ import { sanitizePipelines } from "./pipelineStore.js";
 import { MASK_VALUE } from "../secureInputs.js";
 import { decryptSecret, encryptSecret } from "../secretsCrypto.js";
 import { normalizeRuns } from "./runStore.js";
+import { resolveDataRootPath } from "../runtime/dataPaths.js";
 import type {
   DashboardState,
   McpServerConfig,
@@ -17,8 +18,10 @@ import type {
   StorageUpdateInput
 } from "../types.js";
 
-export const DB_PATH = path.resolve(process.cwd(), "data", "local-db.json");
-export const DEFAULT_STORAGE_ROOT_PATH = path.resolve(process.cwd(), "data", "agent-storage");
+const DATA_ROOT_PATH = resolveDataRootPath();
+
+export const DB_PATH = path.join(DATA_ROOT_PATH, "local-db.json");
+export const DEFAULT_STORAGE_ROOT_PATH = path.join(DATA_ROOT_PATH, "agent-storage");
 export const DEFAULT_SHARED_FOLDER = "shared";
 export const DEFAULT_ISOLATED_FOLDER = "isolated";
 export const DEFAULT_RUNS_FOLDER = "runs";

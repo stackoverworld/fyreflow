@@ -6,7 +6,7 @@ import {
   syncProviderOAuthToken
 } from "@/lib/api";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
-import { ProviderSettingsSection } from "./provider-settings/sections";
+import { ProviderSettingsSection, type PendingConnectInfo } from "./provider-settings/sections";
 import {
   PROVIDER_ORDER,
   setProviderAuthMode,
@@ -25,6 +25,8 @@ import {
   buildProviderOAuthStartMessage,
   shouldOpenProviderOAuthBrowser
 } from "./providerOauthConnectModel";
+import { SegmentedControl, type Segment } from "@/components/optics/segmented-control";
+import { AnthropicIcon, OpenAIIcon } from "@/components/optics/icons";
 
 interface ProviderSettingsProps {
   providers: Record<ProviderId, ProviderConfig>;
@@ -38,6 +40,11 @@ interface ProviderSettingsProps {
 type StatusMap = Record<ProviderId, ProviderOAuthStatus | null>;
 type MessageMap = Record<ProviderId, string>;
 
+const PROVIDER_SEGMENTS: Segment<ProviderId>[] = [
+  { value: "openai", label: "OpenAI", icon: <OpenAIIcon className="h-3.5 w-3.5" /> },
+  { value: "claude", label: "Anthropic", icon: <AnthropicIcon className="h-3.5 w-3.5" /> }
+];
+
 export function ProviderSettings({
   providers,
   oauthStatuses,
@@ -49,6 +56,11 @@ export function ProviderSettings({
   const [drafts, setDrafts] = useState(providers);
   const [savingId, setSavingId] = useState<ProviderId | null>(null);
   const [oauthBusyId, setOauthBusyId] = useState<ProviderId | null>(null);
+  const [activeProvider, setActiveProvider] = useState<ProviderId>("openai");
+  const [pendingConnect, setPendingConnect] = useState<Record<ProviderId, PendingConnectInfo | null>>({
+    openai: null,
+    claude: null
+  });
   const autoSwitchedProvidersRef = useRef<Set<ProviderId>>(new Set());
   const oauthBootstrapLoadingRef = useRef<Set<ProviderId>>(new Set());
   const runtimeProbeBootstrapRef = useRef<Set<ProviderId>>(new Set());
@@ -283,6 +295,16 @@ export function ProviderSettings({
           closePendingWindow();
         }
 
+        /* Store auth code & URL separately for prominent UI display */
+        const authCode = (response.result.authCode ?? "").trim();
+        const authUrl = (response.result.authUrl ?? "").trim();
+        setPendingConnect((prev) => ({
+          ...prev,
+          [providerId]: authCode.length > 0 || authUrl.length > 0
+            ? { authCode, authUrl }
+            : null
+        }));
+
         onOAuthMessageChange(
           providerId,
           buildProviderOAuthStartMessage({
@@ -295,7 +317,10 @@ export function ProviderSettings({
           })
         );
         void (async () => {
-          await pollOAuthStatus(providerId);
+          const finalStatus = await pollOAuthStatus(providerId);
+          if (finalStatus?.loggedIn) {
+            setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
+          }
           await loadOAuthStatus(providerId, {
             includeRuntimeProbe: true,
             preserveMessage: true
@@ -312,6 +337,7 @@ export function ProviderSettings({
             errorMessage: error instanceof Error ? error.message : "Failed to start OAuth login."
           })
         );
+        setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
         closePendingWindow();
         await loadOAuthStatus(providerId, { preserveMessage: true });
       } finally {
@@ -393,37 +419,40 @@ export function ProviderSettings({
     [oauthBusyId, savingId]
   );
 
-  return (
-    <div>
-      {PROVIDER_ORDER.map((providerId, providerIndex) => {
-        const provider = drafts[providerId];
-        const savedProvider = providers[providerId];
-        const hasUnsavedChanges =
-          provider && savedProvider ? hasProviderDraftChanges(provider, savedProvider) : false;
+  const activeProviderDraft = drafts[activeProvider];
+  const activeSavedProvider = providers[activeProvider];
+  const activeHasUnsavedChanges =
+    activeProviderDraft && activeSavedProvider
+      ? hasProviderDraftChanges(activeProviderDraft, activeSavedProvider)
+      : false;
 
-        return (
-          <ProviderSettingsSection
-            key={providerId}
-            providerId={providerId}
-            providerIndex={providerIndex}
-            provider={provider}
-            status={oauthStatuses[providerId]}
-            oauthStatusText={buildOAuthStatusText(providerId)}
-            hasUnsavedChanges={hasUnsavedChanges}
-            busy={isProviderBusy(providerId)}
-            saving={savingId === providerId}
-            onAuthModeChange={handleAuthModeChange}
-            onCredentialChange={handleCredentialChange}
-            onBaseUrlChange={handleBaseUrlChange}
-            onDefaultModelChange={handleDefaultModelChange}
-            onConnect={handleStartOAuthLogin}
-            connectionMode={connectionMode}
-            onImportToken={handleSyncOAuthToken}
-            onRefresh={handleRefreshOAuthStatus}
-            onSave={handleSaveProvider}
-          />
-        );
-      })}
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        segments={PROVIDER_SEGMENTS}
+        value={activeProvider}
+        onValueChange={setActiveProvider}
+      />
+
+      <ProviderSettingsSection
+        providerId={activeProvider}
+        provider={activeProviderDraft}
+        status={oauthStatuses[activeProvider]}
+        oauthStatusText={buildOAuthStatusText(activeProvider)}
+        hasUnsavedChanges={activeHasUnsavedChanges}
+        busy={isProviderBusy(activeProvider)}
+        saving={savingId === activeProvider}
+        pendingConnect={pendingConnect[activeProvider]}
+        connectionMode={connectionMode}
+        onAuthModeChange={handleAuthModeChange}
+        onCredentialChange={handleCredentialChange}
+        onBaseUrlChange={handleBaseUrlChange}
+        onDefaultModelChange={handleDefaultModelChange}
+        onConnect={handleStartOAuthLogin}
+        onImportToken={handleSyncOAuthToken}
+        onRefresh={handleRefreshOAuthStatus}
+        onSave={handleSaveProvider}
+      />
     </div>
   );
 }

@@ -17,6 +17,7 @@ This is the simplest flow for your users.
 3. Railway builds from root `Dockerfile` automatically.
 4. In Railway service, set variables:
    - `FYREFLOW_RUNTIME_MODE=remote`
+   - `FYREFLOW_DATA_DIR=/app/data`
    - `DASHBOARD_API_TOKEN=<strong-random-token>`
    - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
    - `CORS_ORIGINS=<allowed desktop/web origins>`
@@ -25,6 +26,8 @@ This is the simplest flow for your users.
 7. Generate a public domain for the service.
 
 After this, backend is online and users can connect from desktop app.
+Verify persistence health:
+- `GET https://<railway-domain>/api/health` should include `persistence.status="pass"`.
 
 ### Provider CLI install in Docker image (default)
 
@@ -117,7 +120,7 @@ which codex && codex --version
 
 - Frontend: React + TypeScript + Vite + Tailwind
 - API: Express + TypeScript
-- Persistence: local JSON file (`data/local-db.json`)
+- Persistence: file-backed state under `FYREFLOW_DATA_DIR` (default `data/`), including `local-db.json`, provider secrets key, pairing, scheduler markers, and secure inputs.
 
 ## Run locally
 
@@ -150,8 +153,9 @@ bun run start:desktop
 
 - `PORT` (default `8787`)
 - `FYREFLOW_RUNTIME_MODE` (`local` or `remote`, default `local`)
+- `FYREFLOW_DATA_DIR` (default `data`; set to `/app/data` for container deployments)
 - `DASHBOARD_API_TOKEN` (recommended for remote deployment)
-- `DASHBOARD_SECRETS_KEY` (recommended for remote deployment; keeps encrypted secrets stable across restarts)
+- `DASHBOARD_SECRETS_KEY` (required for stable remote deployments; keeps encrypted secrets readable across restarts/redeploys)
 - `CORS_ORIGINS` (comma-separated; default `http://localhost:5173,http://127.0.0.1:5173,null`)
 - `FYREFLOW_ENABLE_SCHEDULER` (`true`/`false`, default `true`)
 - `FYREFLOW_ENABLE_RECOVERY` (`true`/`false`, default `true`)

@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { resolveDataPath } from "./runtime/dataPaths.js";
 
 const KEY_ENV_NAME = "DASHBOARD_SECRETS_KEY";
-const KEY_FILE_PATH = path.resolve(process.cwd(), "data", ".secrets-key");
+const KEY_FILE_PATH = resolveDataPath(".secrets-key");
 const ENCRYPTION_PREFIX = "enc:v1:";
 const CIPHER_ALGO = "aes-256-gcm";
 const IV_BYTES = 12;

@@ -60,6 +60,14 @@ describe("System and Auth Routes", () => {
         getUpdaterStatus: () => ({
           configured: true
         }),
+        getPersistenceStatus: () => ({
+          status: "warn",
+          dataDir: "/app/data",
+          secretsKeyConfigured: false,
+          runningInContainer: true,
+          dedicatedVolumeMounted: false,
+          issues: ["Data directory /app/data is not backed by a dedicated mount."]
+        }),
         getClientCompatibility: (clientVersion) => ({
           minimumDesktopVersion: "1.3.0",
           clientVersion: clientVersion.trim(),
@@ -82,6 +90,14 @@ describe("System and Auth Routes", () => {
         version?: string;
         realtime?: { enabled: boolean; path: string };
         updater?: { configured: boolean };
+        persistence?: {
+          status: "pass" | "warn";
+          dataDir: string;
+          secretsKeyConfigured: boolean;
+          runningInContainer: boolean;
+          dedicatedVolumeMounted: boolean | null;
+          issues: string[];
+        };
         client?: {
           minimumDesktopVersion: string;
           clientVersion?: string;
@@ -99,6 +115,14 @@ describe("System and Auth Routes", () => {
       });
       expect(payload.updater).toEqual({
         configured: true
+      });
+      expect(payload.persistence).toEqual({
+        status: "warn",
+        dataDir: "/app/data",
+        secretsKeyConfigured: false,
+        runningInContainer: true,
+        dedicatedVolumeMounted: false,
+        issues: ["Data directory /app/data is not backed by a dedicated mount."]
       });
       expect(payload.client).toEqual({
         minimumDesktopVersion: "1.3.0",

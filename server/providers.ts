@@ -5,6 +5,7 @@ import { hasActiveClaudeApiKey } from "./providerCapabilities.js";
 import { ProviderApiError, executeClaudeWithApi, executeOpenAIWithApi, executeViaCli } from "./providers/clientFactory.js";
 import { buildClaudeTimeoutFallbackInput, shouldTryClaudeTimeoutFallback } from "./providers/retryPolicy.js";
 import type { ClaudeApiOptions, ProviderExecutionInput as ProviderExecutionInputShape } from "./providers/types.js";
+import { isEncryptedSecret } from "./secretsCrypto.js";
 
 export type ProviderExecutionInput = ProviderExecutionInputShape;
 
@@ -15,13 +16,23 @@ const MAX_PROVIDER_API_BACKOFF_MS = 20_000;
 const MAX_RETRY_AFTER_MS = 60_000;
 
 function credentialFromProvider(provider: ProviderConfig): string | undefined {
+  const isUsableStoredCredential = (value: string): boolean => {
+    const trimmed = value.trim();
+    return trimmed.length > 0 && !isEncryptedSecret(trimmed);
+  };
+
   if (provider.authMode === "oauth") {
-    const token = provider.oauthToken.trim();
-    return token.length > 0 ? token : undefined;
+    return isUsableStoredCredential(provider.oauthToken) ? provider.oauthToken.trim() : undefined;
   }
 
-  const apiKey = provider.apiKey.trim();
-  return apiKey.length > 0 ? apiKey : undefined;
+  return isUsableStoredCredential(provider.apiKey) ? provider.apiKey.trim() : undefined;
+}
+
+function hasEncryptedPlaceholderCredential(provider: ProviderConfig): boolean {
+  if (provider.authMode === "oauth") {
+    return isEncryptedSecret(provider.oauthToken.trim());
+  }
+  return isEncryptedSecret(provider.apiKey.trim());
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
@@ -236,6 +247,12 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
   }
 
   if (!credential) {
+    if (hasEncryptedPlaceholderCredential(effectiveInput.provider)) {
+      throw new Error(
+        "Stored provider credential cannot be decrypted. Verify DASHBOARD_SECRETS_KEY and persistent backend data volume, then reconnect provider auth."
+      );
+    }
+
     if (
       effectiveInput.provider.authMode === "oauth" &&
       oauthStatus &&

@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import type { ProviderOAuthStatus } from "../../../oauth.js";
 import { MASK_VALUE } from "../../../secureInputs.js";
+import { isEncryptedSecret } from "../../../secretsCrypto.js";
 import type { PipelineRouteContext } from "./contracts.js";
 import { firstParam, sanitizeProviderConfig, sendZodError } from "./helpers.js";
 import { providerIdSchema, providerOAuthCodeSubmitSchema, providerUpdateSchema } from "./schemas.js";
@@ -17,6 +18,16 @@ function withStoredClaudeSetupTokenStatus(
   const provider = deps.store.getProviders()[providerId];
   if (provider.authMode !== "oauth" || provider.oauthToken.trim().length === 0) {
     return status;
+  }
+
+  if (isEncryptedSecret(provider.oauthToken.trim())) {
+    return {
+      ...status,
+      tokenAvailable: false,
+      canUseApi: false,
+      message:
+        "Stored setup token cannot be decrypted. Keep DASHBOARD_SECRETS_KEY stable and persist backend data volume, then reconnect."
+    };
   }
 
   const runtimeProbe =

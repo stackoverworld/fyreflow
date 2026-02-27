@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveDataRootPath } from "../runtime/dataPaths.js";
 
 import type { UpdateChannel } from "./types.js";
 
@@ -105,6 +106,7 @@ function resolveImageRepository(raw: string | undefined, owner: string): string 
 
 export function resolveUpdaterRuntimeConfig(env: NodeJS.ProcessEnv = process.env): UpdaterRuntimeConfig {
   const { corsOrigins, allowAnyCorsOrigin } = parseCorsOrigins(env.UPDATER_CORS_ORIGINS);
+  const dataRootPath = resolveDataRootPath(env);
 
   const githubOwner = normalizeOwner(env.UPDATER_GITHUB_OWNER ?? env.GITHUB_REPOSITORY_OWNER);
   const githubRepo = normalizeRepo(env.UPDATER_GITHUB_REPO ?? env.GITHUB_REPOSITORY?.split("/")[1]);
@@ -124,7 +126,10 @@ export function resolveUpdaterRuntimeConfig(env: NodeJS.ProcessEnv = process.env
     githubToken: (env.GITHUB_TOKEN ?? env.UPDATER_GITHUB_TOKEN ?? "").trim(),
     imageRepository: resolveImageRepository(env.UPDATER_IMAGE_REPOSITORY, githubOwner),
     channel: normalizeChannel(env.UPDATER_CHANNEL),
-    statePath: path.resolve(process.cwd(), (env.UPDATER_STATE_PATH ?? "data/updater-state.json").trim()),
+    statePath:
+      typeof env.UPDATER_STATE_PATH === "string" && env.UPDATER_STATE_PATH.trim().length > 0
+        ? path.resolve(process.cwd(), env.UPDATER_STATE_PATH.trim())
+        : path.join(dataRootPath, "updater-state.json"),
     healthTimeoutMs: parseIntEnv(env.UPDATER_HEALTH_TIMEOUT_MS, 10_000, 2_000, 120_000),
     releaseTimeoutMs: parseIntEnv(env.UPDATER_RELEASE_TIMEOUT_MS, 10_000, 2_000, 120_000),
     autoCheckIntervalMs: parseIntEnv(env.UPDATER_AUTO_CHECK_INTERVAL_MS, 300_000, 30_000, 86_400_000)

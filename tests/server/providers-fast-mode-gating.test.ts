@@ -117,4 +117,21 @@ describe("executeProviderStep fast-mode gating", () => {
     expect(mocks.executeClaudeWithApi).toHaveBeenCalledTimes(1);
     expect(mocks.executeClaudeWithApi.mock.calls[0][0].step.fastMode).toBe(true);
   });
+
+  it("fails fast when stored oauth token is still encrypted placeholder", async () => {
+    await expect(
+      executeProviderStep({
+        provider: createProvider({
+          authMode: "oauth",
+          oauthToken: "enc:v1:iv.tag.payload"
+        }),
+        step: createStep({ fastMode: false }),
+        context: "ctx",
+        task: "task"
+      })
+    ).rejects.toThrow("Stored provider credential cannot be decrypted");
+
+    expect(mocks.executeClaudeWithApi).not.toHaveBeenCalled();
+    expect(mocks.executeViaCli).not.toHaveBeenCalled();
+  });
 });

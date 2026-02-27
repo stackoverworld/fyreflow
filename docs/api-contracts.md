@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-02-26
+- Last reviewed: 2026-02-27
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -8,7 +8,7 @@
 - Version externally consumed contracts.
 
 ## Initial Contract Surface
-- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string }, updater?: { configured: boolean }, client?: { minimumDesktopVersion: string, clientVersion?: string, updateRequired: boolean, message: string, downloadUrl?: string } }
+- GET /api/health -> { ok: boolean, now: string, version?: string, realtime?: { enabled: boolean, path: string }, updater?: { configured: boolean }, persistence?: { status: "pass"|"warn", dataDir: string, secretsKeyConfigured: boolean, runningInContainer: boolean, dedicatedVolumeMounted: boolean|null, issues: string[] }, client?: { minimumDesktopVersion: string, clientVersion?: string, updateRequired: boolean, message: string, downloadUrl?: string } }
 - GET /api/agents -> { items: AgentSummary[], nextCursor?: string }
 - POST /api/agents (CreateAgentInput) -> Agent
 - GET /api/agents/:agentId -> Agent
@@ -48,6 +48,15 @@
 - `message`: user-safe compatibility summary suitable for direct UI display.
 - `downloadUrl`: optional release/download URL from `FYREFLOW_DESKTOP_DOWNLOAD_URL`.
 - Client bootstrap should block dashboard usage when `client.updateRequired === true`.
+
+## Persistence Diagnostics Contract (2026-02-27)
+- `/api/health` may include `persistence` metadata:
+- `status`: `pass` or `warn`.
+- `dataDir`: resolved backend data directory (`FYREFLOW_DATA_DIR` or default `data/`).
+- `secretsKeyConfigured`: whether `DASHBOARD_SECRETS_KEY` is configured.
+- `runningInContainer`: whether backend appears to run in container runtime.
+- `dedicatedVolumeMounted`: `true` when `dataDir` appears to be on non-root mount, `false` when root overlay is detected, `null` when unavailable.
+- `issues`: actionable persistence warnings (for example missing `DASHBOARD_SECRETS_KEY` in remote mode, or no dedicated mount for `dataDir` in containerized remote deployments).
 
 ## File Manager Scope API (2026-02-23)
 - `GET /api/files` lists files inside a storage scope owned by the selected pipeline.

@@ -1,6 +1,6 @@
 # Remote Engine Deploy Runbook
 
-- Last reviewed: 2026-02-26
+- Last reviewed: 2026-02-27
 
 This runbook is for cases where UI stays local/desktop and the FyreFlow engine runs on a remote server.
 
@@ -12,6 +12,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 4. Add a persistent volume mounted to `/app/data`.
 5. Set required env vars:
    - `FYREFLOW_RUNTIME_MODE=remote`
+   - `FYREFLOW_DATA_DIR=/app/data`
    - `DASHBOARD_API_TOKEN=<strong-random-token>`
    - `DASHBOARD_SECRETS_KEY=<strong-random-token>`
    - `CORS_ORIGINS=<allowed desktop/web origins>`
@@ -24,6 +25,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 7. Deploy and verify:
    - `GET https://<railway-domain>/api/health`
    - `GET https://<railway-domain>/api/health` should include realtime metadata when WS is enabled.
+   - `GET https://<railway-domain>/api/health` should include `persistence.status="pass"` and no persistence issues.
 8. In desktop/web app -> `Settings -> Remote`:
    - mode: `remote`
    - API URL: `https://<railway-domain>`
@@ -36,6 +38,7 @@ This runbook is for cases where UI stays local/desktop and the FyreFlow engine r
 2. Fill required values:
    - `FYREFLOW_CORE_IMAGE_REPOSITORY`
    - `FYREFLOW_VERSION`
+   - `FYREFLOW_DATA_DIR` (`/app/data`)
    - `DASHBOARD_API_TOKEN`
    - `DASHBOARD_SECRETS_KEY`
    - `FYREFLOW_UPDATER_BASE_URL` (usually `http://updater:8788` in compose)

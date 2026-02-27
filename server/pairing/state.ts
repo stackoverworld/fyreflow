@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveDataPath } from "../runtime/dataPaths.js";
 
 import type { PairingSessionStatus } from "./service.js";
 
-export const PAIRING_STATE_PATH = path.resolve(process.cwd(), "data", "pairing-state.json");
+export const PAIRING_STATE_PATH = resolveDataPath("pairing-state.json");
 
 export interface PairingSessionSnapshot {
   id: string;

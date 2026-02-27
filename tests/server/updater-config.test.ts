@@ -44,6 +44,15 @@ describe("updater config", () => {
     expect(parseBooleanEnv("unknown", false)).toBe(false);
   });
 
+  it("uses FYREFLOW_DATA_DIR for updater state path when UPDATER_STATE_PATH is omitted", () => {
+    const config = resolveUpdaterRuntimeConfig({
+      UPDATER_AUTH_TOKEN: "updater-secret",
+      FYREFLOW_DATA_DIR: "/app/data"
+    });
+
+    expect(config.statePath).toBe("/app/data/updater-state.json");
+  });
+
   it("requires updater auth token", () => {
     expect(() => resolveUpdaterRuntimeConfig({})).toThrow("UPDATER_AUTH_TOKEN is required for updater service.");
   });

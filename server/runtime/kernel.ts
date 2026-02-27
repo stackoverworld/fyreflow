@@ -29,6 +29,7 @@ import { compareSemverLikeVersions, normalizeSemverLikeVersion } from "./version
 import { sanitizeDashboardState } from "./sanitization.js";
 import { createRealtimeRuntime, type RealtimeRuntime } from "../realtime/websocketRuntime.js";
 import { createUpdaterProxyClient } from "../updater/proxyClient.js";
+import { evaluatePersistenceStatus } from "./persistence.js";
 
 export interface ServerRuntimeOptions {
   env?: NodeJS.ProcessEnv;
@@ -92,6 +93,10 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
   const desktopCompatibilityPolicy = loadDesktopCompatibilityPolicy(config.desktopCompatibilityPolicyPath);
   const minimumDesktopVersion = config.minDesktopVersion || desktopCompatibilityPolicy.minimumDesktopVersion;
   const desktopDownloadUrl = config.desktopDownloadUrl || desktopCompatibilityPolicy.downloadUrl;
+  const persistenceStatus = evaluatePersistenceStatus({
+    mode: config.mode,
+    env: options.env ?? process.env
+  });
 
   const app = createApp({
     apiAuthToken: config.apiAuthToken,
@@ -109,6 +114,7 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       getUpdaterStatus: () => ({
         configured: updaterProxy.isConfigured()
       }),
+      getPersistenceStatus: () => persistenceStatus,
       getClientCompatibility: (clientVersion) => {
         if (minimumDesktopVersion.length === 0) {
           return null;
@@ -210,6 +216,9 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
 
     server = app.listen(config.port, () => {
       console.log(`Agents dashboard API listening on http://localhost:${config.port} (mode=${config.mode})`);
+      if (persistenceStatus.status === "warn") {
+        console.warn(`[persistence-warning] ${persistenceStatus.issues.join(" ")}`);
+      }
       if (realtimeRuntime) {
         console.log(`Realtime WS enabled at ${config.realtimeSocketPath}`);
       }

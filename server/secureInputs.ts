@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isSensitiveRunInputKey, normalizeRunInputKey, normalizeRunInputs, type RunInputs } from "./runInputs.js";
 import { decryptSecret, encryptSecret } from "./secretsCrypto.js";
+import { resolveDataPath } from "./runtime/dataPaths.js";
 
 interface SecureInputsFile {
   version: 1;
@@ -10,7 +11,7 @@ interface SecureInputsFile {
   values: Record<string, string>;
 }
 
-const SECURE_INPUTS_ROOT = path.resolve(process.cwd(), "data", "pipeline-secure-inputs");
+const SECURE_INPUTS_ROOT = resolveDataPath("pipeline-secure-inputs");
 const SECURE_INPUTS_FILE = "secure-inputs.json";
 export const MASK_VALUE = "[secure]";
 
