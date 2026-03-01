@@ -276,7 +276,7 @@ export function ProviderSettingsSection({
           {/* ── OAuth credential card ── */}
           <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5 space-y-1.5">
             <p className="text-xs text-ink-100">
-              {providerId === "claude" ? "Token / Auth Code" : "OAuth Token"}
+              {providerId === "claude" ? "Setup token (optional)" : "OAuth Token"}
             </p>
             <Input
               type="password"
@@ -286,13 +286,13 @@ export function ProviderSettingsSection({
               }}
               placeholder={
                 providerId === "claude"
-                  ? "sk-ant-oat01-... or browser auth code"
+                  ? "sk-ant-oat01-..."
                   : "sk-..."
               }
             />
             <p className="text-[11px] text-ink-500">
               {providerId === "claude"
-                ? `Paste an Anthropic setup-token or browser auth code, then save.${isRemoteMode ? " Setup-token is recommended for remote." : ""}`
+                ? `Paste Claude setup-token from \`claude setup-token\` and save.${isRemoteMode ? " In remote mode this is the only token format accepted for API fallback." : " Browser Authentication Code is not accepted in this field."}`
                 : "Optional. Edit manually and save to apply."}
             </p>
           </div>

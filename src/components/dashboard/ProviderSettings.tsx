@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getProviderOAuthStatus,
   startProviderOAuthLogin,
-  submitProviderOAuthCode,
   syncProviderOAuthToken
 } from "@/lib/api";
 import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
@@ -14,10 +13,9 @@ import {
   setProviderField
 } from "./provider-settings/mappers";
 import {
+  getClaudeOAuthTokenValidationMessage,
   hasProviderDraftChanges,
-  isLikelyClaudeSetupToken,
   oauthStatusLine,
-  shouldPersistClaudeTokenAfterSubmitFailure,
   shouldAutoSwitchToOAuth
 } from "./provider-settings/validation";
 import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
@@ -387,61 +385,14 @@ export function ProviderSettings({
       setSavingId(providerId);
       try {
         const oauthValue = provider.authMode === "oauth" ? provider.oauthToken.trim() : "";
-        const shouldSubmitClaudeBrowserCode =
-          providerId === "claude" &&
-          provider.authMode === "oauth" &&
-          oauthValue.length > 0 &&
-          !isLikelyClaudeSetupToken(oauthValue);
 
-        if (shouldSubmitClaudeBrowserCode) {
-          const response = await submitProviderOAuthCode(providerId, oauthValue);
-          const submitMessage =
-            typeof response.result.message === "string" && response.result.message.trim().length > 0
-              ? response.result.message.trim()
-              : "Authorization code processing did not complete.";
-
-          if (response.result.accepted) {
-            onOAuthMessageChange(providerId, submitMessage);
-            setDrafts((current) => setProviderCredential(current, providerId, "oauth", ""));
-            setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
+        if (providerId === "claude" && provider.authMode === "oauth") {
+          const tokenValidationMessage = getClaudeOAuthTokenValidationMessage(oauthValue);
+          if (tokenValidationMessage) {
+            onOAuthMessageChange(providerId, tokenValidationMessage);
             await loadOAuthStatus(providerId, { preserveMessage: true });
-            void loadOAuthStatus(providerId, {
-              includeRuntimeProbe: true,
-              preserveMessage: true
-            });
             return;
           }
-
-          if (shouldPersistClaudeTokenAfterSubmitFailure(submitMessage, oauthValue)) {
-            await onSaveProvider(providerId, {
-              authMode: "oauth",
-              oauthToken: oauthValue
-            });
-            onOAuthMessageChange(
-              providerId,
-              `${submitMessage} Saved as dashboard token for API auth fallback.`
-            );
-            setPendingConnect((prev) => ({ ...prev, [providerId]: null }));
-            await loadOAuthStatus(providerId, { preserveMessage: true });
-            void loadOAuthStatus(providerId, {
-              includeRuntimeProbe: true,
-              preserveMessage: true
-            });
-            return;
-          }
-
-          onOAuthMessageChange(
-            providerId,
-            providerId === "claude" && !isLikelyClaudeSetupToken(oauthValue)
-              ? `${submitMessage} Browser auth code cannot be used as API token. Paste Claude setup-token (sk-ant-oat...) and save.`
-              : submitMessage
-          );
-          await loadOAuthStatus(providerId, { preserveMessage: true });
-          void loadOAuthStatus(providerId, {
-            includeRuntimeProbe: true,
-            preserveMessage: true
-          });
-          return;
         }
 
         await onSaveProvider(providerId, provider);

@@ -217,7 +217,8 @@ describe("Provider OAuth Routes", () => {
           providerId: "claude",
           tokenAvailable: false,
           canUseApi: false,
-          message: "Stored OAuth value is not a Claude setup-token. Paste setup-token (sk-ant-oat...) and save."
+          message:
+            "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat...) and save."
         })
       );
     } finally {
@@ -260,7 +261,43 @@ describe("Provider OAuth Routes", () => {
           loggedIn: true,
           canUseCli: true,
           canUseApi: false,
-          message: "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable."
+          message:
+            "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat...) and save."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects saving Claude OAuth token when value is browser Authentication Code", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("PUT", "/api/providers/:providerId");
+      const response = await invokeRoute(handler, {
+        method: "PUT",
+        params: { providerId: "claude" },
+        body: {
+          authMode: "oauth",
+          oauthToken: "XADbhD5WjGH0ORuYcWlealQ#QouSHToVDbDZTQDEMnhGk88"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          error:
+            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat...). Browser Authentication Code cannot be saved here."
         })
       );
     } finally {

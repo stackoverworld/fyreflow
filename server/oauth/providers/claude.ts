@@ -511,10 +511,12 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const messageParts = [
     "Claude browser login started.",
     authUrl ? "Browser authorization URL was generated." : "",
-    "If browser shows Authentication Code, copy the full code (including #state) and submit it in this dashboard.",
+    "This dashboard does not submit browser Authentication Code back to Claude CLI.",
+    "For CLI auth, approve browser login and then click Refresh status.",
+    "For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) in dashboard, then Save changes.",
     session.usesPtyShim
       ? ""
-      : "Server is missing PTY helper (`script` command); code submit may not be accepted until backend image installs it.",
+      : "Server is missing PTY helper (`script` command); CLI login capture may be limited until backend image installs it.",
     "If the browser did not open, run `claude auth login` on the remote server terminal."
   ].filter((value) => value.length > 0);
 
@@ -531,234 +533,30 @@ export async function submitClaudeOAuthCode(
   providerId: "claude",
   code: string
 ): Promise<ProviderOAuthCodeSubmitResult> {
+  const normalizedRaw = code.trim();
+  if (normalizedRaw.length === 0) {
+    throw new Error("Authorization code is required.");
+  }
   const available = await isCommandAvailable(CLAUDE_CLI_COMMAND);
   if (!available) {
     throw new Error(`Claude CLI command "${CLAUDE_CLI_COMMAND}" is not installed. Install Claude Code first, then retry.`);
   }
 
-  const normalizedRaw = code.trim();
-  if (normalizedRaw.length === 0) {
-    throw new Error("Authorization code is required.");
-  }
-
-  const session = activeClaudeLoginSession;
-  if (!session || session.finished) {
-    const status = await getClaudeLoggedInStatus();
-    if (status.loggedIn === true) {
-      return {
-        providerId,
-        accepted: true,
-        message: "Claude CLI is already authenticated."
-      };
-    }
-
-    throw new Error("No active Claude login session. Click Connect first, then submit the browser code.");
-  }
-
-  const normalizedCode = normalizeClaudeAuthorizationCodeInput(normalizedRaw, session.authState);
-  if (normalizedCode.length === 0) {
-    throw new Error("Authorization code is required.");
-  }
-  const normalizedState = extractStateFromAuthCode(normalizedCode);
-  const sessionState = (session.authState ?? "").trim();
-  const stateResolution = resolveClaudeAuthorizationSubmissionState(normalizedRaw, sessionState);
-  if (!stateResolution.effectiveState) {
-    logClaudeOAuth("submit_missing_state", {
-      rawLength: normalizedRaw.length,
-      rawHash: hashForLogs(normalizedRaw),
-      sessionAuthStateLength: sessionState.length
-    });
-    return {
-      providerId,
-      accepted: false,
-      message:
-        "Incomplete code: paste the full Authentication Code from browser (must include #state), or paste the full callback URL with code and state."
-    };
-  }
-  if (sessionState.length > 0 && normalizedState && normalizedState !== sessionState) {
-    logClaudeOAuth("submit_state_mismatch", {
-      providedStateHash: hashForLogs(normalizedState),
-      sessionStateHash: hashForLogs(sessionState),
-      rawHash: hashForLogs(normalizedRaw)
-    });
-    return {
-      providerId,
-      accepted: false,
-      message:
-        "This code belongs to a different login attempt (state mismatch). Click Connect again and submit the code from the newest browser page."
-    };
-  }
-  const hasManualCodePrompt = (): boolean =>
-    CLAUDE_MANUAL_CODE_PROMPT_PATTERN.test(session.capturedOutput) ||
-    CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput);
-  if (!hasManualCodePrompt()) {
-    await sleep(320);
-  }
-  if (!hasManualCodePrompt()) {
-    const loggedInWithoutManualPrompt = await waitForClaudeLoggedIn(12_000);
-    if (loggedInWithoutManualPrompt) {
-      logClaudeOAuth("submit_success_without_manual_prompt", {
-        runtimeMs: Date.now() - session.startedAt
-      });
-      return {
-        providerId,
-        accepted: true,
-        message: "Claude CLI login is connected (browser flow completed)."
-      };
-    }
-
-    try {
-      await writeAuthCodeSequenceToSession(session, normalizedCode);
-      logClaudeOAuth("submit_written_without_prompt", {
-        normalizedHash: hashForLogs(normalizedCode),
-        sessionRuntimeMs: Date.now() - session.startedAt
-      });
-      const loggedInAfterBlindSubmit = await waitForClaudeLoggedIn(18_000);
-      if (loggedInAfterBlindSubmit) {
-        logClaudeOAuth("submit_success_without_prompt_after_blind_submit", {
-          runtimeMs: Date.now() - session.startedAt
-        });
-        return {
-          providerId,
-          accepted: true,
-          message: "Authorization code submitted. Claude CLI login is connected."
-        };
-      }
-    } catch (error) {
-      logClaudeOAuth("submit_blind_write_error", {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-
-    logClaudeOAuth("submit_no_manual_prompt", {
-      sessionRuntimeMs: Date.now() - session.startedAt,
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-    return {
-      providerId,
-      accepted: false,
-      message:
-        "Claude CLI did not request manual Authentication Code input for this attempt, and code submit was not accepted. Click Connect, approve in browser, wait 10 seconds, then click Refresh. If needed, reconnect and use code from the newest page."
-    };
-  }
-  logClaudeOAuth("submit_received", {
-    rawLength: normalizedRaw.length,
-    rawHash: hashForLogs(normalizedRaw),
-    hasHashFragment: normalizedRaw.includes("#"),
-    normalizedLength: normalizedCode.length,
-    normalizedHash: hashForLogs(normalizedCode),
-    sessionFinished: session.finished,
-    sessionRuntimeMs: Date.now() - session.startedAt,
-    sessionAuthStateLength: session.authState?.length ?? 0,
-    usedSessionStateFallback: stateResolution.usedSessionStateFallback,
-    outputTail: summarizeOutputForLogs(session.capturedOutput)
-  });
-
-  if (CLAUDE_PRESS_ENTER_PROMPT_PATTERN.test(session.capturedOutput)) {
-    logClaudeOAuth("submit_press_enter_prompt_detected", {
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-    await writeTerminalEnterToSession(session);
-    await sleep(200);
-  }
-
-  let submitAttempt = 1;
-  await writeAuthCodeSequenceToSession(session, normalizedCode);
-  logClaudeOAuth("submit_written", {
-    normalizedHash: hashForLogs(normalizedCode),
-    submitAttempt
-  });
-
-  const loggedIn = await waitForClaudeLoggedIn(CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS);
-  if (loggedIn) {
-    logClaudeOAuth("submit_success", {
-      runtimeMs: Date.now() - session.startedAt
-    });
+  const status = await getClaudeLoggedInStatus();
+  if (status.loggedIn === true) {
     return {
       providerId,
       accepted: true,
-      message: "Authorization code submitted. Claude CLI login is connected."
-    };
-  }
-
-  if (session.finished && session.exitCode !== 0) {
-    const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
-    logClaudeOAuth("submit_failed_process_exit", {
-      exitCode: session.exitCode,
-      submitFailureHint: submitFailureHint ?? "",
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-    return {
-      providerId,
-      accepted: false,
       message:
-        submitFailureHint ??
-        "Authorization code was submitted, but Claude login did not complete. Click Connect and try again."
+        "Claude CLI is already authenticated. Browser Authentication Code submit is not required here."
     };
   }
 
-  const submitFailureHint = extractSubmitFailureHint(session.capturedOutput);
-  if (submitFailureHint) {
-    logClaudeOAuth("submit_failed_invalid_code", {
-      submitFailureHint,
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-    return {
-      providerId,
-      accepted: false,
-      message: submitFailureHint
-    };
-  }
-
-  while (submitAttempt < CLAUDE_CODE_SUBMIT_MAX_ATTEMPTS && !session.finished) {
-    submitAttempt += 1;
-    await sleep(CLAUDE_CODE_SUBMIT_RETRY_INTERVAL_MS);
-
-    const retryHint = extractSubmitFailureHint(session.capturedOutput);
-    if (retryHint) {
-      logClaudeOAuth("submit_retry_cancelled_invalid_code", {
-        submitAttempt,
-        outputTail: summarizeOutputForLogs(session.capturedOutput)
-      });
-      return {
-        providerId,
-        accepted: false,
-        message: retryHint
-      };
-    }
-
-    await writeAuthCodeSequenceToSession(session, normalizedCode);
-    logClaudeOAuth("submit_retry_written", {
-      submitAttempt,
-      normalizedHash: hashForLogs(normalizedCode),
-      outputTail: summarizeOutputForLogs(session.capturedOutput)
-    });
-
-    const retryLoggedIn = await waitForClaudeLoggedIn(8_000);
-    if (retryLoggedIn) {
-      logClaudeOAuth("submit_success_after_retry", {
-        submitAttempt,
-        runtimeMs: Date.now() - session.startedAt
-      });
-      return {
-        providerId,
-        accepted: true,
-        message: "Authorization code submitted. Claude CLI login is connected."
-      };
-    }
-  }
-
-  logClaudeOAuth("submit_pending", {
-    submitAttempt,
-    usesPtyShim: session.usesPtyShim,
-    outputTail: summarizeOutputForLogs(session.capturedOutput)
-  });
   return {
     providerId,
     accepted: false,
-    message: session.usesPtyShim
-      ? "Authorization code was sent, but Claude CLI is still waiting. Click Refresh or reconnect and retry."
-      : "Authorization code was sent, but CLI did not consume stdin. Backend is missing PTY helper (`script`). Install it (Alpine: `apk add util-linux-misc`) and redeploy."
+    message:
+      "Browser Authentication Code submit is not supported in this dashboard for Claude. Click Connect, approve in browser, then Refresh status. For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) in dashboard and Save changes."
   };
 }
 

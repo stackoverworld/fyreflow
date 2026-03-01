@@ -41,8 +41,8 @@ function withStoredClaudeSetupTokenStatus(
       tokenAvailable: false,
       canUseApi: false,
       message: hasCliAuth
-        ? "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable."
-        : "Stored OAuth value is not a Claude setup-token. Paste setup-token (sk-ant-oat...) and save."
+        ? "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat...) and save."
+        : "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat...) and save."
     };
   }
 
@@ -73,6 +73,24 @@ export function registerProviderRoutes(app: Express, deps: PipelineRouteContext)
     try {
       const providerId = providerIdSchema.parse(firstParam(request.params.providerId));
       const input = providerUpdateSchema.parse(request.body);
+      const currentProvider = deps.store.getProviders()[providerId];
+      const effectiveAuthMode = input.authMode ?? currentProvider.authMode;
+      const normalizedOauthToken = typeof input.oauthToken === "string" ? input.oauthToken.trim() : "";
+      const shouldValidateClaudeSetupToken =
+        providerId === "claude" &&
+        effectiveAuthMode === "oauth" &&
+        normalizedOauthToken.length > 0 &&
+        !isEncryptedSecret(normalizedOauthToken) &&
+        normalizedOauthToken !== MASK_VALUE;
+
+      if (shouldValidateClaudeSetupToken && !isClaudeSetupToken(normalizedOauthToken)) {
+        response.status(400).json({
+          error:
+            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat...). Browser Authentication Code cannot be saved here."
+        });
+        return;
+      }
+
       const provider = deps.store.upsertProvider(providerId, input);
       response.json({ provider: sanitizeProviderConfig(provider) });
     } catch (error) {

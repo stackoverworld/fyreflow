@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-02-27
+- Last reviewed: 2026-03-01
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -160,6 +160,9 @@
 ## Provider OAuth Contract (2026-02-25)
 - `GET /api/providers/:providerId/oauth/status` -> `{ status }` where status includes login source, cli availability, login state, token availability, and runtime probe details.
 - Claude special-case (remote fallback): when Claude provider is in `authMode=oauth` and dashboard already has a stored `oauthToken` (for example setup-token), status is normalized to `canUseApi=true` / `tokenAvailable=true` even if Claude CLI login is missing.
+- `PUT /api/providers/claude` validation in `authMode=oauth`:
+- `oauthToken` accepts only Claude setup-token format (`sk-ant-oat...`) when non-empty.
+- Browser callback `Authentication Code` values are rejected with `400`.
 - `POST /api/providers/:providerId/oauth/start` -> `{ result, status }`.
 - `result` fields:
 - `providerId`, `command`, `message`
@@ -169,7 +172,8 @@
 - `POST /api/providers/:providerId/oauth/submit-code` with `{ code }` -> `{ result, status }`.
 - `result` fields:
 - `providerId`, `accepted`, `message`
-- Intended for OAuth flows that require entering a browser-provided authorization code back into CLI (for example Claude callback code flows in remote mode).
+- OpenAI: retains device/OAuth guidance behavior.
+- Claude: browser-code submit is not supported; endpoint returns deterministic guidance to use `Connect` + `Refresh` for CLI auth and `claude setup-token` for API fallback.
 - `POST /api/providers/:providerId/oauth/sync-token` -> `{ provider, result }` where `result` includes sync message, optional token, and latest OAuth status.
 
 ## Error Model

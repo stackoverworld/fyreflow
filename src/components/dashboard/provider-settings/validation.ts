@@ -71,19 +71,11 @@ export function isLikelyClaudeSetupToken(value: string): boolean {
   return /^sk-ant-oat/i.test(value.trim());
 }
 
-export function shouldPersistClaudeTokenAfterSubmitFailure(message: string, tokenCandidate: string): boolean {
-  const normalized = message.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return false;
+export function getClaudeOAuthTokenValidationMessage(tokenCandidate: string): string | null {
+  const normalized = tokenCandidate.trim();
+  if (normalized.length === 0 || isLikelyClaudeSetupToken(normalized)) {
+    return null;
   }
 
-  const shouldFallbackPersist =
-    normalized.includes("did not request manual authentication code input") ||
-    normalized.includes("use setup-token in dashboard");
-
-  if (!shouldFallbackPersist) {
-    return false;
-  }
-
-  return isLikelyClaudeSetupToken(tokenCandidate);
+  return "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat...). Browser Authentication Code from claude.ai cannot be saved here.";
 }

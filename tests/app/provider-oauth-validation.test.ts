@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getClaudeOAuthTokenValidationMessage,
   hasProviderDraftChanges,
   isLikelyClaudeSetupToken,
   oauthStatusLine,
-  shouldPersistClaudeTokenAfterSubmitFailure,
   shouldShowOAuthTokenInput
 } from "../../src/components/dashboard/provider-settings/validation";
 import type { ProviderConfig, ProviderOAuthStatus } from "../../src/lib/types";
@@ -86,31 +86,18 @@ describe("isLikelyClaudeSetupToken", () => {
   });
 });
 
-describe("shouldPersistClaudeTokenAfterSubmitFailure", () => {
-  it("returns true for no-manual-prompt submit message", () => {
-    expect(
-      shouldPersistClaudeTokenAfterSubmitFailure(
-        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes.",
-        "sk-ant-oat01-example"
-      )
-    ).toBe(true);
+describe("getClaudeOAuthTokenValidationMessage", () => {
+  it("accepts empty value for CLI-only OAuth mode", () => {
+    expect(getClaudeOAuthTokenValidationMessage("")).toBeNull();
   });
 
-  it("returns false for invalid-code message", () => {
-    expect(
-      shouldPersistClaudeTokenAfterSubmitFailure(
-        "Claude rejected this authentication code. Copy the full Authentication Code from browser and submit again.",
-        "sk-ant-oat01-example"
-      )
-    ).toBe(false);
+  it("accepts valid setup-token", () => {
+    expect(getClaudeOAuthTokenValidationMessage("sk-ant-oat01-example")).toBeNull();
   });
 
-  it("returns false for non setup-token even when message suggests setup-token fallback", () => {
-    expect(
-      shouldPersistClaudeTokenAfterSubmitFailure(
-        "Claude CLI is waiting for browser completion and did not request manual Authentication Code input. Use setup-token in dashboard and click Save changes.",
-        "XADbhD5WjGH0ORuYcWLea#state"
-      )
-    ).toBe(false);
+  it("rejects browser Authentication Code", () => {
+    expect(getClaudeOAuthTokenValidationMessage("XADbhD5WjGH0ORuYcWLea#state")).toBe(
+      "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat...). Browser Authentication Code from claude.ai cannot be saved here."
+    );
   });
 });
