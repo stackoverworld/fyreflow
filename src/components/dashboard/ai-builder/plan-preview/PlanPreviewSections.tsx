@@ -184,7 +184,6 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
     shouldStream,
     onStreamingComplete
   );
-  const showDot = nativeStreamingWaiting || nativeStreamingActive || isStreaming;
   const hasQuestions = (message.questions?.length ?? 0) > 0;
   const actionLabel =
     message.action === "answer" && hasQuestions
@@ -222,18 +221,20 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
 
         {isUser || isError ? (
           <p className="whitespace-pre-wrap break-words text-[13px]">{message.content}</p>
+        ) : nativeStreamingWaiting ? (
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-ember-400" />
+        ) : nativeStreamingActive ? (
+          <div>
+            <p className="whitespace-pre-wrap break-words text-[13px]">
+              {message.content}
+              <span className="ml-1 inline-block h-2 w-2 rounded-full bg-ember-400 align-middle" />
+            </p>
+          </div>
         ) : (
           <>
-            {nativeStreamingWaiting ? null : (
-              <MarkdownContent content={nativeStreamingActive ? message.content : isStreaming ? displayedText : message.content} />
-            )}
-            {showDot ? (
-              <span
-                className={cn(
-                  "inline-block h-2 w-2 rounded-full bg-ember-400 align-middle",
-                  nativeStreamingWaiting ? "animate-pulse" : "ml-1"
-                )}
-              />
+            <MarkdownContent content={isStreaming ? displayedText : message.content} />
+            {isStreaming ? (
+              <span className="ml-1 inline-block h-2 w-2 rounded-full bg-ember-400 align-middle" />
             ) : null}
           </>
         )}

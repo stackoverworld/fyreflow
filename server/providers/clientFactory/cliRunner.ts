@@ -583,7 +583,8 @@ function runCommand(
   stdinInput?: string,
   timeoutMs = 240000,
   signal?: AbortSignal,
-  onLog?: (message: string) => void
+  onLog?: (message: string) => void,
+  onStdoutLine?: (line: string) => void
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     const preview = (value: string, maxChars = 160): string =>
@@ -663,10 +664,12 @@ function runCommand(
         const line = stdoutLineBuffer.slice(0, newlineIndex);
         stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
         emitStreamJsonModelCommands(line);
+        onStdoutLine?.(line);
       }
 
       if (flush && stdoutLineBuffer.trim().length > 0) {
         emitStreamJsonModelCommands(stdoutLineBuffer);
+        onStdoutLine?.(stdoutLineBuffer);
         stdoutLineBuffer = "";
       }
     };
@@ -1204,6 +1207,20 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
   );
   input.log?.("Model summary: Request accepted; model started processing.");
 
+  const forwardStreamJsonDelta = input.onTextDelta && initialOutputFormat === "stream-json"
+    ? (line: string): void => {
+        try {
+          const parsed = JSON.parse(line);
+          if (typeof parsed === "object" && parsed !== null) {
+            const delta = getClaudePayloadDelta(parsed);
+            if (delta.length > 0) {
+              input.onTextDelta!(delta);
+            }
+          }
+        } catch {}
+      }
+    : undefined;
+
   let stdout = "";
   let usedCompatibilityFallback = false;
   let usedForcePlainText = false;
@@ -1220,7 +1237,8 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
       undefined,
       timeoutMs,
       input.signal,
-      input.log
+      input.log,
+      forwardStreamJsonDelta
     ));
   } catch (error) {
     if (!(isUnknownClaudeOptionError(error) || isUnsupportedClaudeOutputFormatError(error))) {
