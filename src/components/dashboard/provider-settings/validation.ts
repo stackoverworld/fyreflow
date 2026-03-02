@@ -5,6 +5,8 @@ import type {
   ProviderOAuthStatus
 } from "@/lib/types";
 
+const MASKED_SECRET_PLACEHOLDER = "[secure]";
+
 export function shouldAutoSwitchToOAuth(args: {
   provider: ProviderConfig;
   status: ProviderOAuthStatus | null;
@@ -73,7 +75,11 @@ export function isLikelyClaudeSetupToken(value: string): boolean {
 
 export function getClaudeOAuthTokenValidationMessage(tokenCandidate: string): string | null {
   const normalized = tokenCandidate.trim();
-  if (normalized.length === 0 || isLikelyClaudeSetupToken(normalized)) {
+  if (
+    normalized.length === 0 ||
+    normalized === MASKED_SECRET_PLACEHOLDER ||
+    isLikelyClaudeSetupToken(normalized)
+  ) {
     return null;
   }
 

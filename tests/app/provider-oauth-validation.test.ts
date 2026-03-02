@@ -91,6 +91,10 @@ describe("getClaudeOAuthTokenValidationMessage", () => {
     expect(getClaudeOAuthTokenValidationMessage("")).toBeNull();
   });
 
+  it("accepts masked placeholder from stored secure value", () => {
+    expect(getClaudeOAuthTokenValidationMessage("[secure]")).toBeNull();
+  });
+
   it("accepts valid setup-token", () => {
     expect(getClaudeOAuthTokenValidationMessage("sk-ant-oat01-example")).toBeNull();
   });

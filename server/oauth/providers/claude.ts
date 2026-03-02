@@ -582,7 +582,7 @@ export async function getClaudeOAuthStatus(
       ? "Claude CLI not found on this server. Install Claude Code CLI on backend and set CLAUDE_CLI_PATH if needed."
       : loggedIn
         ? "Logged in with Claude Code. OAuth credentials are managed by Claude CLI."
-        : "Not logged in. Start browser login."
+        : "Not logged in. Click Connect for CLI auth, or use `claude setup-token` for API fallback."
   };
 
   if (options.includeRuntimeProbe) {
