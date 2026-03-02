@@ -1575,3 +1575,114 @@ export async function generateFlowDraft(payload: FlowBuilderRequest) {
     shouldRetry: (error) => isNetworkRequestError(FLOW_BUILDER_GENERATE_PATH, method, error)
   });
 }
+
+const FLOW_BUILDER_STREAM_PATH = "/api/flow-builder/generate-stream";
+
+export interface FlowDraftStreamCallbacks {
+  onTextDelta: (delta: string) => void;
+  onComplete: (response: FlowBuilderResponse) => void;
+  onError: (error: Error) => void;
+}
+
+export async function generateFlowDraftStream(
+  payload: FlowBuilderRequest,
+  callbacks: FlowDraftStreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const connection = getActiveConnectionSettings();
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  const clientAppVersion = getClientAppVersion();
+  if (clientAppVersion.length > 0) {
+    headers.set("x-fyreflow-client-version", clientAppVersion);
+  }
+  if (connection.apiToken.length > 0) {
+    headers.set("Authorization", `Bearer ${connection.apiToken}`);
+  }
+
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort("Stream timed out");
+  }, FLOW_BUILDER_REQUEST_TIMEOUT_MS);
+
+  const cleanupSignalForwarding = (() => {
+    if (!signal) {
+      return () => {};
+    }
+    const relayAbort = () => {
+      const reason =
+        signal.reason instanceof Error ? signal.reason.message
+        : typeof signal.reason === "string" ? signal.reason
+        : "Request aborted";
+      timeoutController.abort(reason);
+    };
+    if (signal.aborted) {
+      relayAbort();
+      return () => {};
+    }
+    signal.addEventListener("abort", relayAbort, { once: true });
+    return () => {
+      signal.removeEventListener("abort", relayAbort);
+    };
+  })();
+
+  let response: Response;
+  try {
+    response = await fetch(`${connection.apiBaseUrl}${FLOW_BUILDER_STREAM_PATH}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: timeoutController.signal
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    cleanupSignalForwarding();
+    if (timedOut) {
+      callbacks.onError(new Error(`Stream timed out after ${FLOW_BUILDER_REQUEST_TIMEOUT_MS}ms`));
+      return;
+    }
+    callbacks.onError(error instanceof Error ? error : new Error("Stream connection failed"));
+    return;
+  }
+
+  if (!response.ok || !response.body) {
+    clearTimeout(timeout);
+    cleanupSignalForwarding();
+    const text = await response.text().catch(() => "");
+    callbacks.onError(new Error(text || `Stream request failed with ${response.status}`));
+    return;
+  }
+
+  try {
+    await consumeSseStream(response.body, ({ event, data }) => {
+      if (event === "text_delta") {
+        const parsed = tryParseJsonObject(data);
+        if (parsed && typeof parsed.delta === "string") {
+          callbacks.onTextDelta(parsed.delta);
+        }
+        return;
+      }
+
+      if (event === "complete") {
+        const parsed = tryParseJsonObject(data);
+        if (parsed && parsed.response) {
+          callbacks.onComplete(parsed.response as FlowBuilderResponse);
+        }
+        return;
+      }
+
+      if (event === "error") {
+        const parsed = tryParseJsonObject(data);
+        const message = parsed && typeof parsed.message === "string" ? parsed.message : "Stream error";
+        callbacks.onError(new Error(message));
+      }
+    });
+  } catch (error) {
+    callbacks.onError(error instanceof Error ? error : new Error("Stream read failed"));
+  } finally {
+    clearTimeout(timeout);
+    cleanupSignalForwarding();
+  }
+}

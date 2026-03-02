@@ -23,6 +23,7 @@ export interface ProviderExecutionInput {
   log?: (message: string) => void;
   outputMode?: "markdown" | "json";
   signal?: AbortSignal;
+  onTextDelta?: (delta: string) => void;
 }
 
 export type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high";

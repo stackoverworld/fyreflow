@@ -36,7 +36,8 @@ import type {
   DraftOnlyResult,
   FlowBuilderAction,
   FlowBuilderRequest,
-  FlowBuilderResponse
+  FlowBuilderResponse,
+  FlowBuilderStreamOptions
 } from "./flowBuilder/contracts.js";
 import type { FlowBuilderProviderRuntimeContext } from "./flowBuilder/prompts/providerRuntime.js";
 import type {
@@ -48,6 +49,7 @@ export type {
   FlowBuilderAction,
   FlowBuilderRequest,
   FlowBuilderResponse,
+  FlowBuilderStreamOptions,
   FlowChatMessage
 } from "./flowBuilder/contracts.js";
 
@@ -98,7 +100,8 @@ async function generateDraftOnly(
   request: FlowBuilderRequest,
   provider: ProviderConfig,
   providerRuntime: FlowBuilderProviderRuntimeContext,
-  capabilityNotes: string[]
+  capabilityNotes: string[],
+  streamOptions?: FlowBuilderStreamOptions
 ): Promise<DraftOnlyResult> {
   const generatorStep = createGeneratorStep(
     request,
@@ -114,7 +117,9 @@ async function generateDraftOnly(
       ...request,
       providerRuntime
     }),
-    outputMode: "json"
+    outputMode: "json",
+    onTextDelta: streamOptions?.onTextDelta,
+    signal: streamOptions?.signal
   });
 
   if (isSimulatedProviderOutput(rawOutput)) {
@@ -224,7 +229,8 @@ async function generateConversationResponse(
   request: FlowBuilderRequest,
   provider: ProviderConfig,
   providerRuntime: FlowBuilderProviderRuntimeContext,
-  capabilityNotes: string[]
+  capabilityNotes: string[],
+  streamOptions?: FlowBuilderStreamOptions
 ): Promise<FlowBuilderResponse> {
   const copilotStep = createGeneratorStep(
     request,
@@ -240,7 +246,9 @@ async function generateConversationResponse(
       ...request,
       providerRuntime
     }),
-    outputMode: "json"
+    outputMode: "json",
+    onTextDelta: streamOptions?.onTextDelta,
+    signal: streamOptions?.signal
   });
 
   if (isSimulatedProviderOutput(rawOutput)) {
@@ -416,7 +424,8 @@ async function generateConversationResponse(
 
 export async function generateFlowDraft(
   request: FlowBuilderRequest,
-  providers: Record<ProviderId, ProviderConfig>
+  providers: Record<ProviderId, ProviderConfig>,
+  streamOptions?: FlowBuilderStreamOptions
 ): Promise<FlowBuilderResponse> {
   const provider = providers[request.providerId];
   if (!provider) {
@@ -431,7 +440,8 @@ export async function generateFlowDraft(
       prepared.request,
       provider,
       prepared.providerRuntime,
-      prepared.capabilityNotes
+      prepared.capabilityNotes,
+      streamOptions
     );
   }
 
@@ -439,7 +449,8 @@ export async function generateFlowDraft(
     prepared.request,
     provider,
     prepared.providerRuntime,
-    prepared.capabilityNotes
+    prepared.capabilityNotes,
+    streamOptions
   );
   return {
     action: "replace_flow",

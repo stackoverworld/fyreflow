@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction, type Dispatch } from "react";
 import { MODEL_CATALOG, getDefaultModelForProvider } from "@/lib/modelCatalog";
-import { generateFlowDraft } from "@/lib/api";
+import { generateFlowDraft, generateFlowDraftStream } from "@/lib/api";
 import {
   clearAiChatPendingRequest,
   loadAiChatDraft,
@@ -39,6 +39,7 @@ import type {
   AiChatMessage,
   FlowBuilderAction,
   FlowBuilderRequest,
+  FlowBuilderResponse,
   McpServerConfig,
   PipelinePayload,
   ProviderId,
@@ -353,144 +354,237 @@ export function useAiBuilderSession({
     }
   }, [hasOlderMessages, hydratedWorkflowKey, workflowKey]);
 
+  const streamingContentRef = useRef("");
+  const streamingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamingMessageIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (streamingFlushTimerRef.current !== null) {
+        clearTimeout(streamingFlushTimerRef.current);
+        streamingFlushTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const flushStreamingContent = useCallback(() => {
+    streamingFlushTimerRef.current = null;
+    const msgId = streamingMessageIdRef.current;
+    const content = streamingContentRef.current;
+    if (!msgId) return;
+
+    setMessages((current) => {
+      const idx = current.findIndex((msg) => msg.id === msgId);
+      if (idx === -1 || current[idx].content === content) return current;
+      const next = [...current];
+      next[idx] = { ...current[idx], content };
+      return next;
+    });
+  }, []);
+
+  const scheduleStreamingFlush = useCallback(() => {
+    if (streamingFlushTimerRef.current !== null) return;
+    streamingFlushTimerRef.current = setTimeout(flushStreamingContent, 50);
+  }, [flushStreamingContent]);
+
+  const processCompletedResult = useCallback(
+    async (
+      result: FlowBuilderResponse,
+      messageId: string,
+      requestId: string,
+      requestMode: AiBuilderMode,
+      startedAt: number,
+      resumed: boolean,
+      insertMode: "update_existing" | "append_new"
+    ) => {
+      const mutationAction = result.action === "update_current_flow" || result.action === "replace_flow";
+      const mutationSuppressedByAskMode = requestMode === "ask" && mutationAction;
+      const responseAction: FlowBuilderAction = mutationSuppressedByAskMode ? "answer" : result.action;
+      const shouldApplyDraft = mutationAction && !mutationSuppressedByAskMode;
+      const nextDraft =
+        shouldApplyDraft && result.draft
+          ? result.action === "replace_flow"
+            ? await autoLayoutPipelineDraftSmart(result.draft)
+            : result.draft
+          : undefined;
+      const generatedDraftSnapshot = nextDraft ? clonePipelinePayload(nextDraft) : undefined;
+
+      const baseAssistantContent = result.message.trim().length
+        ? result.message.trim()
+        : responseAction === "answer"
+          ? "Answered without changing the flow."
+          : result.source === "model"
+            ? `Prepared ${nextDraft?.steps.length ?? 0} step(s) and ${nextDraft?.links.length ?? 0} link(s).`
+            : `Generated deterministic template: ${result.notes.join(" ")}`;
+      const assistantContent = mutationSuppressedByAskMode
+        ? `${baseAssistantContent}\n\nAsk mode kept this response read-only; no flow changes were applied.`
+        : baseAssistantContent;
+
+      const resolvedNotes = mutationSuppressedByAskMode
+        ? [...result.notes, "Ask mode kept the response read-only; flow mutation output was ignored."]
+        : result.notes;
+
+      const aiMsg: AiChatMessage = {
+        id: messageId,
+        requestId,
+        role: "assistant",
+        content: assistantContent,
+        generatedDraft: generatedDraftSnapshot,
+        action: responseAction,
+        questions: result.questions,
+        source: result.source,
+        notes: resolvedNotes,
+        timestamp: Date.now(),
+      };
+
+      if (insertMode === "update_existing") {
+        setMessages((current) =>
+          current.map((msg) =>
+            msg.id === messageId
+              ? { ...aiMsg, streaming: false }
+              : msg
+          )
+        );
+      } else {
+        appendVisibleMessages([aiMsg]);
+      }
+
+      const latestMessages = loadAiChatHistory(workflowKey);
+      if (hasAssistantResultForRequest(latestMessages, requestId)) {
+        appendAiChatDebugEvent(workflowKey, {
+          level: "info",
+          event: "request_duplicate_ignored",
+          message: "Ignored duplicate AI Builder completion for request",
+          meta: { requestId, mode: requestMode, resumed, reason: "assistant_result_already_recorded" }
+        });
+        return;
+      }
+
+      const durationMs = Date.now() - startedAt;
+      appendAiChatDebugEvent(workflowKey, {
+        level: "info",
+        event: "request_success",
+        message: "AI Builder chat request completed",
+        meta: { requestId, durationMs, mode: requestMode, resumed, action: result.action, source: result.source, hasDraft: Boolean(result.draft), questions: result.questions?.length ?? 0 }
+      });
+
+      saveAiChatHistory(workflowKey, [...latestMessages, aiMsg]);
+
+      if (generatedDraftSnapshot) {
+        onApplyDraft(clonePipelinePayload(generatedDraftSnapshot));
+        onNotice(result.action === "replace_flow" ? "AI rebuilt the flow from chat." : "AI updated the current flow from chat.");
+      } else if (mutationSuppressedByAskMode) {
+        onNotice("Ask mode replied without changing the flow.");
+      } else if ((result.questions?.length ?? 0) > 0) {
+        onNotice("AI asked clarification questions.");
+      } else {
+        onNotice("AI replied in chat.");
+      }
+    },
+    [appendVisibleMessages, onApplyDraft, onNotice, workflowKey]
+  );
+
   const runFlowBuilderRequest = useCallback(
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
+        // Create streaming placeholder message
+        const streamingMsgId = crypto.randomUUID();
+        const placeholderMsg: AiChatMessage = {
+          id: streamingMsgId,
+          requestId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          timestamp: Date.now(),
+        };
+        streamingContentRef.current = "";
+        streamingMessageIdRef.current = streamingMsgId;
+        appendVisibleMessages([placeholderMsg]);
+
         try {
-          const result = await generateFlowDraft(payload);
-          const mutationAction = result.action === "update_current_flow" || result.action === "replace_flow";
-          const mutationSuppressedByAskMode = requestMode === "ask" && mutationAction;
-          const responseAction: FlowBuilderAction = mutationSuppressedByAskMode ? "answer" : result.action;
-          const shouldApplyDraft = mutationAction && !mutationSuppressedByAskMode;
-          const nextDraft =
-            shouldApplyDraft && result.draft
-              ? result.action === "replace_flow"
-                ? await autoLayoutPipelineDraftSmart(result.draft)
-                : result.draft
-              : undefined;
-          const generatedDraftSnapshot = nextDraft ? clonePipelinePayload(nextDraft) : undefined;
+          await new Promise<void>((resolve, reject) => {
+            generateFlowDraftStream(
+              payload,
+              {
+                onTextDelta: (delta) => {
+                  streamingContentRef.current += delta;
+                  scheduleStreamingFlush();
+                },
+                onComplete: async (result) => {
+                  if (streamingFlushTimerRef.current !== null) {
+                    clearTimeout(streamingFlushTimerRef.current);
+                    streamingFlushTimerRef.current = null;
+                  }
+                  streamingMessageIdRef.current = null;
 
-          const baseAssistantContent = result.message.trim().length
-            ? result.message.trim()
-            : responseAction === "answer"
-              ? "Answered without changing the flow."
-              : result.source === "model"
-                ? `Prepared ${nextDraft?.steps.length ?? 0} step(s) and ${nextDraft?.links.length ?? 0} link(s).`
-                : `Generated deterministic template: ${result.notes.join(" ")}`;
-          const assistantContent = mutationSuppressedByAskMode
-            ? `${baseAssistantContent}\n\nAsk mode kept this response read-only; no flow changes were applied.`
-            : baseAssistantContent;
-
-          const aiMsg: AiChatMessage = {
-            id: crypto.randomUUID(),
-            requestId,
-            role: "assistant",
-            content: assistantContent,
-            generatedDraft: generatedDraftSnapshot,
-            action: responseAction,
-            questions: result.questions,
-            source: result.source,
-            notes: mutationSuppressedByAskMode
-              ? [...result.notes, "Ask mode kept the response read-only; flow mutation output was ignored."]
-              : result.notes,
-            timestamp: Date.now(),
-          };
-          const latestMessages = loadAiChatHistory(workflowKey);
-          if (hasAssistantResultForRequest(latestMessages, requestId)) {
-            appendAiChatDebugEvent(workflowKey, {
-              level: "info",
-              event: "request_duplicate_ignored",
-              message: "Ignored duplicate AI Builder completion for request",
-              meta: {
-                requestId,
-                mode: requestMode,
-                resumed,
-                reason: "assistant_result_already_recorded"
+                  try {
+                    await processCompletedResult(result, streamingMsgId, requestId, requestMode, startedAt, resumed, "update_existing");
+                    resolve();
+                  } catch (error) {
+                    reject(error);
+                  }
+                },
+                onError: (error) => {
+                  if (streamingFlushTimerRef.current !== null) {
+                    clearTimeout(streamingFlushTimerRef.current);
+                    streamingFlushTimerRef.current = null;
+                  }
+                  streamingMessageIdRef.current = null;
+                  reject(error);
+                }
               }
-            });
-            return;
-          }
+            ).catch(reject);
+          });
+        } catch (streamError) {
+          // Remove streaming placeholder
+          setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
 
-          const durationMs = Date.now() - startedAt;
           appendAiChatDebugEvent(workflowKey, {
             level: "info",
-            event: "request_success",
-            message: "AI Builder chat request completed",
-            meta: {
-              requestId,
-              durationMs,
-              mode: requestMode,
-              resumed,
-              action: result.action,
-              source: result.source,
-              hasDraft: Boolean(result.draft),
-              questions: result.questions?.length ?? 0
+            event: "stream_fallback",
+            message: "Streaming failed; falling back to non-streaming request",
+            meta: { requestId, mode: requestMode, resumed, error: streamError instanceof Error ? streamError.message : "unknown" }
+          });
+
+          // Fall back to non-streaming request
+          try {
+            const result = await generateFlowDraft(payload);
+            const fallbackMsgId = crypto.randomUUID();
+            await processCompletedResult(result, fallbackMsgId, requestId, requestMode, startedAt, resumed, "append_new");
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Failed to process AI chat message";
+            const durationMs = Date.now() - startedAt;
+            const latestMessages = loadAiChatHistory(workflowKey);
+            if (hasAssistantResultForRequest(latestMessages, requestId) || hasErrorResultForRequest(latestMessages, requestId)) {
+              appendAiChatDebugEvent(workflowKey, {
+                level: "info",
+                event: "request_duplicate_ignored",
+                message: "Ignored duplicate AI Builder failure for request",
+                meta: { requestId, mode: requestMode, resumed, reason: "terminal_result_already_recorded" }
+              });
+              return;
             }
-          });
 
-          const messagesWithAssistant = [...latestMessages, aiMsg];
-          appendVisibleMessages([aiMsg]);
-          saveAiChatHistory(workflowKey, messagesWithAssistant);
-
-          if (generatedDraftSnapshot) {
-            onApplyDraft(clonePipelinePayload(generatedDraftSnapshot));
-            onNotice(
-              result.action === "replace_flow"
-                ? "AI rebuilt the flow from chat."
-                : "AI updated the current flow from chat."
-            );
-          } else if (mutationSuppressedByAskMode) {
-            onNotice("Ask mode replied without changing the flow.");
-          } else if ((result.questions?.length ?? 0) > 0) {
-            onNotice("AI asked clarification questions.");
-          } else {
-            onNotice("AI replied in chat.");
-          }
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : "Failed to process AI chat message";
-          const durationMs = Date.now() - startedAt;
-          const latestMessages = loadAiChatHistory(workflowKey);
-          if (hasAssistantResultForRequest(latestMessages, requestId) || hasErrorResultForRequest(latestMessages, requestId)) {
             appendAiChatDebugEvent(workflowKey, {
-              level: "info",
-              event: "request_duplicate_ignored",
-              message: "Ignored duplicate AI Builder failure for request",
-              meta: {
-                requestId,
-                mode: requestMode,
-                resumed,
-                reason: "terminal_result_already_recorded"
-              }
+              level: "error",
+              event: "request_error",
+              message: "AI Builder chat request failed",
+              meta: { requestId, durationMs, resumed, errorName: error instanceof Error ? error.name : "UnknownError", providerId: payload.providerId, model: payload.model },
+              details: errorMessage
             });
-            return;
-          }
-
-          appendAiChatDebugEvent(workflowKey, {
-            level: "error",
-            event: "request_error",
-            message: "AI Builder chat request failed",
-            meta: {
+            const errorMessageEntry: AiChatMessage = {
+              id: crypto.randomUUID(),
               requestId,
-              durationMs,
-              resumed,
-              errorName: error instanceof Error ? error.name : "UnknownError",
-              providerId: payload.providerId,
-              model: payload.model
-            },
-            details: errorMessage
-          });
-          const errorMessageEntry: AiChatMessage = {
-            id: crypto.randomUUID(),
-            requestId,
-            role: "error",
-            content: errorMessage,
-            action: "answer",
-            timestamp: Date.now(),
-          };
-          const messagesWithError = [...latestMessages, errorMessageEntry];
-          appendVisibleMessages([errorMessageEntry]);
-          saveAiChatHistory(workflowKey, messagesWithError);
-          onNotice(errorMessage);
+              role: "error",
+              content: errorMessage,
+              action: "answer",
+              timestamp: Date.now(),
+            };
+            const messagesWithError = [...latestMessages, errorMessageEntry];
+            appendVisibleMessages([errorMessageEntry]);
+            saveAiChatHistory(workflowKey, messagesWithError);
+            onNotice(errorMessage);
+          }
         } finally {
           if (activeRequestIdRef.current === requestId) {
             activeRequestIdRef.current = null;
@@ -502,13 +596,7 @@ export function useAiBuilderSession({
             level: "info",
             event: "request_end",
             message: "AI Builder chat request lifecycle finished",
-            meta: {
-              requestId,
-              mode: requestMode,
-              resumed,
-              pending: false,
-              elapsedMs: Date.now() - startedAt
-            }
+            meta: { requestId, mode: requestMode, resumed, pending: false, elapsedMs: Date.now() - startedAt }
           });
         }
       });
@@ -529,7 +617,7 @@ export function useAiBuilderSession({
 
       await execution.promise;
     },
-    [appendVisibleMessages, onApplyDraft, onNotice, workflowKey]
+    [appendVisibleMessages, onApplyDraft, onNotice, processCompletedResult, scheduleStreamingFlush, workflowKey]
   );
 
   useEffect(() => {

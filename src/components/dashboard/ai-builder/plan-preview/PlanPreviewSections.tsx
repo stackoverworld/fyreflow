@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
@@ -120,16 +121,68 @@ export function MarkdownContent({ content }: { content: string }) {
   );
 }
 
+function useStreamingText(
+  fullText: string,
+  enabled: boolean,
+  onComplete?: () => void
+): { displayedText: string; isStreaming: boolean } {
+  const words = useMemo(() => fullText.match(/\S+\s*/g) || [], [fullText]);
+  const totalWords = words.length;
+  const [visibleCount, setVisibleCount] = useState(enabled ? 0 : totalWords);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
+  useEffect(() => {
+    if (!enabled) {
+      setVisibleCount(totalWords);
+      return;
+    }
+    setVisibleCount(0);
+    let count = 0;
+    const interval = setInterval(() => {
+      count += 1 + Math.floor(Math.random() * 2);
+      if (count >= totalWords) {
+        setVisibleCount(totalWords);
+        clearInterval(interval);
+        onCompleteRef.current?.();
+      } else {
+        setVisibleCount(count);
+      }
+    }, 30);
+
+    return () => clearInterval(interval);
+  }, [enabled, fullText, totalWords]);
+
+  if (!enabled || visibleCount >= totalWords) {
+    return { displayedText: fullText, isStreaming: false };
+  }
+
+  return {
+    displayedText: words.slice(0, visibleCount).join(""),
+    isStreaming: true,
+  };
+}
+
 interface ChatBubbleProps {
   message: AiChatMessage;
+  streaming?: boolean;
+  onStreamingComplete?: () => void;
   onApply?: () => void;
   onQuickReply?: (value: string) => Promise<void>;
   readOnly?: boolean;
 }
 
-export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }: ChatBubbleProps) {
+export function ChatBubble({ message, streaming = false, onStreamingComplete, onApply, onQuickReply, readOnly = false }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
+  const isNativeStreaming = message.streaming === true && !isUser && !isError;
+  const shouldStream = !isNativeStreaming && streaming && !isUser && !isError;
+  const { displayedText, isStreaming } = useStreamingText(
+    message.content,
+    shouldStream,
+    onStreamingComplete
+  );
+  const showCursor = isNativeStreaming || isStreaming;
   const hasQuestions = (message.questions?.length ?? 0) > 0;
   const actionLabel =
     message.action === "answer" && hasQuestions
@@ -168,7 +221,12 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
         {isUser || isError ? (
           <p className="whitespace-pre-wrap break-words text-[13px]">{message.content}</p>
         ) : (
-          <MarkdownContent content={message.content} />
+          <>
+            <MarkdownContent content={isNativeStreaming ? message.content : isStreaming ? displayedText : message.content} />
+            {showCursor ? (
+              <span className="mt-1 inline-block h-3 w-0.5 animate-pulse rounded-full bg-ember-400" />
+            ) : null}
+          </>
         )}
 
         {message.generatedDraft && onApply ? (
@@ -209,7 +267,7 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
           </div>
         ) : null}
 
-        <p className="mt-1 text-[10px] text-ink-600">{new Date(message.timestamp).toLocaleTimeString()}</p>
+        <p className="mt-1 text-[10px] text-ink-600">{new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
       </div>
     </motion.div>
   );

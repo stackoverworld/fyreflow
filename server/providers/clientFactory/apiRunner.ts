@@ -608,7 +608,8 @@ function extractOpenAiDelta(payload: Record<string, unknown>): string {
 
 async function readOpenAiStreamingOutput(
   response: Response,
-  log?: (message: string) => void
+  log?: (message: string) => void,
+  onTextDelta?: (delta: string) => void
 ): Promise<StreamingProviderResult> {
   if (!response.body) {
     return { text: "", mcpToolCalls: [] };
@@ -666,7 +667,11 @@ async function readOpenAiStreamingOutput(
       }
 
       if (type === "response.output_text.delta") {
-        output += extractOpenAiDelta(payload);
+        const delta = extractOpenAiDelta(payload);
+        output += delta;
+        if (delta.length > 0) {
+          onTextDelta?.(delta);
+        }
         return;
       }
 
@@ -717,7 +722,8 @@ function extractClaudeDelta(payload: Record<string, unknown>): string {
 
 async function readClaudeStreamingOutput(
   response: Response,
-  log?: (message: string) => void
+  log?: (message: string) => void,
+  onTextDelta?: (delta: string) => void
 ): Promise<StreamingProviderResult> {
   if (!response.body) {
     return { text: "", mcpToolCalls: [] };
@@ -783,7 +789,11 @@ async function readClaudeStreamingOutput(
             block.inputJson += partialJson;
           }
         }
-        output += extractClaudeDelta(payload);
+        const textDelta = extractClaudeDelta(payload);
+        output += textDelta;
+        if (textDelta.length > 0) {
+          onTextDelta?.(textDelta);
+        }
         return;
       }
 
@@ -897,7 +907,7 @@ export async function executeOpenAIWithApi(input: ProviderExecutionInput, creden
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
-    const streamed = await readOpenAiStreamingOutput(response, input.log);
+    const streamed = await readOpenAiStreamingOutput(response, input.log, input.onTextDelta);
     if (streamed.mcpToolCalls.length > 0) {
       return encodeMcpToolCallsAsJson(streamed.mcpToolCalls);
     }
@@ -1024,7 +1034,7 @@ export async function executeClaudeWithApi(
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
-    const streamed = await readClaudeStreamingOutput(response, input.log);
+    const streamed = await readClaudeStreamingOutput(response, input.log, input.onTextDelta);
     if (streamed.mcpToolCalls.length > 0) {
       return encodeMcpToolCallsAsJson(streamed.mcpToolCalls);
     }

@@ -194,6 +194,7 @@ export interface AiChatMessage {
   requestId?: string;
   role: "user" | "assistant" | "error";
   content: string;
+  streaming?: boolean;
   generatedDraft?: PipelinePayload;
   action?: FlowBuilderAction;
   questions?: FlowBuilderQuestion[];

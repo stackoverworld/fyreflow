@@ -64,3 +64,8 @@ export interface DraftActionResult {
   draft?: PipelineInput;
   notes: string[];
 }
+
+export interface FlowBuilderStreamOptions {
+  onTextDelta?: (delta: string) => void;
+  signal?: AbortSignal;
+}

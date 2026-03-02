@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject, type UIEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type UIEvent } from "react";
 import { ArrowDown } from "lucide-react";
 import type { AiChatMessage, PipelinePayload } from "@/lib/types";
 import { clonePipelinePayload } from "@/lib/pipelineDraft";
@@ -34,6 +34,41 @@ export function PlanPreview({
   const previousScrollTopRef = useRef(0);
   const previousScrollHeightRef = useRef(0);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const prevGeneratingRef = useRef(generating);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+
+  const hasNativeStreaming = useMemo(() => messages.some((m) => m.streaming === true), [messages]);
+
+  useEffect(() => {
+    const wasGenerating = prevGeneratingRef.current;
+    prevGeneratingRef.current = generating;
+
+    if (wasGenerating && !generating && !hasNativeStreaming) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant") {
+        setStreamingMessageId(lastMsg.id);
+      }
+    }
+
+    if (!wasGenerating && generating) {
+      setStreamingMessageId(null);
+    }
+  }, [generating, hasNativeStreaming, messages]);
+
+  useEffect(() => {
+    const isActive = streamingMessageId || hasNativeStreaming;
+    if (!isActive) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const interval = setInterval(() => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distanceFromBottom < 150) {
+        messagesEndRef.current?.scrollIntoView({ block: "end" });
+      }
+    }, 150);
+    return () => clearInterval(interval);
+  }, [streamingMessageId, hasNativeStreaming, messagesEndRef]);
 
   const requestOlderMessages = useCallback(() => {
     const container = containerRef.current;
@@ -96,6 +131,8 @@ export function PlanPreview({
             <ChatBubble
               key={msg.id}
               message={msg}
+              streaming={msg.id === streamingMessageId}
+              onStreamingComplete={() => setStreamingMessageId(null)}
               readOnly={readOnly || generating}
               onQuickReply={onQuickReply}
               onApply={
@@ -109,7 +146,7 @@ export function PlanPreview({
           );
         })}
 
-        {generating ? <PlanPreviewGeneratingIndicator /> : null}
+        {generating && !hasNativeStreaming ? <PlanPreviewGeneratingIndicator /> : null}
 
         <div ref={messagesEndRef} />
       </div>
