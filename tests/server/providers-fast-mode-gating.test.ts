@@ -35,6 +35,9 @@ vi.mock("../../server/providers/clientFactory.js", () => ({
 
 import { executeProviderStep } from "../../server/providers.js";
 
+const VALID_SETUP_TOKEN =
+  "sk-ant-oat01-rotated-test-fixture-do-not-use-2026-03-02-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijk";
+
 function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
   return {
     id: "step-1",
@@ -154,7 +157,7 @@ describe("executeProviderStep fast-mode gating", () => {
     const output = await executeProviderStep({
       provider: createProvider({
         authMode: "oauth",
-        oauthToken: "sk-ant-oat01-example-token"
+        oauthToken: VALID_SETUP_TOKEN
       }),
       step: createStep({ fastMode: false }),
       context: "ctx",

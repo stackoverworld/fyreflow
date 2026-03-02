@@ -513,7 +513,7 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
     authUrl ? "Browser authorization URL was generated." : "",
     "This dashboard does not submit browser Authentication Code back to Claude CLI.",
     "For CLI auth, approve browser login and then click Refresh status.",
-    "For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) in dashboard, then Save changes.",
+    "For API fallback, run `claude setup-token`, paste token (sk-ant-oat01-...) in dashboard, then Save changes.",
     session.usesPtyShim
       ? ""
       : "Server is missing PTY helper (`script` command); CLI login capture may be limited until backend image installs it.",
@@ -555,8 +555,8 @@ export async function submitClaudeOAuthCode(
   return {
     providerId,
     accepted: false,
-    message:
-      "Browser Authentication Code submit is not supported in this dashboard for Claude. Click Connect, approve in browser, then Refresh status. For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) in dashboard and Save changes."
+      message:
+      "Browser Authentication Code submit is not supported in this dashboard for Claude. Click Connect, approve in browser, then Refresh status. For API fallback, run `claude setup-token`, paste token (sk-ant-oat01-...) in dashboard and Save changes."
   };
 }
 

@@ -58,7 +58,7 @@ describe("submitClaudeOAuthCode", () => {
       providerId: "claude",
       accepted: false,
       message:
-        "Browser Authentication Code submit is not supported in this dashboard for Claude. Click Connect, approve in browser, then Refresh status. For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) in dashboard and Save changes."
+        "Browser Authentication Code submit is not supported in this dashboard for Claude. Click Connect, approve in browser, then Refresh status. For API fallback, run `claude setup-token`, paste token (sk-ant-oat01-...) in dashboard and Save changes."
     });
   });
 });

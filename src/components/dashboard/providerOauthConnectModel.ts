@@ -84,7 +84,7 @@ function buildProviderAuthCodeHint(providerId: ProviderId, authCode: string): st
 
 function buildProviderRemoteTroubleshootingHint(providerId: ProviderId): string {
   if (providerId === "claude") {
-    return "Claude browser Authentication Code is informational in this UI. For API fallback, run `claude setup-token`, paste token (sk-ant-oat...) into dashboard, then save.";
+    return "Claude browser Authentication Code is informational in this UI. For API fallback, run `claude setup-token`, paste token (sk-ant-oat01-...) into dashboard, then save.";
   }
 
   return 'If Codex login shows "Enable device code authorization", open ChatGPT Settings -> Security, enable device code authorization for Codex, then click Connect again.';

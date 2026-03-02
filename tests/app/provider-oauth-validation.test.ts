@@ -9,6 +9,9 @@ import {
 } from "../../src/components/dashboard/provider-settings/validation";
 import type { ProviderConfig, ProviderOAuthStatus } from "../../src/lib/types";
 
+const VALID_SETUP_TOKEN =
+  "sk-ant-oat01-rotated-test-fixture-do-not-use-2026-03-02-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijk";
+
 function buildStatus(message: string): ProviderOAuthStatus {
   return {
     providerId: "claude",
@@ -71,14 +74,18 @@ describe("hasProviderDraftChanges", () => {
 
   it("returns true when auth mode or credentials are edited", () => {
     const saved = buildProvider({ authMode: "api_key", apiKey: "" });
-    const draft = buildProvider({ authMode: "oauth", oauthToken: "sk-ant-oat01-updated" });
+    const draft = buildProvider({ authMode: "oauth", oauthToken: VALID_SETUP_TOKEN });
     expect(hasProviderDraftChanges(draft, saved)).toBe(true);
   });
 });
 
 describe("isLikelyClaudeSetupToken", () => {
   it("detects setup-token prefix", () => {
-    expect(isLikelyClaudeSetupToken("sk-ant-oat01-example")).toBe(true);
+    expect(isLikelyClaudeSetupToken(VALID_SETUP_TOKEN)).toBe(true);
+  });
+
+  it("rejects too-short setup-token-like values", () => {
+    expect(isLikelyClaudeSetupToken("sk-ant-oat01-short")).toBe(false);
   });
 
   it("does not flag non setup-token browser code", () => {
@@ -96,12 +103,12 @@ describe("getClaudeOAuthTokenValidationMessage", () => {
   });
 
   it("accepts valid setup-token", () => {
-    expect(getClaudeOAuthTokenValidationMessage("sk-ant-oat01-example")).toBeNull();
+    expect(getClaudeOAuthTokenValidationMessage(VALID_SETUP_TOKEN)).toBeNull();
   });
 
   it("rejects browser Authentication Code", () => {
     expect(getClaudeOAuthTokenValidationMessage("XADbhD5WjGH0ORuYcWLea#state")).toBe(
-      "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat...). Browser Authentication Code from claude.ai cannot be saved here."
+      "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat01-...). Browser Authentication Code from claude.ai cannot be saved here."
     );
   });
 });

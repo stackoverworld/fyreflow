@@ -5,6 +5,9 @@ import type { ProviderOAuthStatus } from "../../server/oauth.js";
 import { createRouteHarness, invokeRoute } from "../helpers/routeHarness.js";
 import { createTempStore } from "../helpers/tempStore.js";
 
+const VALID_SETUP_TOKEN =
+  "sk-ant-oat01-rotated-test-fixture-do-not-use-2026-03-02-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijk";
+
 function buildStatus(providerId: "openai" | "claude"): ProviderOAuthStatus {
   return {
     providerId,
@@ -104,7 +107,7 @@ describe("Provider OAuth Routes", () => {
     try {
       store.upsertProvider("claude", {
         authMode: "oauth",
-        oauthToken: "sk-ant-oat01-example-token"
+        oauthToken: VALID_SETUP_TOKEN
       });
 
       registerProviderRoutes(app as never, {
@@ -218,7 +221,7 @@ describe("Provider OAuth Routes", () => {
           tokenAvailable: false,
           canUseApi: false,
           message:
-            "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat...) and save."
+            "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat01-...) and save."
         })
       );
     } finally {
@@ -262,7 +265,7 @@ describe("Provider OAuth Routes", () => {
           canUseCli: true,
           canUseApi: false,
           message:
-            "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat...) and save."
+            "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat01-...) and save."
         })
       );
     } finally {
@@ -297,7 +300,7 @@ describe("Provider OAuth Routes", () => {
       expect(response.body).toEqual(
         expect.objectContaining({
           error:
-            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat...). Browser Authentication Code cannot be saved here."
+            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat01-...). Browser Authentication Code cannot be saved here."
         })
       );
     } finally {

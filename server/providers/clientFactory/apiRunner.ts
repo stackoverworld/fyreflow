@@ -213,8 +213,13 @@ function isClaudeInvalidBearerTokenResponse(statusCode: number, responseBody: st
   return statusCode === 401 && /\binvalid bearer token\b/i.test(responseBody);
 }
 
+function isClaudeInvalidApiKeyResponse(statusCode: number, responseBody: string): boolean {
+  return statusCode === 401 && /\binvalid x-api-key\b/i.test(responseBody);
+}
+
 function isClaudeOauthCredential(credential: string): boolean {
-  return /^sk-ant-oat/i.test(credential.trim());
+  const normalized = credential.trim();
+  return normalized.startsWith("sk-ant-oat01-") && normalized.length >= 80;
 }
 
 async function readWithIdleTimeout(
@@ -985,7 +990,12 @@ export async function executeClaudeWithApi(
       body: requestBodyJson,
       signal: requestSignal
     });
-  const primaryAuthMode: ClaudeAuthHeaderMode = input.provider.authMode === "oauth" ? "oauth_bearer" : "api_key";
+  const primaryAuthMode: ClaudeAuthHeaderMode =
+    input.provider.authMode === "oauth" && isOauthCredential
+      ? "api_key"
+      : input.provider.authMode === "oauth"
+        ? "oauth_bearer"
+        : "api_key";
   let response = await executeRequest(primaryAuthMode);
 
   const requestId = resolveRequestId(response.headers);
@@ -997,7 +1007,8 @@ export async function executeClaudeWithApi(
     let errorBody = await response.text();
     if (
       primaryAuthMode === "oauth_bearer" &&
-      isClaudeInvalidBearerTokenResponse(response.status, errorBody)
+      (isClaudeInvalidBearerTokenResponse(response.status, errorBody) ||
+        isClaudeInvalidApiKeyResponse(response.status, errorBody))
     ) {
       input.log?.("Claude bearer token was rejected; retrying once with x-api-key header for setup-token compatibility.");
       response = await executeRequest("api_key");

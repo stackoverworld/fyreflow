@@ -106,7 +106,7 @@ function ClaudeOAuthGuide({ isRemoteMode }: { isRemoteMode: boolean }) {
           <p className="text-[11px] text-ink-400 leading-relaxed pb-3 min-w-0">
             Paste token starting with{" "}
             <code className="rounded bg-ink-900 px-1 py-px font-mono text-[10px] text-ink-200 ring-1 ring-ink-800">
-              sk-ant-oat...
+              sk-ant-oat01-...
             </code>{" "}
             into the field below and click Save changes.
           </p>

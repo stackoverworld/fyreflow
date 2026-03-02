@@ -14,9 +14,12 @@ const MAX_PROVIDER_API_RETRIES = 2;
 const DEFAULT_PROVIDER_API_BACKOFF_MS = 1_000;
 const MAX_PROVIDER_API_BACKOFF_MS = 20_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+const CLAUDE_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+const CLAUDE_SETUP_TOKEN_MIN_LENGTH = 80;
 
 function isClaudeSetupToken(value: string): boolean {
-  return /^sk-ant-oat/i.test(value.trim());
+  const normalized = value.trim();
+  return normalized.startsWith(CLAUDE_SETUP_TOKEN_PREFIX) && normalized.length >= CLAUDE_SETUP_TOKEN_MIN_LENGTH;
 }
 
 function credentialFromProvider(provider: ProviderConfig): string | undefined {

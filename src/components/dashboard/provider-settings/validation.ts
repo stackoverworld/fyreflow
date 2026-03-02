@@ -6,6 +6,8 @@ import type {
 } from "@/lib/types";
 
 const MASKED_SECRET_PLACEHOLDER = "[secure]";
+const CLAUDE_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+const CLAUDE_SETUP_TOKEN_MIN_LENGTH = 80;
 
 export function shouldAutoSwitchToOAuth(args: {
   provider: ProviderConfig;
@@ -70,7 +72,8 @@ export function hasProviderDraftChanges(
 }
 
 export function isLikelyClaudeSetupToken(value: string): boolean {
-  return /^sk-ant-oat/i.test(value.trim());
+  const normalized = value.trim();
+  return normalized.startsWith(CLAUDE_SETUP_TOKEN_PREFIX) && normalized.length >= CLAUDE_SETUP_TOKEN_MIN_LENGTH;
 }
 
 export function getClaudeOAuthTokenValidationMessage(tokenCandidate: string): string | null {
@@ -83,5 +86,5 @@ export function getClaudeOAuthTokenValidationMessage(tokenCandidate: string): st
     return null;
   }
 
-  return "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat...). Browser Authentication Code from claude.ai cannot be saved here.";
+  return "Anthropic OAuth field accepts only Claude setup-token (sk-ant-oat01-...). Browser Authentication Code from claude.ai cannot be saved here.";
 }

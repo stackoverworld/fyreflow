@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeClaudeWithApi, executeOpenAIWithApi } from "../../server/providers/clientFactory/apiRunner.js";
 import type { ProviderExecutionInput } from "../../server/providers/types.js";
 
+const VALID_SETUP_TOKEN =
+  "sk-ant-oat01-rotated-test-fixture-do-not-use-2026-03-02-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijk";
+
 function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
   return {
     provider: {
@@ -115,8 +118,39 @@ describe("API runner streaming mode", () => {
     expect(logs.some((line) => line.includes("Model summary:"))).toBe(true);
   });
 
-  it("retries Claude OAuth token with x-api-key header when bearer auth is rejected", async () => {
+  it("uses x-api-key header as primary auth for Claude setup-token OAuth mode", async () => {
     const logs: string[] = [];
+    const capturedHeaders: Array<Record<string, string>> = [];
+
+    global.fetch = vi.fn(async (_url, init) => {
+      capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "Setup-token worked via x-api-key primary mode" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    const input = createInput("claude");
+    input.provider.authMode = "oauth";
+
+    const output = await executeClaudeWithApi({ ...input, log: (line) => logs.push(line) }, VALID_SETUP_TOKEN);
+    expect(output).toContain("Setup-token worked via x-api-key primary mode");
+    expect(capturedHeaders).toHaveLength(1);
+    expect(capturedHeaders[0]?.Authorization).toBeUndefined();
+    expect(capturedHeaders[0]?.["x-api-key"]).toBe(VALID_SETUP_TOKEN);
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
+    expect(logs.some((line) => line.includes("setup-token compatibility"))).toBe(false);
+  });
+
+  it("retries once with x-api-key when Claude OAuth bearer auth is rejected", async () => {
     const capturedHeaders: Array<Record<string, string>> = [];
 
     global.fetch = vi.fn(async (_url, init) => {
@@ -127,29 +161,23 @@ describe("API runner streaming mode", () => {
             type: "error",
             error: {
               type: "authentication_error",
-              message: "Invalid bearer token"
+              message: "invalid x-api-key"
             }
           }),
           {
             status: 401,
-            headers: {
-              "content-type": "application/json",
-              "request-id": "req_invalid_bearer"
-            }
+            headers: { "content-type": "application/json" }
           }
         );
       }
 
       return new Response(
         JSON.stringify({
-          content: [{ type: "text", text: "Recovered with setup-token compatibility path" }]
+          content: [{ type: "text", text: "ok" }]
         }),
         {
           status: 200,
-          headers: {
-            "content-type": "application/json",
-            "request-id": "req_retry_ok"
-          }
+          headers: { "content-type": "application/json" }
         }
       );
     }) as typeof fetch;
@@ -157,16 +185,13 @@ describe("API runner streaming mode", () => {
     const input = createInput("claude");
     input.provider.authMode = "oauth";
 
-    const output = await executeClaudeWithApi({ ...input, log: (line) => logs.push(line) }, "sk-ant-oat01-test");
-    expect(output).toContain("Recovered with setup-token compatibility path");
+    const output = await executeClaudeWithApi(input, "oauth-token-not-a-setup-token");
+    expect(output).toBe("ok");
     expect(capturedHeaders).toHaveLength(2);
-    expect(capturedHeaders[0]?.Authorization).toBe("Bearer sk-ant-oat01-test");
+    expect(capturedHeaders[0]?.Authorization).toBe("Bearer oauth-token-not-a-setup-token");
     expect(capturedHeaders[0]?.["x-api-key"]).toBeUndefined();
-    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
-    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
-    expect(capturedHeaders[1]?.["x-api-key"]).toBe("sk-ant-oat01-test");
+    expect(capturedHeaders[1]?.["x-api-key"]).toBe("oauth-token-not-a-setup-token");
     expect(capturedHeaders[1]?.Authorization).toBeUndefined();
-    expect(logs.some((line) => line.includes("setup-token compatibility"))).toBe(true);
   });
 
   it("includes context-1m beta for Claude OAuth setup-token auth when requested", async () => {
@@ -191,10 +216,11 @@ describe("API runner streaming mode", () => {
     input.provider.authMode = "oauth";
     input.step.use1MContext = true;
 
-    const output = await executeClaudeWithApi(input, "sk-ant-oat01-test");
+    const output = await executeClaudeWithApi(input, VALID_SETUP_TOKEN);
     expect(output).toBe("ok");
     expect(capturedHeaders).toHaveLength(1);
-    expect(capturedHeaders[0]?.Authorization).toBe("Bearer sk-ant-oat01-test");
+    expect(capturedHeaders[0]?.Authorization).toBeUndefined();
+    expect(capturedHeaders[0]?.["x-api-key"]).toBe(VALID_SETUP_TOKEN);
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("context-1m-2025-08-07");

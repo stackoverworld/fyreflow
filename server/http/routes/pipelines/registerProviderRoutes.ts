@@ -7,7 +7,8 @@ import { firstParam, sanitizeProviderConfig, sendZodError } from "./helpers.js";
 import { providerIdSchema, providerOAuthCodeSubmitSchema, providerUpdateSchema } from "./schemas.js";
 
 function isClaudeSetupToken(value: string): boolean {
-  return /^sk-ant-oat/i.test(value.trim());
+  const normalized = value.trim();
+  return normalized.startsWith("sk-ant-oat01-") && normalized.length >= 80;
 }
 
 function withStoredClaudeSetupTokenStatus(
@@ -41,8 +42,8 @@ function withStoredClaudeSetupTokenStatus(
       tokenAvailable: false,
       canUseApi: false,
       message: hasCliAuth
-        ? "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat...) and save."
-        : "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat...) and save."
+        ? "Stored OAuth value is not a Claude setup-token. CLI auth is connected; API token fallback is unavailable. Paste setup-token (sk-ant-oat01-...) and save."
+        : "Stored OAuth value is not a Claude setup-token. Browser Authentication Code cannot be saved here. Paste setup-token (sk-ant-oat01-...) and save."
     };
   }
 
@@ -86,7 +87,7 @@ export function registerProviderRoutes(app: Express, deps: PipelineRouteContext)
       if (shouldValidateClaudeSetupToken && !isClaudeSetupToken(normalizedOauthToken)) {
         response.status(400).json({
           error:
-            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat...). Browser Authentication Code cannot be saved here."
+            "Anthropic OAuth token must be Claude setup-token (sk-ant-oat01-...). Browser Authentication Code cannot be saved here."
         });
         return;
       }
