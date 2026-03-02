@@ -487,24 +487,29 @@ export function useAiBuilderSession({
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
         const streamingMsgId = crypto.randomUUID();
-        const placeholderMsg: AiChatMessage = {
-          id: streamingMsgId,
-          requestId,
-          role: "assistant",
-          content: "",
-          streaming: true,
-          timestamp: Date.now(),
-        };
         streamingContentRef.current = "";
-        streamingMessageIdRef.current = streamingMsgId;
-        appendVisibleMessages([placeholderMsg]);
+        streamingMessageIdRef.current = null;
 
         try {
           await new Promise<void>((resolve, reject) => {
+            let receivedDeltas = false;
+
             generateFlowDraftStream(
               payload,
               {
                 onTextDelta: (delta) => {
+                  if (!receivedDeltas) {
+                    receivedDeltas = true;
+                    streamingMessageIdRef.current = streamingMsgId;
+                    appendVisibleMessages([{
+                      id: streamingMsgId,
+                      requestId,
+                      role: "assistant",
+                      content: "",
+                      streaming: true,
+                      timestamp: Date.now(),
+                    }]);
+                  }
                   streamingContentRef.current += delta;
                   scheduleStreamingFlush();
                 },
@@ -516,7 +521,9 @@ export function useAiBuilderSession({
                   streamingMessageIdRef.current = null;
 
                   try {
-                    await processCompletedResult(result, streamingMsgId, requestId, requestMode, startedAt, resumed, "update_existing");
+                    const insertMode = receivedDeltas ? "update_existing" : "append_new";
+                    const msgId = receivedDeltas ? streamingMsgId : crypto.randomUUID();
+                    await processCompletedResult(result, msgId, requestId, requestMode, startedAt, resumed, insertMode);
                     resolve();
                   } catch (error) {
                     reject(error);
