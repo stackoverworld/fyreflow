@@ -11,7 +11,9 @@ import {
   LockKeyhole,
   RefreshCw,
   Save,
-  XCircle
+  Unplug,
+  XCircle,
+  Zap
 } from "lucide-react";
 import { Badge } from "@/components/optics/badge";
 import { Button } from "@/components/optics/button";
@@ -249,34 +251,80 @@ export function ProviderSettingsSection({
         <>
           {isClaudeProvider ? (
             <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
+              {/* Header: title + badge */}
               <div className="flex items-center justify-between gap-2 px-3 py-2.5">
-                <p className="text-xs text-ink-100">Status</p>
-                {claudeTokenConnected ? (
-                  <Badge variant="success">
-                    <CheckCircle2 className="h-3 w-3" /> Connected
-                  </Badge>
-                ) : (
-                  <Badge variant="danger">
-                    <XCircle className="h-3 w-3" /> Disconnected
-                  </Badge>
-                )}
+                <p className="text-xs text-ink-100">Connection</p>
+                <div className="flex items-center gap-1.5">
+                  {claudeTokenConnected ? (
+                    <Badge variant="success">
+                      <CheckCircle2 className="h-3 w-3" /> Token saved
+                    </Badge>
+                  ) : (
+                    <Badge variant="danger">
+                      <XCircle className="h-3 w-3" /> No token
+                    </Badge>
+                  )}
+                  {runtimeProbe ? (
+                    <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
+                      {runtimeProbe.status === "pass" ? (
+                        <><Zap className="h-3 w-3" /> API OK</>
+                      ) : (
+                        <><Unplug className="h-3 w-3" /> API fail</>
+                      )}
+                    </Badge>
+                  ) : claudeTokenConnected ? (
+                    <Badge variant="warning">Untested</Badge>
+                  ) : null}
+                </div>
               </div>
 
               <div className="h-px bg-[var(--divider)]" />
 
-              <div className="px-3 py-2.5 space-y-2">
+              {/* Body: summary + probe details */}
+              <div className="px-3 py-2.5 space-y-1.5">
                 <p className="text-xs text-ink-300 leading-relaxed">
                   {claudeStatusSummary}
                 </p>
                 {runtimeProbe ? (
-                  <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
-                    {runtimeProbe.status === "pass" ? "Runtime OK" : "Runtime issue"}
-                    {runtimeProbe.latencyMs !== undefined ? ` \u00b7 ${runtimeProbe.latencyMs}ms` : ""}
-                  </Badge>
+                  <p className="text-[11px] leading-relaxed text-ink-500">
+                    {runtimeProbe.status === "pass"
+                      ? `API responded in ${runtimeProbe.latencyMs ?? "?"}ms — ready to use.`
+                      : `${runtimeProbe.message || "Connection test failed."} Verify your token is correct.`}
+                  </p>
+                ) : claudeTokenConnected ? (
+                  <p className="text-[11px] text-amber-300/70 leading-relaxed">
+                    Token saved but not verified. Test the connection to avoid 401 errors in AI Builder.
+                  </p>
                 ) : null}
-                <p className="text-[11px] text-ink-600 leading-relaxed break-words">
-                  {oauthStatusText}
-                </p>
+                {oauthStatusText ? (
+                  <p className="text-[11px] text-ink-600 leading-relaxed break-words">
+                    {oauthStatusText}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="h-px bg-[var(--divider)]" />
+
+              {/* Actions */}
+              <div className="flex items-center gap-2 px-3 py-2">
+                <Button
+                  size="sm"
+                  variant={claudeTokenConnected && !runtimeProbe ? "primary" : "secondary"}
+                  disabled={busy || !claudeTokenConnected}
+                  onClick={async () => {
+                    triggerRefreshSpin();
+                    await onRefresh(providerId);
+                  }}
+                >
+                  <RefreshCw
+                    className="mr-1 h-3.5 w-3.5"
+                    style={{
+                      transform: `rotate(${refreshRotation}deg)`,
+                      transition: "transform 0.45s ease-in-out"
+                    }}
+                  />
+                  {runtimeProbe ? "Retest" : "Test connection"}
+                </Button>
               </div>
             </div>
           ) : null}

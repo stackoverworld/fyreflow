@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
 import { execFileAsync, isCommandAvailable } from "../commandUtils.js";
 import { CLAUDE_CLI_COMMAND } from "../config.js";
 import type {
@@ -19,16 +18,8 @@ const CLAUDE_LOGIN_BOOTSTRAP_POLL_INTERVAL_MS = 150;
 const CLAUDE_LOGIN_BOOTSTRAP_SETTLE_MS = 700;
 const CLAUDE_LOGIN_CAPTURE_MAX_CHARS = 32 * 1024;
 const CLAUDE_LOGIN_SESSION_RETENTION_MS = 5 * 60 * 1_000;
-const CLAUDE_CODE_SUBMIT_STATUS_TIMEOUT_MS = 30_000;
-const CLAUDE_CODE_SUBMIT_STATUS_POLL_MS = 1_200;
-const CLAUDE_CODE_SUBMIT_RETRY_INTERVAL_MS = 3_000;
-const CLAUDE_CODE_SUBMIT_MAX_ATTEMPTS = 4;
 const GENERIC_CLAUDE_LOGIN_URL_PATTERN = /^https?:\/\/claude\.ai\/login(?:\/|\?|#|$)/i;
 const CLAUDE_MANUAL_CODE_PROMPT_PATTERN = /(paste this into claude code|authentication code|paste.+code)/i;
-const CLAUDE_CALLBACK_CODE_PATTERN = /(?:[?&#]|^)code=([^&#\s]+)/i;
-const CLAUDE_CALLBACK_STATE_PATTERN = /(?:[?&#]|^)state=([^&#\s]+)/i;
-const CLAUDE_PRESS_ENTER_PROMPT_PATTERN = /press enter/i;
-const CLAUDE_INVALID_CODE_PATTERN = /oauth error:\s*invalid code|invalid code/i;
 const SCRIPT_COMMAND = "script";
 const CLAUDE_OAUTH_LOG_PREFIX = "[provider-oauth][claude]";
 
@@ -38,7 +29,6 @@ interface ActiveClaudeLoginSession {
   startedAt: number;
   finished: boolean;
   exitCode: number | null;
-  authState?: string;
   usesPtyShim: boolean;
 }
 
@@ -76,14 +66,6 @@ function summarizeOutputForLogs(capturedOutput: string): string {
   return sanitizeForLogs(tail);
 }
 
-function hashForLogs(value: string): string {
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    return "";
-  }
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
-}
-
 function logClaudeOAuth(event: string, details: Record<string, unknown>): void {
   try {
     console.log(
@@ -95,181 +77,6 @@ function logClaudeOAuth(event: string, details: Record<string, unknown>): void {
   } catch {
     // Ignore logging failures.
   }
-}
-
-function decodeCodeValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function combineCallbackCodeAndState(code: string, state: string | undefined): string {
-  const trimmedCode = code.trim();
-  if (trimmedCode.length === 0) {
-    return "";
-  }
-  if (trimmedCode.includes("#")) {
-    return trimmedCode;
-  }
-  const trimmedState = (state ?? "").trim();
-  if (trimmedState.length === 0) {
-    return trimmedCode;
-  }
-  return `${trimmedCode}#${trimmedState}`;
-}
-
-function extractStateFromAuthCode(codeWithOptionalState: string): string | undefined {
-  const trimmed = codeWithOptionalState.trim();
-  const hashIndex = trimmed.indexOf("#");
-  if (hashIndex < 0 || hashIndex >= trimmed.length - 1) {
-    return undefined;
-  }
-  const state = trimmed.slice(hashIndex + 1).trim();
-  return state.length > 0 ? state : undefined;
-}
-
-function extractStateFromRawCodeInput(rawInput: string): string | undefined {
-  const trimmed = rawInput.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  const queryStateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
-  if (queryStateMatch?.[1]) {
-    const state = decodeCodeValue(queryStateMatch[1]).trim();
-    if (state.length > 0) {
-      return state;
-    }
-  }
-
-  return extractStateFromAuthCode(trimmed);
-}
-
-export function extractClaudeAuthorizationStateInput(rawInput: string): string | undefined {
-  return extractStateFromRawCodeInput(rawInput);
-}
-
-export function resolveClaudeAuthorizationSubmissionState(
-  rawInput: string,
-  sessionState?: string
-): {
-  providedState?: string;
-  effectiveState?: string;
-  usedSessionStateFallback: boolean;
-} {
-  const providedState = extractStateFromRawCodeInput(rawInput);
-  if (providedState && providedState.length > 0) {
-    return {
-      providedState,
-      effectiveState: providedState,
-      usedSessionStateFallback: false
-    };
-  }
-
-  const normalizedSessionState = (sessionState ?? "").trim();
-  if (normalizedSessionState.length > 0) {
-    return {
-      effectiveState: normalizedSessionState,
-      usedSessionStateFallback: true
-    };
-  }
-
-  return {
-    usedSessionStateFallback: false
-  };
-}
-
-function extractStateFromAuthUrl(authUrl: string | undefined): string | undefined {
-  const trimmed = (authUrl ?? "").trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    const state = parsed.searchParams.get("state");
-    if (!state || state.trim().length === 0) {
-      return undefined;
-    }
-    return state.trim();
-  } catch {
-    const stateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
-    if (!stateMatch?.[1]) {
-      return undefined;
-    }
-    const state = decodeCodeValue(stateMatch[1]).trim();
-    return state.length > 0 ? state : undefined;
-  }
-}
-
-export function normalizeClaudeAuthorizationCodeInput(rawInput: string, fallbackState?: string): string {
-  const trimmed = rawInput.trim();
-  if (trimmed.length === 0) {
-    return "";
-  }
-
-  const directMatch = CLAUDE_CALLBACK_CODE_PATTERN.exec(trimmed);
-  if (directMatch?.[1]) {
-    const extracted = decodeCodeValue(directMatch[1]).trim();
-    const stateMatch = CLAUDE_CALLBACK_STATE_PATTERN.exec(trimmed);
-    const extractedState = stateMatch?.[1] ? decodeCodeValue(stateMatch[1]).trim() : "";
-    if (extracted.length > 0) {
-      return combineCallbackCodeAndState(extracted, extractedState);
-    }
-  }
-
-  if (/^https?:\/\//i.test(trimmed)) {
-    try {
-      const parsed = new URL(trimmed);
-      const codeParam = parsed.searchParams.get("code");
-      if (codeParam && codeParam.trim().length > 0) {
-        const stateParam = parsed.searchParams.get("state");
-        return combineCallbackCodeAndState(codeParam.trim(), stateParam?.trim());
-      }
-    } catch {
-      // Ignore invalid URL parse; fallback to raw trimmed input.
-    }
-  }
-
-  return combineCallbackCodeAndState(trimmed, fallbackState);
-}
-
-async function writeInputToSession(session: ActiveClaudeLoginSession, value: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    session.child.stdin.write(value, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-async function writeTerminalEnterToSession(session: ActiveClaudeLoginSession): Promise<void> {
-  // Some TTY flows react only to carriage return, others to newline.
-  await writeInputToSession(session, "\r");
-  await sleep(60);
-  await writeInputToSession(session, "\n");
-}
-
-async function writeAuthCodeSequenceToSession(session: ActiveClaudeLoginSession, code: string): Promise<void> {
-  // Nudge interactive prompt, then paste code, then confirm with Enter.
-  await writeTerminalEnterToSession(session);
-  await sleep(100);
-  await writeInputToSession(session, code);
-  await sleep(40);
-  await writeTerminalEnterToSession(session);
-}
-
-function extractSubmitFailureHint(output: string): string | undefined {
-  if (!CLAUDE_INVALID_CODE_PATTERN.test(output)) {
-    return undefined;
-  }
-
-  return "Claude rejected this authentication code. Copy the full Authentication Code from browser and submit again.";
 }
 
 function hasPreferredClaudeAuthUrl(capturedOutput: string): boolean {
@@ -363,7 +170,6 @@ async function launchClaudeLoginSession(): Promise<ActiveClaudeLoginSession> {
       startedAt: Date.now(),
       finished: false,
       exitCode: null,
-      authState: undefined,
       usesPtyShim: launchSpec.usesPtyShim
     };
 
@@ -454,29 +260,6 @@ function resolveClaudeLoginLaunchSpec(
   return resolveClaudeLoginLaunchSpecForPlatform(canUseScript);
 }
 
-async function waitForClaudeLoggedIn(timeoutMs: number): Promise<boolean> {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const elapsed = Date.now() - startedAt;
-    const remaining = timeoutMs - elapsed;
-    if (remaining <= 0) {
-      break;
-    }
-
-    const statusTimeoutMs = Math.max(900, Math.min(2500, remaining));
-    const status = await getClaudeLoggedInStatus(statusTimeoutMs);
-    if (status.loggedIn === true) {
-      return true;
-    }
-
-    await sleep(CLAUDE_CODE_SUBMIT_STATUS_POLL_MS);
-  }
-
-  const finalStatus = await getClaudeLoggedInStatus(1500);
-  return finalStatus.loggedIn === true;
-}
-
 async function getClaudeLoggedInStatus(timeoutMs = 4000): Promise<ClaudeStatusJson> {
   try {
     const { stdout } = await execFileAsync(CLAUDE_CLI_COMMAND, ["auth", "status", "--json"], { timeout: timeoutMs });
@@ -499,13 +282,11 @@ export async function startClaudeOAuthLogin(providerId: "claude"): Promise<Provi
   const session = await launchClaudeLoginSession();
   const bootstrap = await waitForLoginBootstrap(session);
   const authUrl = bootstrap.authUrl;
-  session.authState = extractStateFromAuthUrl(authUrl);
   const authCode = bootstrap.authCode;
   logClaudeOAuth("start_bootstrap", {
     authUrl: authUrl ? sanitizeForLogs(authUrl) : "",
     hasAuthCode: typeof authCode === "string" && authCode.length > 0,
-    awaitingManualCode: bootstrap.awaitingManualCode,
-    authStateLength: session.authState?.length ?? 0
+    awaitingManualCode: bootstrap.awaitingManualCode
   });
 
   const messageParts = [
