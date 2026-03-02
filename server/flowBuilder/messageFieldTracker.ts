@@ -1,13 +1,3 @@
-/**
- * State machine that extracts the `"message"` field value from a partial JSON stream.
- *
- * The model outputs structured JSON like `{"action":"answer","message":"...","draft":...}`.
- * This tracker watches the raw text deltas and emits only the unescaped content of the
- * `"message"` string value as it arrives, without waiting for the complete JSON.
- *
- * States: scanning -> in_value -> done
- */
-
 type TrackerState = "scanning" | "in_value" | "done";
 
 const MESSAGE_KEY_PATTERN = /"message"\s*:\s*"/;
@@ -31,14 +21,12 @@ export class MessageFieldTracker {
       this.buffer += delta;
       const match = MESSAGE_KEY_PATTERN.exec(this.buffer);
       if (!match) {
-        // Keep only the tail that could still partially match
         if (this.buffer.length > 200) {
           this.buffer = this.buffer.slice(-50);
         }
         return;
       }
 
-      // Found the start of the message value — switch to in_value
       const valueStart = match.index + match[0].length;
       const remainder = this.buffer.slice(valueStart);
       this.buffer = "";
@@ -50,7 +38,6 @@ export class MessageFieldTracker {
       return;
     }
 
-    // state === "in_value"
     this.consumeValue(delta);
   }
 
@@ -79,7 +66,6 @@ export class MessageFieldTracker {
         } else if (ch === "/") {
           emitted += "/";
         } else if (ch === "u") {
-          // Unicode escape: \uXXXX
           const hex = chunk.slice(i + 1, i + 5);
           if (hex.length === 4 && /^[0-9a-fA-F]{4}$/.test(hex)) {
             emitted += String.fromCharCode(parseInt(hex, 16));
@@ -88,7 +74,6 @@ export class MessageFieldTracker {
             emitted += "\\u";
           }
         } else {
-          // Unknown escape — pass through
           emitted += ch;
         }
         continue;
@@ -100,7 +85,6 @@ export class MessageFieldTracker {
       }
 
       if (ch === '"') {
-        // Closing quote — value is complete
         this.state = "done";
         break;
       }

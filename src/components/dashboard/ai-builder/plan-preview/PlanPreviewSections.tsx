@@ -176,13 +176,15 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
   const isUser = message.role === "user";
   const isError = message.role === "error";
   const isNativeStreaming = message.streaming === true && !isUser && !isError;
+  const nativeStreamingWaiting = isNativeStreaming && message.content.length === 0;
+  const nativeStreamingActive = isNativeStreaming && message.content.length > 0;
   const shouldStream = !isNativeStreaming && streaming && !isUser && !isError;
   const { displayedText, isStreaming } = useStreamingText(
     message.content,
     shouldStream,
     onStreamingComplete
   );
-  const showCursor = isNativeStreaming || isStreaming;
+  const showDot = nativeStreamingWaiting || nativeStreamingActive || isStreaming;
   const hasQuestions = (message.questions?.length ?? 0) > 0;
   const actionLabel =
     message.action === "answer" && hasQuestions
@@ -222,9 +224,16 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
           <p className="whitespace-pre-wrap break-words text-[13px]">{message.content}</p>
         ) : (
           <>
-            <MarkdownContent content={isNativeStreaming ? message.content : isStreaming ? displayedText : message.content} />
-            {showCursor ? (
-              <span className="mt-1 inline-block h-3 w-0.5 animate-pulse rounded-full bg-ember-400" />
+            {nativeStreamingWaiting ? null : (
+              <MarkdownContent content={nativeStreamingActive ? message.content : isStreaming ? displayedText : message.content} />
+            )}
+            {showDot ? (
+              <span
+                className={cn(
+                  "inline-block h-2 w-2 rounded-full bg-ember-400 align-middle",
+                  nativeStreamingWaiting ? "animate-pulse" : "ml-1"
+                )}
+              />
             ) : null}
           </>
         )}

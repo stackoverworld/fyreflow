@@ -1655,6 +1655,8 @@ export async function generateFlowDraftStream(
     return;
   }
 
+  let settled = false;
+
   try {
     await consumeSseStream(response.body, ({ event, data }) => {
       if (event === "text_delta") {
@@ -1668,6 +1670,7 @@ export async function generateFlowDraftStream(
       if (event === "complete") {
         const parsed = tryParseJsonObject(data);
         if (parsed && parsed.response) {
+          settled = true;
           callbacks.onComplete(parsed.response as FlowBuilderResponse);
         }
         return;
@@ -1676,13 +1679,18 @@ export async function generateFlowDraftStream(
       if (event === "error") {
         const parsed = tryParseJsonObject(data);
         const message = parsed && typeof parsed.message === "string" ? parsed.message : "Stream error";
+        settled = true;
         callbacks.onError(new Error(message));
       }
     });
   } catch (error) {
+    settled = true;
     callbacks.onError(error instanceof Error ? error : new Error("Stream read failed"));
   } finally {
     clearTimeout(timeout);
     cleanupSignalForwarding();
+    if (!settled) {
+      callbacks.onError(new Error("Stream ended without a complete or error event"));
+    }
   }
 }

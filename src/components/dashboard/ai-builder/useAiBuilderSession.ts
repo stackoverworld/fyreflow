@@ -94,7 +94,6 @@ function saveAiBuilderSettings(settings: AiBuilderSettings): void {
   try {
     localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings));
   } catch {
-    // Ignore write errors
   }
 }
 
@@ -487,7 +486,6 @@ export function useAiBuilderSession({
   const runFlowBuilderRequest = useCallback(
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
-        // Create streaming placeholder message
         const streamingMsgId = crypto.randomUUID();
         const placeholderMsg: AiChatMessage = {
           id: streamingMsgId,
@@ -536,7 +534,6 @@ export function useAiBuilderSession({
             ).catch(reject);
           });
         } catch (streamError) {
-          // Remove streaming placeholder
           setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
 
           appendAiChatDebugEvent(workflowKey, {
@@ -546,7 +543,6 @@ export function useAiBuilderSession({
             meta: { requestId, mode: requestMode, resumed, error: streamError instanceof Error ? streamError.message : "unknown" }
           });
 
-          // Fall back to non-streaming request
           try {
             const result = await generateFlowDraft(payload);
             const fallbackMsgId = crypto.randomUUID();
