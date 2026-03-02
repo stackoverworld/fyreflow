@@ -162,8 +162,41 @@ describe("API runner streaming mode", () => {
     expect(capturedHeaders).toHaveLength(2);
     expect(capturedHeaders[0]?.Authorization).toBe("Bearer sk-ant-oat01-test");
     expect(capturedHeaders[0]?.["x-api-key"]).toBeUndefined();
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
     expect(capturedHeaders[1]?.["x-api-key"]).toBe("sk-ant-oat01-test");
     expect(capturedHeaders[1]?.Authorization).toBeUndefined();
     expect(logs.some((line) => line.includes("setup-token compatibility"))).toBe(true);
+  });
+
+  it("includes context-1m beta for Claude OAuth setup-token auth when requested", async () => {
+    const capturedHeaders: Array<Record<string, string>> = [];
+    global.fetch = vi.fn(async (_url, init) => {
+      capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "ok" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "request-id": "req_oauth_beta_ok"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    const input = createInput("claude");
+    input.provider.authMode = "oauth";
+    input.step.use1MContext = true;
+
+    const output = await executeClaudeWithApi(input, "sk-ant-oat01-test");
+    expect(output).toBe("ok");
+    expect(capturedHeaders).toHaveLength(1);
+    expect(capturedHeaders[0]?.Authorization).toBe("Bearer sk-ant-oat01-test");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("context-1m-2025-08-07");
   });
 });

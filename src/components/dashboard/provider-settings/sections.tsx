@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Copy,
@@ -53,6 +54,84 @@ const AUTH_MODE_SEGMENTS = [
   { value: "api_key" as const, label: "API Key", icon: <KeyRound className="h-3.5 w-3.5" /> },
   { value: "oauth" as const, label: "OAuth", icon: <Link2 className="h-3.5 w-3.5" /> }
 ];
+
+function StepBadge({ children, variant = "default" }: { children: React.ReactNode; variant?: "default" | "warn" }) {
+  return (
+    <span
+      className={
+        variant === "warn"
+          ? "flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-amber-500/10 ring-1 ring-amber-500/20"
+          : "flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-ember-500/10 text-[10px] font-bold text-ember-400 ring-1 ring-ember-500/20"
+      }
+    >
+      {children}
+    </span>
+  );
+}
+
+function ClaudeOAuthGuide({ isRemoteMode }: { isRemoteMode: boolean }) {
+  return (
+    <section className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-300">
+          How Anthropic OAuth works
+        </span>
+      </div>
+
+      <div className="h-px bg-[var(--divider)]" />
+
+      <div className="px-3 py-3 space-y-0">
+        {/* Step 1 */}
+        <div className="flex gap-2.5">
+          <div className="flex flex-col items-center">
+            <StepBadge>1</StepBadge>
+            <div className="mt-1 flex-1 w-px bg-ink-800" />
+          </div>
+          <p className="text-[11px] text-ink-400 leading-relaxed pb-3 min-w-0">
+            Run{" "}
+            <code className="rounded bg-ink-900 px-1 py-px font-mono text-[10px] text-ink-200 ring-1 ring-ink-800">
+              claude setup-token
+            </code>{" "}
+            in your local terminal.
+          </p>
+        </div>
+
+        {/* Step 2 */}
+        <div className="flex gap-2.5">
+          <div className="flex flex-col items-center">
+            <StepBadge>2</StepBadge>
+            <div className="mt-1 flex-1 w-px bg-ink-800" />
+          </div>
+          <p className="text-[11px] text-ink-400 leading-relaxed pb-3 min-w-0">
+            Paste token starting with{" "}
+            <code className="rounded bg-ink-900 px-1 py-px font-mono text-[10px] text-ink-200 ring-1 ring-ink-800">
+              sk-ant-oat...
+            </code>{" "}
+            into the field below and click Save changes.
+          </p>
+        </div>
+
+        {/* Warning */}
+        <div className="flex gap-2.5">
+          <StepBadge variant="warn">
+            <AlertTriangle className="h-3 w-3 text-amber-400" />
+          </StepBadge>
+          <p className="text-[11px] text-amber-300/80 leading-relaxed min-w-0">
+            Do not paste browser code like{" "}
+            <code className="rounded bg-amber-500/10 px-1 py-px font-mono text-[10px] text-amber-300 ring-1 ring-amber-500/20">
+              xxxx#state
+            </code>{" "}
+            into token field.
+            {isRemoteMode
+              ? " In remote mode only setup-token is accepted for API fallback."
+              : ""}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 /* ── Prominent device-auth-code card ── */
 
@@ -131,14 +210,21 @@ export function ProviderSettingsSection({
 }: ProviderSettingsSectionProps) {
   const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
   const authMode: AuthMode = provider.authMode;
+  const isClaudeProvider = providerId === "claude";
   const isAuthReady = status ? status.canUseApi || status.canUseCli || status.loggedIn : false;
   const cliAvailable = status?.cliAvailable === true;
   const runtimeProbe = status?.runtimeProbe;
   const showAutoConnectedNote = shouldShowOAuthConnectedNote(provider, status);
   const isRemoteMode = connectionMode === "remote";
   const saveButtonLabel = saving ? "Saving..." : hasUnsavedChanges ? "Save changes" : "Saved";
-  const hasAuthCode = providerId === "openai" && (pendingConnect?.authCode ?? "").length > 0;
+  const hasAuthCode = !isClaudeProvider && (pendingConnect?.authCode ?? "").length > 0;
   const hasAuthUrl = !hasAuthCode && isRemoteMode && (pendingConnect?.authUrl ?? "").length > 0;
+  const connectionSummary = oauthStatusText;
+  const connectButtonLabel = isAuthReady ? "Reconnect" : "Connect";
+  const claudeTokenConnected = status?.canUseApi === true;
+  const claudeStatusSummary = claudeTokenConnected
+    ? "Setup token is saved. API fallback is ready."
+    : "Disconnected. Paste setup-token and click Save changes.";
 
   return (
     <div className="space-y-3" data-testid={`provider-settings-${providerId}`}>
@@ -161,12 +247,11 @@ export function ProviderSettingsSection({
 
       {authMode === "oauth" ? (
         <>
-          {/* ── Connection card ── */}
-          <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
-            <div className="flex items-center justify-between gap-2 px-3 py-2.5">
-              <p className="text-xs text-ink-100">Connection</p>
-              <div className="flex items-center gap-1.5">
-                {isAuthReady ? (
+          {isClaudeProvider ? (
+            <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                <p className="text-xs text-ink-100">Status</p>
+                {claudeTokenConnected ? (
                   <Badge variant="success">
                     <CheckCircle2 className="h-3 w-3" /> Connected
                   </Badge>
@@ -175,80 +260,117 @@ export function ProviderSettingsSection({
                     <XCircle className="h-3 w-3" /> Disconnected
                   </Badge>
                 )}
-                {cliAvailable ? (
-                  <Badge variant="running">CLI</Badge>
-                ) : (
-                  <Badge variant="warning">No CLI</Badge>
-                )}
+              </div>
+
+              <div className="h-px bg-[var(--divider)]" />
+
+              <div className="px-3 py-2.5 space-y-2">
+                <p className="text-xs text-ink-300 leading-relaxed">
+                  {claudeStatusSummary}
+                </p>
+                {runtimeProbe ? (
+                  <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
+                    {runtimeProbe.status === "pass" ? "Runtime OK" : "Runtime issue"}
+                    {runtimeProbe.latencyMs !== undefined ? ` \u00b7 ${runtimeProbe.latencyMs}ms` : ""}
+                  </Badge>
+                ) : null}
+                <p className="text-[11px] text-ink-600 leading-relaxed break-words">
+                  {oauthStatusText}
+                </p>
               </div>
             </div>
+          ) : null}
 
-            <div className="h-px bg-[var(--divider)]" />
+          {!isClaudeProvider ? (
+            /* ── Connection card ── */
+            <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                <p className="text-xs text-ink-100">Connection</p>
+                <div className="flex items-center gap-1.5">
+                  {isAuthReady ? (
+                    <Badge variant="success">
+                      <CheckCircle2 className="h-3 w-3" /> Connected
+                    </Badge>
+                  ) : (
+                    <Badge variant="danger">
+                      <XCircle className="h-3 w-3" /> Disconnected
+                    </Badge>
+                  )}
+                  {cliAvailable ? (
+                    <Badge variant="running">CLI</Badge>
+                  ) : (
+                    <Badge variant="warning">No CLI</Badge>
+                  )}
+                </div>
+              </div>
 
-            <div className="px-3 py-2.5 space-y-2">
-              <p className="text-[11px] text-ink-500 leading-relaxed break-words">
-                {oauthStatusText}
-              </p>
+              <div className="h-px bg-[var(--divider)]" />
 
-              {runtimeProbe ? (
-                <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
-                  {runtimeProbe.status === "pass" ? "Runtime OK" : "Runtime issue"}
-                  {runtimeProbe.latencyMs !== undefined ? ` \u00b7 ${runtimeProbe.latencyMs}ms` : ""}
-                </Badge>
-              ) : null}
-            </div>
+              <div className="px-3 py-2.5 space-y-2">
+                <p className="text-xs text-ink-300 leading-relaxed">
+                  {connectionSummary}
+                </p>
 
-            <div className="h-px bg-[var(--divider)]" />
+                {runtimeProbe ? (
+                  <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
+                    {runtimeProbe.status === "pass" ? "Runtime OK" : "Runtime issue"}
+                    {runtimeProbe.latencyMs !== undefined ? ` \u00b7 ${runtimeProbe.latencyMs}ms` : ""}
+                  </Badge>
+                ) : null}
+              </div>
 
-            <div className="flex items-center gap-2 px-3 py-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busy}
-                onClick={async () => {
-                  await onConnect(providerId);
-                }}
-              >
-                <Link2 className="mr-1 h-3.5 w-3.5" />
-                {isAuthReady ? "Reconnect" : "Connect"}
-              </Button>
+              <div className="h-px bg-[var(--divider)]" />
 
-              {providerId === "openai" ? (
-                <Tooltip content="Pull OAuth token from the OpenAI CLI session" side="top">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={async () => {
+                    await onConnect(providerId);
+                  }}
+                >
+                  <Link2 className="mr-1 h-3.5 w-3.5" />
+                  {connectButtonLabel}
+                </Button>
+
+                {providerId === "openai" ? (
+                  <Tooltip content="Pull OAuth token from the OpenAI CLI session" side="top">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={async () => {
+                        await onImportToken(providerId);
+                      }}
+                    >
+                      <Download className="mr-1 h-3.5 w-3.5" /> Sync from CLI
+                    </Button>
+                  </Tooltip>
+                ) : null}
+
+                <Tooltip content="Refresh connection status" side="top">
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={busy}
                     onClick={async () => {
-                      await onImportToken(providerId);
+                      triggerRefreshSpin();
+                      await onRefresh(providerId);
                     }}
                   >
-                    <Download className="mr-1 h-3.5 w-3.5" /> Sync from CLI
+                    <RefreshCw
+                      className="h-3.5 w-3.5"
+                      style={{
+                        transform: `rotate(${refreshRotation}deg)`,
+                        transition: "transform 0.45s ease-in-out"
+                      }}
+                    />
                   </Button>
                 </Tooltip>
-              ) : null}
-
-              <Tooltip content="Refresh connection status" side="top">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={async () => {
-                    triggerRefreshSpin();
-                    await onRefresh(providerId);
-                  }}
-                >
-                  <RefreshCw
-                    className="h-3.5 w-3.5"
-                    style={{
-                      transform: `rotate(${refreshRotation}deg)`,
-                      transition: "transform 0.45s ease-in-out"
-                    }}
-                  />
-                </Button>
-              </Tooltip>
+              </div>
             </div>
-          </div>
+          ) : null}
 
           {/* ── Auth code card (device flow) ── */}
           {hasAuthCode ? (
@@ -258,8 +380,12 @@ export function ProviderSettingsSection({
             />
           ) : null}
 
+          {isClaudeProvider ? (
+            <ClaudeOAuthGuide isRemoteMode={isRemoteMode} />
+          ) : null}
+
           {/* ── Auth URL link (remote fallback, no device code) ── */}
-          {hasAuthUrl ? (
+          {!isClaudeProvider && hasAuthUrl ? (
             <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5">
               <a
                 href={pendingConnect!.authUrl}
@@ -276,7 +402,7 @@ export function ProviderSettingsSection({
           {/* ── OAuth credential card ── */}
           <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5 space-y-1.5">
             <p className="text-xs text-ink-100">
-              {providerId === "claude" ? "Setup token (API fallback)" : "OAuth Token"}
+              {isClaudeProvider ? "Setup token (API fallback)" : "OAuth Token"}
             </p>
             <Input
               type="password"
@@ -285,13 +411,13 @@ export function ProviderSettingsSection({
                 onCredentialChange(providerId, event.target.value);
               }}
               placeholder={
-                providerId === "claude"
+                isClaudeProvider
                   ? "sk-ant-oat01-..."
                   : "sk-..."
               }
             />
             <p className="text-[11px] text-ink-500">
-              {providerId === "claude"
+              {isClaudeProvider
                 ? `Paste Claude setup-token from \`claude setup-token\` and save.${isRemoteMode ? " In remote mode this is the only token format accepted for API fallback." : " Browser Authentication Code from claude.ai cannot be saved in this field."}`
                 : "Optional. Edit manually and save to apply."}
             </p>

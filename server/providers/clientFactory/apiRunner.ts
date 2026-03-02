@@ -206,8 +206,15 @@ function buildClaudeOutputFormat(
 
 type ClaudeAuthHeaderMode = "oauth_bearer" | "api_key";
 
+const CLAUDE_DEFAULT_BETA_HEADERS = ["fine-grained-tool-streaming-2025-05-14", "interleaved-thinking-2025-05-14"] as const;
+const CLAUDE_OAUTH_BETA_HEADERS = ["claude-code-20250219", "oauth-2025-04-20", ...CLAUDE_DEFAULT_BETA_HEADERS] as const;
+
 function isClaudeInvalidBearerTokenResponse(statusCode: number, responseBody: string): boolean {
   return statusCode === 401 && /\binvalid bearer token\b/i.test(responseBody);
+}
+
+function isClaudeOauthCredential(credential: string): boolean {
+  return /^sk-ant-oat/i.test(credential.trim());
 }
 
 async function readWithIdleTimeout(
@@ -919,15 +926,18 @@ export async function executeClaudeWithApi(
     "anthropic-version": "2023-06-01"
   };
 
-  const betas: string[] = [];
+  const isOauthCredential = isClaudeOauthCredential(credential);
+  const betas = new Set<string>(
+    (isOauthCredential ? CLAUDE_OAUTH_BETA_HEADERS : CLAUDE_DEFAULT_BETA_HEADERS) as readonly string[]
+  );
   if (options?.disableEffort !== true) {
-    betas.push("effort-2025-11-24");
+    betas.add("effort-2025-11-24");
   }
   if (input.step.use1MContext && options?.disable1MContext !== true) {
-    betas.push("context-1m-2025-08-07");
+    betas.add("context-1m-2025-08-07");
   }
-  if (betas.length > 0) {
-    baseHeaders["anthropic-beta"] = betas.join(",");
+  if (betas.size > 0) {
+    baseHeaders["anthropic-beta"] = Array.from(betas).join(",");
   }
 
   const requestBody: Record<string, unknown> = {
