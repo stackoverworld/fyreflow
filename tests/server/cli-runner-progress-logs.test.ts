@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   compactProcessSnapshot,
+  extractCodexJsonStatus,
+  extractCodexJsonTextDelta,
   extractStreamJsonCommandHints,
   extractStreamJsonTextDelta,
   extractStreamJsonSummaryHints,
@@ -169,5 +171,28 @@ describe("CLI runner progress logging", () => {
     expect(extractStreamJsonTextDelta("event: message")).toBe("");
     expect(extractStreamJsonTextDelta("data: [DONE]")).toBe("");
     expect(extractStreamJsonTextDelta("not-json")).toBe("");
+  });
+
+  it("extracts codex text delta from json event lines", () => {
+    const line = JSON.stringify({
+      type: "response.output_text.delta",
+      delta: "Live token"
+    });
+
+    expect(extractCodexJsonTextDelta(line)).toBe("Live token");
+  });
+
+  it("extracts codex status text from lifecycle events", () => {
+    expect(extractCodexJsonStatus(JSON.stringify({ type: "turn.started" }))).toBe(
+      "Model is generating a response."
+    );
+    expect(
+      extractCodexJsonStatus(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Rate limit exceeded" }
+        })
+      )
+    ).toBe("Rate limit exceeded");
   });
 });

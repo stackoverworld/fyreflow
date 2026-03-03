@@ -247,6 +247,62 @@ describe("generateFlowDraftStream", () => {
     );
   });
 
+  it("forwards stream status events before model text deltas", async () => {
+    const responsePayload: FlowBuilderResponse = {
+      action: "answer",
+      message: "Draft ready",
+      source: "model",
+      notes: []
+    };
+
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'event: ready\ndata: {"at":"2026-03-03T12:00:00.000Z","message":"Request accepted; model started processing."}\n\n'
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                'event: status\ndata: {"at":"2026-03-03T12:00:01.000Z","message":"Using OpenAI (oauth) with gpt-5.3-codex."}\n\n'
+              )
+            );
+            controller.enqueue(
+              encoder.encode(`event: complete\ndata: ${JSON.stringify({ response: responsePayload })}\n\n`)
+            );
+            controller.close();
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    ) as typeof fetch;
+
+    const onTextDelta = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const onStatus = vi.fn();
+
+    await generateFlowDraftStream(flowBuilderRequest, {
+      onTextDelta,
+      onComplete,
+      onError,
+      onStatus
+    });
+
+    expect(onTextDelta).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenNthCalledWith(1, "Request accepted; model started processing.");
+    expect(onStatus).toHaveBeenNthCalledWith(2, "Using OpenAI (oauth) with gpt-5.3-codex.");
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledWith(responsePayload);
+  });
+
   it("fails fast when stream heartbeats continue without output progress", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-03-03T12:00:00.000Z");

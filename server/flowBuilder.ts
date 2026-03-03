@@ -59,6 +59,84 @@ interface PreparedFlowBuilderRequest {
   capabilityNotes: string[];
 }
 
+interface FlowBuilderStatusContext {
+  emit: (message: string) => void;
+  onProviderLog: (line: string) => void;
+}
+
+function normalizeFlowBuilderStatusMessage(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+  if (normalized.length <= 220) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 217)}...`;
+}
+
+function extractFlowBuilderStatusFromProviderLog(line: string): string | null {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  if (trimmed.startsWith("Model summary:")) {
+    return normalizeFlowBuilderStatusMessage(trimmed.slice("Model summary:".length)) ?? null;
+  }
+
+  if (trimmed.startsWith("Provider dispatch started:")) {
+    const providerMatch = /\bprovider=([^,\s]+)/i.exec(trimmed);
+    const authModeMatch = /\bauthMode=([^,\s]+)/i.exec(trimmed);
+    const modelMatch = /\bmodel=([^,\s]+)/i.exec(trimmed);
+    const provider = providerMatch?.[1]?.trim();
+    const authMode = authModeMatch?.[1]?.trim();
+    const model = modelMatch?.[1]?.trim();
+    if (!provider || !authMode || !model) {
+      return "Dispatching provider request.";
+    }
+    const providerLabel = provider === "openai" ? "OpenAI" : provider === "claude" ? "Anthropic" : provider;
+    return `Using ${providerLabel} (${authMode}) with ${model}.`;
+  }
+
+  if (trimmed.startsWith("Codex CLI does not support --json")) {
+    return "Codex CLI fallback mode enabled.";
+  }
+
+  return null;
+}
+
+function createFlowBuilderStatusContext(streamOptions?: FlowBuilderStreamOptions): FlowBuilderStatusContext {
+  const seen = new Set<string>();
+
+  const emit = (message: string): void => {
+    const normalized = normalizeFlowBuilderStatusMessage(message);
+    if (!normalized || !streamOptions?.onStatus) {
+      return;
+    }
+
+    const signature = normalized.toLowerCase();
+    if (seen.has(signature)) {
+      return;
+    }
+    seen.add(signature);
+    streamOptions.onStatus(normalized);
+  };
+
+  const onProviderLog = (line: string): void => {
+    const status = extractFlowBuilderStatusFromProviderLog(line);
+    if (!status) {
+      return;
+    }
+    emit(status);
+  };
+
+  return {
+    emit,
+    onProviderLog
+  };
+}
+
 function prepareFlowBuilderRequest(
   request: FlowBuilderRequest,
   provider: ProviderConfig
@@ -101,8 +179,11 @@ async function generateDraftOnly(
   provider: ProviderConfig,
   providerRuntime: FlowBuilderProviderRuntimeContext,
   capabilityNotes: string[],
-  streamOptions?: FlowBuilderStreamOptions
+  streamOptions: FlowBuilderStreamOptions | undefined,
+  statusContext: FlowBuilderStatusContext
 ): Promise<DraftOnlyResult> {
+  statusContext.emit("Generating workflow draft.");
+
   const generatorStep = createGeneratorStep(
     request,
     "AI Flow Architect",
@@ -119,7 +200,8 @@ async function generateDraftOnly(
     }),
     outputMode: "json",
     onTextDelta: streamOptions?.onTextDelta,
-    signal: streamOptions?.signal
+    signal: streamOptions?.signal,
+    log: statusContext.onProviderLog
   });
 
   if (isSimulatedProviderOutput(rawOutput)) {
@@ -139,6 +221,7 @@ async function generateDraftOnly(
   let regeneratedOutput: string | undefined;
 
   try {
+    statusContext.emit("Repairing invalid model output.");
     repairedOutput = await executeProviderStep({
       provider,
       step: {
@@ -149,7 +232,8 @@ async function generateDraftOnly(
       },
       task: "Repair workflow JSON",
       context: buildJsonRepairContext(rawOutput),
-      outputMode: "json"
+      outputMode: "json",
+      log: statusContext.onProviderLog
     });
 
     if (isSimulatedProviderOutput(repairedOutput)) {
@@ -173,6 +257,7 @@ async function generateDraftOnly(
   }
 
   try {
+    statusContext.emit("Regenerating workflow JSON.");
     regeneratedOutput = await executeProviderStep({
       provider,
       step: {
@@ -190,7 +275,8 @@ async function generateDraftOnly(
         rawOutput,
         repairedOutput
       ),
-      outputMode: "json"
+      outputMode: "json",
+      log: statusContext.onProviderLog
     });
 
     if (isSimulatedProviderOutput(regeneratedOutput)) {
@@ -214,6 +300,7 @@ async function generateDraftOnly(
   }
 
   const fallback = fallbackSpec(request.prompt);
+  statusContext.emit("Using deterministic fallback flow.");
   return {
     draft: buildFlowDraft(fallback, request),
     source: "fallback",
@@ -230,8 +317,11 @@ async function generateConversationResponse(
   provider: ProviderConfig,
   providerRuntime: FlowBuilderProviderRuntimeContext,
   capabilityNotes: string[],
-  streamOptions?: FlowBuilderStreamOptions
+  streamOptions: FlowBuilderStreamOptions | undefined,
+  statusContext: FlowBuilderStatusContext
 ): Promise<FlowBuilderResponse> {
+  statusContext.emit("Generating copilot response.");
+
   const copilotStep = createGeneratorStep(
     request,
     "AI Flow Copilot",
@@ -248,7 +338,8 @@ async function generateConversationResponse(
     }),
     outputMode: "json",
     onTextDelta: streamOptions?.onTextDelta,
-    signal: streamOptions?.signal
+    signal: streamOptions?.signal,
+    log: statusContext.onProviderLog
   });
 
   if (isSimulatedProviderOutput(rawOutput)) {
@@ -277,6 +368,7 @@ async function generateConversationResponse(
   let regeneratedOutput: string | undefined;
 
   try {
+    statusContext.emit("Repairing invalid copilot output.");
     repairedOutput = await executeProviderStep({
       provider,
       step: {
@@ -287,7 +379,8 @@ async function generateConversationResponse(
       },
       task: "Repair copilot JSON",
       context: buildChatRepairContext(rawOutput),
-      outputMode: "json"
+      outputMode: "json",
+      log: statusContext.onProviderLog
     });
 
     if (isSimulatedProviderOutput(repairedOutput)) {
@@ -320,6 +413,7 @@ async function generateConversationResponse(
   }
 
   try {
+    statusContext.emit("Regenerating copilot output.");
     regeneratedOutput = await executeProviderStep({
       provider,
       step: {
@@ -337,7 +431,8 @@ async function generateConversationResponse(
         rawOutput,
         repairedOutput
       ),
-      outputMode: "json"
+      outputMode: "json",
+      log: statusContext.onProviderLog
     });
 
     if (isSimulatedProviderOutput(regeneratedOutput)) {
@@ -407,6 +502,7 @@ async function generateConversationResponse(
   const fallbackAction: FlowBuilderAction =
     request.currentDraft && !isReplaceIntent(request.prompt) ? "update_current_flow" : "replace_flow";
   const next = buildDraftForAction(fallbackAction, fallback, request);
+  statusContext.emit("Using deterministic fallback response.");
 
   return {
     action: next.action,
@@ -432,6 +528,9 @@ export async function generateFlowDraft(
     throw new Error(`Provider ${request.providerId} is unavailable`);
   }
   const prepared = prepareFlowBuilderRequest(request, provider);
+  const statusContext = createFlowBuilderStatusContext(streamOptions);
+  const providerLabel = request.providerId === "openai" ? "OpenAI" : "Anthropic";
+  statusContext.emit(`Preparing ${providerLabel} request.`);
 
   const hasConversationContext =
     Boolean(prepared.request.currentDraft) || (prepared.request.history?.length ?? 0) > 0;
@@ -441,7 +540,8 @@ export async function generateFlowDraft(
       provider,
       prepared.providerRuntime,
       prepared.capabilityNotes,
-      streamOptions
+      streamOptions,
+      statusContext
     );
   }
 
@@ -450,7 +550,8 @@ export async function generateFlowDraft(
     provider,
     prepared.providerRuntime,
     prepared.capabilityNotes,
-    streamOptions
+    streamOptions,
+    statusContext
   );
   return {
     action: "replace_flow",

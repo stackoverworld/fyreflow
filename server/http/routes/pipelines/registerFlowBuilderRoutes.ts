@@ -87,6 +87,23 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
 
     let trackerDeltaCount = 0;
     let rawDeltaCount = 0;
+    let statusCount = 0;
+    const emittedStatuses = new Set<string>();
+    const emitStatus = (message: string): void => {
+      const normalized = message.replace(/\s+/g, " ").trim();
+      if (normalized.length === 0 || emittedStatuses.has(normalized)) {
+        return;
+      }
+      emittedStatuses.add(normalized);
+      statusCount++;
+      if (statusCount <= 3) {
+        console.log(`[stream-endpoint] status #${statusCount}:`, normalized);
+      }
+      if (!closed) {
+        writeSseEvent(response, "status", { message: normalized, at: new Date().toISOString() });
+      }
+    };
+
     const tracker = new MessageFieldTracker((delta) => {
       trackerDeltaCount++;
       if (trackerDeltaCount <= 3) {
@@ -102,6 +119,7 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
       requestId: typeof input.requestId === "string" ? input.requestId : undefined,
       at: new Date().toISOString()
     });
+    emitStatus("Request accepted; model started processing.");
 
     try {
       const result = await deps.generateFlowDraft(payload, deps.store.getProviders(), {
@@ -112,10 +130,15 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
           }
           tracker.push(delta);
         },
+        onStatus: (message) => {
+          emitStatus(message);
+        },
         signal: abortController.signal
       });
 
-      console.log(`[stream-endpoint] complete: rawDeltas=${rawDeltaCount}, trackerDeltas=${trackerDeltaCount}, closed=${closed}`);
+      console.log(
+        `[stream-endpoint] complete: rawDeltas=${rawDeltaCount}, trackerDeltas=${trackerDeltaCount}, statuses=${statusCount}, closed=${closed}`
+      );
       if (!closed) {
         writeSseEvent(response, "complete", { response: result });
       }

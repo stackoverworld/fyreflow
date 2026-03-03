@@ -356,6 +356,7 @@ export function useAiBuilderSession({
   const streamingContentRef = useRef("");
   const streamingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
+  const streamingHasModelTextRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -487,13 +488,14 @@ export function useAiBuilderSession({
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
         const streamingMsgId = crypto.randomUUID();
-        streamingContentRef.current = "";
+        streamingContentRef.current = "Thinking...";
         streamingMessageIdRef.current = streamingMsgId;
+        streamingHasModelTextRef.current = false;
         appendVisibleMessages([{
           id: streamingMsgId,
           requestId,
           role: "assistant",
-          content: "",
+          content: "Thinking...",
           streaming: true,
           timestamp: Date.now(),
         }]);
@@ -504,7 +506,18 @@ export function useAiBuilderSession({
               payload,
               {
                 onTextDelta: (delta) => {
+                  if (!streamingHasModelTextRef.current) {
+                    streamingHasModelTextRef.current = true;
+                    streamingContentRef.current = "";
+                  }
                   streamingContentRef.current += delta;
+                  scheduleStreamingFlush();
+                },
+                onStatus: (message) => {
+                  if (streamingHasModelTextRef.current) {
+                    return;
+                  }
+                  streamingContentRef.current = message;
                   scheduleStreamingFlush();
                 },
                 onComplete: async (result) => {
@@ -513,6 +526,7 @@ export function useAiBuilderSession({
                     streamingFlushTimerRef.current = null;
                   }
                   streamingMessageIdRef.current = null;
+                  streamingHasModelTextRef.current = false;
 
                   try {
                     await processCompletedResult(
@@ -535,6 +549,7 @@ export function useAiBuilderSession({
                     streamingFlushTimerRef.current = null;
                   }
                   streamingMessageIdRef.current = null;
+                  streamingHasModelTextRef.current = false;
                   reject(error);
                 }
               }

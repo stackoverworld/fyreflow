@@ -217,6 +217,7 @@
 ## AI Builder Streaming Contract (2026-03-03)
 - `POST /api/flow-builder/generate-stream` is SSE (`text/event-stream; charset=utf-8`) with `Cache-Control: no-cache, no-transform`.
 - Stream emits `ready` first: `{ requestId?, at }`.
+- Stream emits incremental `status`: `{ message, at }` for lifecycle/progress updates while waiting for model deltas.
 - Stream emits incremental `text_delta`: `{ delta }` while provider output is processed.
 - Stream emits `heartbeat`: `{ at }` about every 15s while the stream is active.
 - Terminal events:

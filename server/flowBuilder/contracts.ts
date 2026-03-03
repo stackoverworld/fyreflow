@@ -67,5 +67,6 @@ export interface DraftActionResult {
 
 export interface FlowBuilderStreamOptions {
   onTextDelta?: (delta: string) => void;
+  onStatus?: (message: string) => void;
   signal?: AbortSignal;
 }

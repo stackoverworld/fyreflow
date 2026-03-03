@@ -1583,6 +1583,7 @@ export interface FlowDraftStreamCallbacks {
   onTextDelta: (delta: string) => void;
   onComplete: (response: FlowBuilderResponse) => void;
   onError: (error: Error) => void;
+  onStatus?: (message: string) => void;
 }
 
 export async function generateFlowDraftStream(
@@ -1703,6 +1704,17 @@ export async function generateFlowDraftStream(
         console.log("[stream] heartbeat received");
       }
 
+      if (event === "status") {
+        const parsed = tryParseJsonObject(data);
+        const message =
+          parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
+        if (message.length > 0) {
+          lastProgressAt = now;
+          callbacks.onStatus?.(message);
+        }
+        return;
+      }
+
       if (event === "complete") {
         console.log("[stream] complete event received, deltaCount:", deltaCount);
         const parsed = tryParseJsonObject(data);
@@ -1724,6 +1736,12 @@ export async function generateFlowDraftStream(
 
       if (event === "ready" || event === "heartbeat") {
         console.log("[stream]", event, "received");
+        if (event === "ready") {
+          const parsed = tryParseJsonObject(data);
+          if (parsed && typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+            callbacks.onStatus?.(parsed.message.trim());
+          }
+        }
         if (now - lastProgressAt >= FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS) {
           throw new Error(
             `Stream stalled: no model output progress for ${FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS}ms`

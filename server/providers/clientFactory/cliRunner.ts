@@ -571,6 +571,172 @@ export function extractStreamJsonTextDelta(line: string): string {
   return delta;
 }
 
+function collectCodexDeltaFragment(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    let combined = "";
+    for (const entry of value) {
+      combined += collectCodexDeltaFragment(entry);
+    }
+    return combined;
+  }
+
+  const record = maybeRecord(value);
+  if (!record) {
+    return "";
+  }
+
+  const direct =
+    maybeString(record.text) ??
+    maybeString(record.delta_text) ??
+    maybeString(record.output_text_delta) ??
+    maybeString(record.partial_text) ??
+    maybeString(record.content);
+  if (direct) {
+    return direct;
+  }
+
+  const nested =
+    collectCodexDeltaFragment(record.delta) ||
+    collectCodexDeltaFragment(record.item) ||
+    collectCodexDeltaFragment(record.content_part);
+  if (nested.length > 0) {
+    return nested;
+  }
+
+  return "";
+}
+
+function extractCodexJsonRecordTextDelta(record: Record<string, unknown>): string {
+  const type = (maybeString(record.type) ?? "").toLowerCase();
+  if (type === "response.output_text.delta") {
+    return maybeString(record.delta) ?? "";
+  }
+
+  const direct =
+    maybeString(record.output_text_delta) ??
+    maybeString(record.delta_text) ??
+    maybeString(record.text_delta) ??
+    maybeString(record.token);
+  if (direct) {
+    return direct;
+  }
+
+  if (type.includes("delta")) {
+    return collectCodexDeltaFragment(record.delta) || collectCodexDeltaFragment(record.item);
+  }
+
+  return "";
+}
+
+export function extractCodexJsonTextDelta(line: string): string {
+  const parsed = parseStreamJsonLine(line);
+  if (!parsed) {
+    return "";
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  let delta = "";
+  for (const entry of entries) {
+    const record = maybeRecord(entry);
+    if (!record) {
+      continue;
+    }
+    delta += extractCodexJsonRecordTextDelta(record);
+  }
+
+  return delta;
+}
+
+function humanizeCodexEventType(value: string): string {
+  const normalized = value
+    .replace(/[._]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length === 0) {
+    return "";
+  }
+  return `${normalized[0]!.toUpperCase()}${normalized.slice(1)}`;
+}
+
+function extractCodexJsonRecordStatus(record: Record<string, unknown>): string {
+  const explicit =
+    maybeString(record.status_summary) ??
+    maybeString(record.summary) ??
+    maybeString(record.reasoning_summary);
+  if (explicit) {
+    return sanitizeModelSummary(explicit);
+  }
+
+  const type = maybeString(record.type);
+  if (!type) {
+    return "";
+  }
+
+  const loweredType = type.toLowerCase();
+  if (loweredType === "turn.started") {
+    return "Model is generating a response.";
+  }
+  if (loweredType === "turn.completed") {
+    return "Model finished generating response.";
+  }
+  if (loweredType === "thread.started") {
+    return "Session started.";
+  }
+  if (loweredType === "thread.completed") {
+    return "Session completed.";
+  }
+  if (loweredType === "turn.failed" || loweredType === "error") {
+    const message =
+      maybeString(record.message) ??
+      maybeString(maybeRecord(record.error)?.message) ??
+      maybeString(record.error_message);
+    if (message) {
+      return sanitizeModelSummary(message);
+    }
+    return "Model execution failed.";
+  }
+
+  if (loweredType.endsWith(".started")) {
+    const phase = humanizeCodexEventType(type.replace(/\.started$/i, ""));
+    return phase.length > 0 ? `${phase} started.` : "";
+  }
+  if (loweredType.endsWith(".completed") || loweredType.endsWith(".done") || loweredType.endsWith(".finished")) {
+    const phase = humanizeCodexEventType(type.replace(/\.(completed|done|finished)$/i, ""));
+    return phase.length > 0 ? `${phase} completed.` : "";
+  }
+  if (loweredType.endsWith(".failed")) {
+    const phase = humanizeCodexEventType(type.replace(/\.failed$/i, ""));
+    return phase.length > 0 ? `${phase} failed.` : "Model execution failed.";
+  }
+
+  return "";
+}
+
+export function extractCodexJsonStatus(line: string): string {
+  const parsed = parseStreamJsonLine(line);
+  if (!parsed) {
+    return "";
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  for (const entry of entries) {
+    const record = maybeRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const status = extractCodexJsonRecordStatus(record);
+    if (status.length > 0) {
+      return status;
+    }
+  }
+
+  return "";
+}
+
 function extractStreamJsonCumulativeText(line: string): string {
   const parsed = parseStreamJsonLine(line);
   if (!parsed) {
@@ -701,6 +867,7 @@ function runCommand(
       stdio: ["pipe", "pipe", "pipe"]
     });
     const inspectStreamJson = args.includes("stream-json");
+    const inspectStdoutLines = inspectStreamJson || typeof onStdoutLine === "function";
 
     let stdout = "";
     let stderr = "";
@@ -747,7 +914,7 @@ function runCommand(
     };
 
     const consumeStdoutLines = (chunk: string, flush = false): void => {
-      if (!inspectStreamJson) {
+      if (!inspectStdoutLines) {
         return;
       }
 
@@ -932,30 +1099,65 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
   try {
     const prompt = composeCliPrompt(input);
     const sandboxMode = resolveCodexCliSandboxMode(input);
+    const model = input.step.model || input.provider.defaultModel;
     input.log?.("Model summary: Request accepted; model started processing.");
     input.log?.(`Codex CLI sandbox mode: ${sandboxMode}`);
-    await runCommand(
-      CODEX_CLI_COMMAND,
-      [
-        "exec",
-        "--skip-git-repo-check",
-        "--sandbox",
-        sandboxMode,
-        "--color",
-        "never",
-        "--model",
-        input.step.model || input.provider.defaultModel,
-        "--config",
-        `model_reasoning_effort="${input.step.reasoningEffort}"`,
-        "--output-last-message",
-        outputPath,
-        "-"
-      ],
-      prompt,
-      CLI_EXEC_TIMEOUT_MS,
-      input.signal,
-      input.log
-    );
+    const seenStatusMessages = new Set<string>();
+    const onCodexJsonLine = (line: string): void => {
+      const delta = extractCodexJsonTextDelta(line);
+      if (delta.length > 0) {
+        input.onTextDelta?.(delta);
+      }
+
+      const status = extractCodexJsonStatus(line);
+      if (status.length === 0 || seenStatusMessages.has(status)) {
+        return;
+      }
+      seenStatusMessages.add(status);
+      input.log?.(`Model summary: ${status}`);
+    };
+
+    const buildCodexArgs = (jsonMode: boolean): string[] => [
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      sandboxMode,
+      "--color",
+      "never",
+      ...(jsonMode ? ["--json"] : []),
+      "--model",
+      model,
+      "--config",
+      `model_reasoning_effort="${input.step.reasoningEffort}"`,
+      "--output-last-message",
+      outputPath,
+      "-"
+    ];
+
+    try {
+      await runCommand(
+        CODEX_CLI_COMMAND,
+        buildCodexArgs(true),
+        prompt,
+        CLI_EXEC_TIMEOUT_MS,
+        input.signal,
+        input.log,
+        onCodexJsonLine
+      );
+    } catch (error) {
+      if (!isUnknownCodexJsonOptionError(error)) {
+        throw error;
+      }
+      input.log?.("Codex CLI does not support --json; retrying without JSON stream mode.");
+      await runCommand(
+        CODEX_CLI_COMMAND,
+        buildCodexArgs(false),
+        prompt,
+        CLI_EXEC_TIMEOUT_MS,
+        input.signal,
+        input.log
+      );
+    }
 
     const output = await fs.readFile(outputPath, "utf8");
     const trimmed = output.trim();
@@ -970,6 +1172,13 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
 
   input.log?.("Model summary: Step completed with no text output.");
   return "Codex CLI completed with no final message output.";
+}
+
+function isUnknownCodexJsonOptionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\bunknown\b.+\b(option|argument)\b|unrecognized option|invalid option|\b--json\b/i.test(error.message);
 }
 
 export function resolveCodexCliSandboxMode(input: ProviderExecutionInput): CodexCliSandboxMode {
