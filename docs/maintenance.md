@@ -9,7 +9,7 @@
 - Run `node scripts/check-agent-context.mjs` before merging.
 
 ## Mechanical Checks
-- `node scripts/check-agent-context.mjs`: validates AGENTS structure, chain budget, and fragment composition.
+- `node scripts/check-agent-context.mjs`: validates AGENTS structure, chain budget, and fragment composition (project files only; excludes assistant-local `.agents/**` and `.claude/**` trees).
 - `node scripts/check-doc-freshness.mjs`: validates `Last reviewed` dates in docs.
 - `node scripts/check-skills.mjs`: validates skill packaging and trigger case docs.
 - Stack verification commands:

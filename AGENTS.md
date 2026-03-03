@@ -16,6 +16,11 @@
 - Do not run watch servers, background daemons, destructive commands, or new network actions unless task-required.
 - Update docs when architecture or contracts change.
 - Every new feature or behavior change must include new or updated automated tests at the right level (unit/integration/e2e).
+- For frontend tasks, read `apps/web/AGENTS.md` and `UIKIT.md` before implementation.
+- Prefer existing UI primitives from `src/components/optics/*` over one-off controls.
+- Use existing design tokens/scales (`ink`, `ember`, CSS vars); avoid hardcoded colors.
+- Use `lucide-react` for icons and `motion/react` for UI motion unless scoped guidance overrides.
+- Design for narrow side panels: prevent overflow and collapse secondary actions into dropdowns when needed.
 - Keep responses concise, concrete, and verifiable.
 - Prefer invoking project automation over manual style enforcement.
 

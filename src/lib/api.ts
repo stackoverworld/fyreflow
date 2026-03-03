@@ -36,6 +36,7 @@ const FLOW_BUILDER_RETRY_DELAY_MS = 250;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 120_000;
 const FLOW_BUILDER_REQUEST_TIMEOUT_MS = 480_000;
 const FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS = 90_000;
+const FLOW_BUILDER_STREAM_READ_TIMEOUT_MS = 45_000;
 const STORAGE_UPLOAD_CHUNK_BYTES = 512 * 1024;
 export const STORAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 const WS_PROTOCOL = "fyreflow.realtime.v1";
@@ -44,6 +45,12 @@ const WS_AUTH_PROTOCOL_PREFIX = "fyreflow-auth.";
 interface SseEventChunk {
   event: string;
   data: string;
+}
+
+interface ConsumeSseStreamOptions {
+  readTimeoutMs?: number;
+  readTimeoutMessage?: string;
+  signal?: AbortSignal;
 }
 
 export interface RunStreamEventEnvelope {
@@ -293,11 +300,22 @@ async function requestWithRetry<T>(
 
 async function consumeSseStream(
   body: ReadableStream<Uint8Array>,
-  onEvent: (chunk: SseEventChunk) => void
+  onEvent: (chunk: SseEventChunk) => void,
+  options?: ConsumeSseStreamOptions
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const readTimeoutMs =
+    typeof options?.readTimeoutMs === "number" && Number.isFinite(options.readTimeoutMs) && options.readTimeoutMs > 0
+      ? Math.max(1, Math.floor(options.readTimeoutMs))
+      : null;
+  const readTimeoutMessage =
+    options?.readTimeoutMessage?.trim().length
+      ? options.readTimeoutMessage.trim()
+      : readTimeoutMs !== null
+        ? `Stream stalled: no stream data for ${readTimeoutMs}ms`
+        : "Stream read timed out";
 
   const flushBuffer = (chunk: string): void => {
     buffer += chunk;
@@ -335,12 +353,66 @@ async function consumeSseStream(
     }
   };
 
+  const readNextChunk = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    const abortSignal = options?.signal;
+    if (abortSignal?.aborted) {
+      throw new Error(resolveAbortReason(abortSignal) ?? "Stream aborted");
+    }
+
+    const readPromise = reader.read();
+    const race: Array<Promise<ReadableStreamReadResult<Uint8Array>>> = [readPromise];
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let cleanupAbort = () => {};
+
+    if (readTimeoutMs !== null) {
+      const timeoutPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(readTimeoutMessage));
+        }, readTimeoutMs);
+      });
+      race.push(timeoutPromise);
+    }
+
+    if (abortSignal) {
+      const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+        const onAbort = () => {
+          reject(new Error(resolveAbortReason(abortSignal) ?? "Stream aborted"));
+        };
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+        cleanupAbort = () => abortSignal.removeEventListener("abort", onAbort);
+      });
+      race.push(abortPromise);
+    }
+
+    try {
+      return await Promise.race(race);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      cleanupAbort();
+    }
+  };
+
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
+    let readResult: ReadableStreamReadResult<Uint8Array>;
+    try {
+      readResult = await readNextChunk();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Stream read failed";
+      try {
+        await reader.cancel(reason);
+      } catch {
+        // Reader cleanup is best-effort once stream consumption fails.
+      }
+      throw error;
+    }
+
+    if (readResult.done) {
       break;
     }
-    flushBuffer(decoder.decode(value, { stream: true }));
+
+    flushBuffer(decoder.decode(readResult.value, { stream: true }));
   }
 
   flushBuffer(decoder.decode());
@@ -1665,6 +1737,7 @@ export async function generateFlowDraftStream(
 
   let settled = false;
   let lastProgressAt = Date.now();
+  let stallWatchdog: ReturnType<typeof setInterval> | null = null;
 
   const emitCompleteOnce = (responsePayload: FlowBuilderResponse): void => {
     if (settled) {
@@ -1682,77 +1755,104 @@ export async function generateFlowDraftStream(
     callbacks.onError(error);
   };
 
+  stallWatchdog = setInterval(() => {
+    if (settled) {
+      return;
+    }
+
+    const stalledForMs = Date.now() - lastProgressAt;
+    if (stalledForMs < FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS) {
+      return;
+    }
+
+    timeoutController.abort(
+      `Stream stalled: no model output progress for ${FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS}ms`
+    );
+  }, 2_000);
+
   let deltaCount = 0;
   try {
-    await consumeSseStream(response.body, ({ event, data }) => {
-      const now = Date.now();
+    await consumeSseStream(
+      response.body,
+      ({ event, data }) => {
+        const now = Date.now();
+        lastProgressAt = now;
 
-      if (event === "text_delta") {
-        const parsed = tryParseJsonObject(data);
-        if (parsed && typeof parsed.delta === "string") {
-          deltaCount++;
-          if (deltaCount <= 3 || deltaCount % 50 === 0) {
-            console.log(`[stream] text_delta #${deltaCount}:`, parsed.delta.slice(0, 60));
+        if (event === "text_delta") {
+          const parsed = tryParseJsonObject(data);
+          if (parsed && typeof parsed.delta === "string") {
+            deltaCount++;
+            if (deltaCount <= 3 || deltaCount % 50 === 0) {
+              console.log(`[stream] text_delta #${deltaCount}:`, parsed.delta.slice(0, 60));
+            }
+            callbacks.onTextDelta(parsed.delta);
           }
-          lastProgressAt = now;
-          callbacks.onTextDelta(parsed.delta);
-        }
-        return;
-      }
-
-      if (event === "heartbeat") {
-        console.log("[stream] heartbeat received");
-      }
-
-      if (event === "status") {
-        const parsed = tryParseJsonObject(data);
-        const message =
-          parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
-        if (message.length > 0) {
-          callbacks.onStatus?.(message);
-        }
-        return;
-      }
-
-      if (event === "complete") {
-        console.log("[stream] complete event received, deltaCount:", deltaCount);
-        const parsed = tryParseJsonObject(data);
-        if (parsed && parsed.response) {
-          lastProgressAt = now;
-          emitCompleteOnce(parsed.response as FlowBuilderResponse);
           return;
         }
-        throw new Error("Stream complete event is missing response payload");
-      }
 
-      if (event === "error") {
-        const parsed = tryParseJsonObject(data);
-        const message = parsed && typeof parsed.message === "string" ? parsed.message : "Stream error";
-        console.log("[stream] error event:", message);
-        emitErrorOnce(new Error(message));
-        return;
-      }
-
-      if (event === "ready" || event === "heartbeat") {
-        console.log("[stream]", event, "received");
-        if (event === "ready") {
+        if (event === "thinking") {
           const parsed = tryParseJsonObject(data);
-          if (parsed && typeof parsed.message === "string" && parsed.message.trim().length > 0) {
-            callbacks.onStatus?.(parsed.message.trim());
+          const message =
+            parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
+          if (message.length > 0) {
+            callbacks.onStatus?.(message);
+          }
+          return;
+        }
+
+        if (event === "status") {
+          const parsed = tryParseJsonObject(data);
+          const message =
+            parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
+          if (message.length > 0) {
+            callbacks.onStatus?.(message);
+          }
+          return;
+        }
+
+        if (event === "complete") {
+          console.log("[stream] complete event received, deltaCount:", deltaCount);
+          const parsed = tryParseJsonObject(data);
+          if (parsed && parsed.response) {
+            emitCompleteOnce(parsed.response as FlowBuilderResponse);
+            return;
+          }
+          throw new Error("Stream complete event is missing response payload");
+        }
+
+        if (event === "error") {
+          const parsed = tryParseJsonObject(data);
+          const message = parsed && typeof parsed.message === "string" ? parsed.message : "Stream error";
+          console.log("[stream] error event:", message);
+          emitErrorOnce(new Error(message));
+          return;
+        }
+
+        if (event === "ready" || event === "heartbeat") {
+          if (event === "ready") {
+            console.log("[stream] ready received");
+            const parsed = tryParseJsonObject(data);
+            if (parsed && typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+              callbacks.onStatus?.(parsed.message.trim());
+            }
           }
         }
-        if (now - lastProgressAt >= FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS) {
-          throw new Error(
-            `Stream stalled: no model output progress for ${FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS}ms`
-          );
-        }
+      },
+      {
+        readTimeoutMs: FLOW_BUILDER_STREAM_READ_TIMEOUT_MS,
+        readTimeoutMessage: `Stream stalled: no stream data for ${FLOW_BUILDER_STREAM_READ_TIMEOUT_MS}ms`,
+        signal: timeoutController.signal
       }
-    });
+    );
     console.log("[stream] SSE stream ended normally, settled:", settled);
   } catch (error) {
     console.log("[stream] SSE stream catch:", error instanceof Error ? error.message : error);
     emitErrorOnce(error instanceof Error ? error : new Error("Stream read failed"));
   } finally {
+    if (stallWatchdog !== null) {
+      clearInterval(stallWatchdog);
+      stallWatchdog = null;
+    }
     clearTimeout(timeout);
     cleanupSignalForwarding();
     if (!settled) {

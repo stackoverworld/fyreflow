@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { mockDashboardApi } from "./support/mockDashboardApi";
 
+const AI_CHAT_STORAGE_PREFIX = "fyreflow:ai-chat:";
+
 function runToolbarPrimaryButton(page: Page) {
   return page.getByRole("button", { name: /Smart Run|Quick Run|Run/ }).first();
 }
@@ -14,6 +16,19 @@ const REMOTE_CONNECTION_SETTINGS = {
   realtimePath: "/api/ws",
   deviceToken: ""
 } as const;
+
+function buildAiChatHistory(messageCount: number) {
+  const baseTimestamp = Date.parse("2026-03-04T20:00:00.000Z");
+  return Array.from({ length: messageCount }, (_, index) => {
+    const role = index % 2 === 0 ? "user" : "assistant";
+    return {
+      id: `seed-msg-${index + 1}`,
+      role,
+      content: `${role} seeded message ${index + 1}`,
+      timestamp: baseTimestamp + index * 1000
+    };
+  });
+}
 
 test.describe("Critical AI Regression Flows", () => {
   test("AI builder can update the active flow draft", async ({ page }) => {
@@ -67,6 +82,45 @@ test.describe("Critical AI Regression Flows", () => {
     await page.getByRole("button", { name: "Re-apply" }).first().click();
     await page.getByRole("button", { name: "Flow settings" }).click();
     await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow v1");
+  });
+
+  test("AI builder auto-loads older messages at top and Latest returns to exact bottom", async ({ page }) => {
+    const seededHistory = buildAiChatHistory(72);
+    await page.addInitScript(
+      ({ history, storageKey }) => {
+        window.localStorage.setItem(storageKey, JSON.stringify(history));
+      },
+      {
+        history: seededHistory,
+        storageKey: `${AI_CHAT_STORAGE_PREFIX}pipeline-default`
+      }
+    );
+
+    await mockDashboardApi(page);
+    await page.goto("/");
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+
+    await page.getByRole("button", { name: "AI builder" }).click();
+    const chatScroll = page.getByTestId("ai-builder-chat-scroll");
+    await expect(chatScroll).toBeVisible();
+
+    await expect(page.getByText("assistant seeded message 20")).toHaveCount(0);
+
+    await chatScroll.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+
+    await expect(page.getByText("assistant seeded message 20")).toHaveCount(1);
+    const latestButton = page.getByTestId("ai-builder-chat-latest");
+    await expect(latestButton).toBeVisible();
+    await latestButton.click();
+
+    await expect
+      .poll(async () => {
+        return chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
+      })
+      .toBeLessThanOrEqual(2);
   });
 
   test("run panel starts a smart run and shows run history", async ({ page }) => {

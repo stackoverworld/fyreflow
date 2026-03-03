@@ -121,7 +121,7 @@ describe("Provider Retry Policy", () => {
     expect(shouldFallback).toBe(true);
   });
 
-  it("disables fast mode in timeout fallback when Claude API key auth is not active", () => {
+  it("enables fast mode in timeout fallback when Claude OAuth auth is active", () => {
     const step = createStep({ fastMode: true, reasoningEffort: "high", use1MContext: true });
     const input: ProviderExecutionInput = {
       provider: {
@@ -140,7 +140,7 @@ describe("Provider Retry Policy", () => {
     };
 
     const fallbackInput = buildClaudeTimeoutFallbackInput(input);
-    expect(fallbackInput.step.fastMode).toBe(false);
+    expect(fallbackInput.step.fastMode).toBe(true);
     expect(fallbackInput.step.reasoningEffort).toBe("low");
     expect(fallbackInput.step.use1MContext).toBe(false);
   });

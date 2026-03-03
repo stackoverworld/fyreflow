@@ -125,6 +125,7 @@ export function ProviderSettings({
 
   const handleAuthModeChange = useCallback(
     (providerId: ProviderId, next: AuthMode) => {
+      autoSwitchedProvidersRef.current.add(providerId);
       setDrafts((current) => setProviderAuthMode(current, providerId, next));
     },
     []
@@ -191,7 +192,6 @@ export function ProviderSettings({
       }
 
       if (provider.authMode === "oauth") {
-        autoSwitchedProvidersRef.current.delete(providerId);
         continue;
       }
 

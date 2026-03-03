@@ -88,7 +88,7 @@ describe("executeProviderStep fast-mode gating", () => {
     mocks.getProviderOAuthStatus.mockClear();
   });
 
-  it("forces fast mode off for Claude CLI path without active API key auth", async () => {
+  it("keeps fast mode on for Claude OAuth CLI path", async () => {
     const logs: string[] = [];
     const output = await executeProviderStep({
       provider: createProvider({ authMode: "oauth", apiKey: "", oauthToken: "" }),
@@ -100,10 +100,10 @@ describe("executeProviderStep fast-mode gating", () => {
 
     expect(output).toBe("cli-output");
     expect(mocks.executeViaCli).toHaveBeenCalledTimes(1);
-    expect(mocks.executeViaCli.mock.calls[0][0].step.fastMode).toBe(false);
+    expect(mocks.executeViaCli.mock.calls[0][0].step.fastMode).toBe(true);
     expect(
-      logs.some((line) =>
-        line.includes("Claude fast mode requested but unavailable without active API key auth")
+      logs.every((line) =>
+        !line.includes("Claude fast mode requested but unavailable")
       )
     ).toBe(true);
   });

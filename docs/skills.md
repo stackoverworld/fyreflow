@@ -22,10 +22,16 @@ Skills are progressive-disclosure playbooks. Metadata stays easy to scan, detail
 
 ## Stack Add-ons
 - `vercel-react-best-practices`: React/Next refactor guidance with performance and architecture-focused best practices.
+- `playwright`: browser automation for deterministic UI regression tests, especially scroll/state/timing interactions.
 
 ## Install Commands
 - `qa-refactoring`: `npx skills add vasilyu1983/ai-agents-public --skill qa-refactoring`
 - `vercel-react-best-practices`: `npx skills add vercel-labs/agent-skills --skill vercel-react-best-practices`
+
+## Testing Skill Triggers
+- Use `playwright` when validating end-user UI behavior across async interactions (pagination, auto-scroll, modal/panel flows).
+- Keep `vitest` for pure logic and contracts; avoid replacing critical UX regressions with helper-only unit tests.
+- Prefer one strong regression test for the real failure mode over multiple low-signal micro-tests.
 
 ## Deterministic Refactor Checks
 - `npx tsc --noEmit`

@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
 import { autoLayoutPipelineDraftSmart, computeEdgeRoutesSmart } from "../../src/lib/flowLayout.ts";
 import { buildRenderedLinks } from "../../src/components/dashboard/pipeline-canvas/PipelineCanvas.handlers.ts";
 import { createDraftStep } from "../../src/lib/pipelineDraft.ts";
 import type { PipelinePayload } from "../../src/lib/types";
 
-function routeKey(route: Array<{ x: number; y: number }>): string {
-  return route.map((point) => `${point.x},${point.y}`).join("|");
-}
-
-function createFallbackPipeline(): PipelinePayload {
+function createRouteFixturePipeline(): PipelinePayload {
   const orchestrator = {
     ...createDraftStep(0),
     id: "step-orchestrator",
@@ -39,8 +33,8 @@ function createFallbackPipeline(): PipelinePayload {
   };
 
   return {
-    name: "Smart Route Debug Fixture",
-    description: "Fallback pipeline used when local-db is unavailable in CI.",
+    name: "Smart Route Fixture",
+    description: "Deterministic route fixture for smart routing checks.",
     steps: [orchestrator, planner, executor, reviewer],
     links: [
       {
@@ -72,53 +66,32 @@ function createFallbackPipeline(): PipelinePayload {
   };
 }
 
-function loadPipelineForRouteDebug(): PipelinePayload {
-  const localDbPath = path.resolve(process.cwd(), "data/local-db.json");
-  if (!fs.existsSync(localDbPath)) {
-    return createFallbackPipeline();
-  }
-
-  const dbRaw = fs.readFileSync(localDbPath, "utf8");
-  const db = JSON.parse(dbRaw) as { pipelines?: unknown };
-  const pipelines = Array.isArray(db.pipelines) ? db.pipelines : [];
-  const candidate =
-    pipelines.find((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return false;
-      }
-      const value = entry as { name?: unknown };
-      return typeof value.name === "string" && value.name.includes("Figma to HTML to PDF");
-    }) ?? pipelines[0];
-
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return createFallbackPipeline();
-  }
-
-  const value = candidate as Partial<PipelinePayload>;
-  if (
-    typeof value.name !== "string" ||
-    !Array.isArray(value.steps) ||
-    value.steps.length === 0 ||
-    !Array.isArray(value.links) ||
-    value.links.length === 0
-  ) {
-    return createFallbackPipeline();
-  }
-
-  return {
-    name: value.name,
-    description: typeof value.description === "string" ? value.description : "",
-    steps: value.steps as PipelinePayload["steps"],
-    links: value.links as PipelinePayload["links"],
-    qualityGates: Array.isArray(value.qualityGates) ? value.qualityGates : []
-  };
+function segmentLength(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
-describe("debug smart route analysis", () => {
-  it("prints route comparison for real pipeline", async () => {
-    const pipeline = loadPipelineForRouteDebug();
-    expect(pipeline).toBeTruthy();
+function hasTinyEndpointHook(route: Array<{ x: number; y: number }>): boolean {
+  if (route.length >= 3) {
+    const first = segmentLength(route[0], route[1]);
+    const second = segmentLength(route[1], route[2]);
+    if (first <= 26 && second <= 26) {
+      return true;
+    }
+  }
+  if (route.length >= 4) {
+    const n = route.length;
+    const last = segmentLength(route[n - 2], route[n - 1]);
+    const beforeLast = segmentLength(route[n - 3], route[n - 2]);
+    if (last <= 26 && beforeLast <= 26) {
+      return true;
+    }
+  }
+  return false;
+}
 
+describe("smart route analysis", () => {
+  it("keeps link parity and avoids tiny endpoint hooks on deterministic fixture", async () => {
+    const pipeline = createRouteFixturePipeline();
     const laidOut = await autoLayoutPipelineDraftSmart({
       name: pipeline.name,
       description: pipeline.description ?? "",
@@ -127,7 +100,7 @@ describe("debug smart route analysis", () => {
       qualityGates: pipeline.qualityGates ?? []
     });
 
-    const nodes = laidOut.steps.map((step: any) => ({
+    const nodes = laidOut.steps.map((step) => ({
       id: step.id,
       name: step.name,
       role: step.role,
@@ -137,19 +110,22 @@ describe("debug smart route analysis", () => {
       enableDelegation: step.enableDelegation,
       delegationCount: step.delegationCount
     }));
-
-    const links = laidOut.links.map((link: any, index: number) => ({
+    const links = laidOut.links.map((link, index) => ({
       id: link.id ?? `link-${index}-${link.sourceStepId}-${link.targetStepId}-${link.condition ?? "always"}`,
       sourceStepId: link.sourceStepId,
       targetStepId: link.targetStepId,
       condition: link.condition
     }));
-
-    const nodeById = new Map(nodes.map((node: any) => [node.id, node]));
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
 
     const smartRouteByLinkId = await computeEdgeRoutesSmart(
-      nodes.map((node: any) => ({ id: node.id, position: node.position, role: node.role })),
-      links.map((link: any) => ({ id: link.id, sourceStepId: link.sourceStepId, targetStepId: link.targetStepId, condition: link.condition }))
+      nodes.map((node) => ({ id: node.id, position: node.position, role: node.role })),
+      links.map((link) => ({
+        id: link.id,
+        sourceStepId: link.sourceStepId,
+        targetStepId: link.targetStepId,
+        condition: link.condition
+      }))
     );
 
     const renderedFallback = buildRenderedLinks({
@@ -163,7 +139,6 @@ describe("debug smart route analysis", () => {
       orchestratorLaneByLinkId: new Map(),
       reciprocalLaneByLinkId: new Map()
     });
-
     const renderedSmart = buildRenderedLinks({
       links,
       nodes,
@@ -176,36 +151,32 @@ describe("debug smart route analysis", () => {
       reciprocalLaneByLinkId: new Map()
     });
 
-    const fallbackById = new Map(renderedFallback.map((edge: any) => [edge.id, edge]));
-    const smartById = new Map(renderedSmart.map((edge: any) => [edge.id, edge]));
+    expect(renderedFallback).toHaveLength(links.length);
+    expect(renderedSmart).toHaveLength(links.length);
 
-    let changed = 0;
     for (const link of links) {
-      const fallback = fallbackById.get(link.id);
-      const smart = smartById.get(link.id);
-      if (!fallback || !smart) {
-        continue;
-      }
-      const same = routeKey(fallback.route) === routeKey(smart.route);
-      if (!same) {
-        changed += 1;
-      }
-      const shortSegments = smart.route.slice(1).filter((point: any, idx: number) => {
-        const prev = smart.route[idx];
-        return Math.abs(point.x - prev.x) + Math.abs(point.y - prev.y) <= 14;
-      }).length;
+      const fallbackEdge = renderedFallback.find((edge) => edge.id === link.id);
+      const smartEdge = renderedSmart.find((edge) => edge.id === link.id);
 
-      console.log(JSON.stringify({
-        linkId: link.id,
-        source: nodeById.get(link.sourceStepId)?.name,
-        target: nodeById.get(link.targetStepId)?.name,
-        changedBySmart: !same,
-        segmentCount: smart.route.length - 1,
-        shortSegments
-      }));
+      expect(fallbackEdge).toBeDefined();
+      expect(smartEdge).toBeDefined();
+      if (!fallbackEdge || !smartEdge) {
+        throw new Error(`Missing rendered edge for link: ${link.id}`);
+      }
+
+      expect(smartEdge.route.length).toBeGreaterThanOrEqual(2);
+      expect(hasTinyEndpointHook(smartEdge.route)).toBe(false);
+      expect(hasTinyEndpointHook(fallbackEdge.route)).toBe(false);
+
+      for (let index = 1; index < smartEdge.route.length; index += 1) {
+        const previous = smartEdge.route[index - 1];
+        const current = smartEdge.route[index];
+        expect(Number.isFinite(previous.x)).toBe(true);
+        expect(Number.isFinite(previous.y)).toBe(true);
+        expect(Number.isFinite(current.x)).toBe(true);
+        expect(Number.isFinite(current.y)).toBe(true);
+        expect(segmentLength(previous, current)).toBeGreaterThan(0);
+      }
     }
-
-    console.log(`links=${links.length} fallback=${renderedFallback.length} smart=${renderedSmart.length} changed=${changed}`);
-    expect(renderedSmart).toHaveLength(renderedFallback.length);
   });
 });

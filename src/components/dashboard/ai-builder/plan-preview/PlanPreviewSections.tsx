@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { useMemo, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
 import { cn } from "@/lib/cn";
@@ -20,7 +20,7 @@ type OrderedListBlock = Extract<MarkdownBlock, { type: "ordered_list" }>;
 type BlockquoteBlock = Extract<MarkdownBlock, { type: "blockquote" }>;
 type CodeBlock = Extract<MarkdownBlock, { type: "code_block" }>;
 
-function HeadingSection({ block, index }: { block: HeadingBlock; index: number }) {
+function HeadingSection({ block, index, trailingDot }: { block: HeadingBlock; index: number; trailingDot?: boolean }) {
   const headingClass =
     block.level <= 2
       ? "text-sm font-semibold text-ink-100"
@@ -31,46 +31,55 @@ function HeadingSection({ block, index }: { block: HeadingBlock; index: number }
   return (
     <p className={headingClass}>
       {renderInlineMarkdown(block.text, `md-heading-${index}`)}
+      {trailingDot ? <StreamingDot /> : null}
     </p>
   );
 }
 
-function ParagraphSection({ block, index }: { block: ParagraphBlock; index: number }) {
+const StreamingDot = () => (
+  <span className="ml-1 inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-ember-400 align-middle" />
+);
+
+function ParagraphSection({ block, index, trailingDot }: { block: ParagraphBlock; index: number; trailingDot?: boolean }) {
   return (
     <p className="break-words text-[13px]">
       {renderInlineMarkdownWithLineBreaks(block.lines.join("\n"), `md-paragraph-${index}`)}
+      {trailingDot ? <StreamingDot /> : null}
     </p>
   );
 }
 
-function UnorderedListSection({ block, index }: { block: UnorderedListBlock; index: number }) {
+function UnorderedListSection({ block, index, trailingDot }: { block: UnorderedListBlock; index: number; trailingDot?: boolean }) {
   return (
     <ul className="list-disc space-y-1 pl-4">
       {block.items.map((item, itemIndex) => (
         <li key={`md-ul-${index}-item-${itemIndex}`} className="break-words text-[13px]">
           {renderInlineMarkdown(item, `md-ul-${index}-item-${itemIndex}`)}
+          {trailingDot && itemIndex === block.items.length - 1 ? <StreamingDot /> : null}
         </li>
       ))}
     </ul>
   );
 }
 
-function OrderedListSection({ block, index }: { block: OrderedListBlock; index: number }) {
+function OrderedListSection({ block, index, trailingDot }: { block: OrderedListBlock; index: number; trailingDot?: boolean }) {
   return (
     <ol className="list-decimal space-y-1 pl-4">
       {block.items.map((item, itemIndex) => (
         <li key={`md-ol-${index}-item-${itemIndex}`} className="break-words text-[13px]">
           {renderInlineMarkdown(item, `md-ol-${index}-item-${itemIndex}`)}
+          {trailingDot && itemIndex === block.items.length - 1 ? <StreamingDot /> : null}
         </li>
       ))}
     </ol>
   );
 }
 
-function BlockquoteSection({ block, index }: { block: BlockquoteBlock; index: number }) {
+function BlockquoteSection({ block, index, trailingDot }: { block: BlockquoteBlock; index: number; trailingDot?: boolean }) {
   return (
     <blockquote className="border-l-2 border-ink-700 pl-3 text-ink-300">
       {renderInlineMarkdownWithLineBreaks(block.lines.join("\n"), `md-quote-${index}`)}
+      {trailingDot ? <StreamingDot /> : null}
     </blockquote>
   );
 }
@@ -86,104 +95,83 @@ function CodeBlockSection({ block }: { block: CodeBlock }) {
   );
 }
 
-export function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   const blocks = parseMarkdownBlocks(content);
+  const prevBlockCountRef = useRef(0);
+
+  const stableBlockCount = blocks.length;
+  const firstNewBlock = prevBlockCountRef.current;
+  if (!streaming) {
+    prevBlockCountRef.current = 0;
+  } else if (stableBlockCount > prevBlockCountRef.current) {
+    prevBlockCountRef.current = stableBlockCount;
+  }
+
   if (blocks.length === 0) {
-    return <p className="whitespace-pre-wrap break-words text-[13px]">{content}</p>;
+    return (
+      <p className="whitespace-pre-wrap break-words text-[13px]">
+        {content}
+        {streaming ? <StreamingDot /> : null}
+      </p>
+    );
   }
 
   return (
     <div className="space-y-2.5 text-[13px] leading-relaxed">
       {blocks.map((block, index) => {
-        if (block.type === "heading") {
-          return <HeadingSection key={`md-heading-${index}`} block={block} index={index} />;
-        }
-
-        if (block.type === "paragraph") {
-          return <ParagraphSection key={`md-paragraph-${index}`} block={block} index={index} />;
-        }
-
-        if (block.type === "unordered_list") {
-          return <UnorderedListSection key={`md-ul-${index}`} block={block} index={index} />;
-        }
-
-        if (block.type === "ordered_list") {
-          return <OrderedListSection key={`md-ol-${index}`} block={block} index={index} />;
-        }
-
-        if (block.type === "blockquote") {
-          return <BlockquoteSection key={`md-quote-${index}`} block={block} index={index} />;
-        }
-
-        return <CodeBlockSection key={`md-code-${index}`} block={block} />;
+        const isLast = index === blocks.length - 1;
+        const isNew = streaming && index >= firstNewBlock;
+        const element = renderBlock(block, index, streaming && isLast);
+        if (!isNew) return element;
+        return (
+          <motion.div
+            key={`fade-${index}`}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {element}
+          </motion.div>
+        );
       })}
     </div>
   );
 }
 
-function useStreamingText(
-  fullText: string,
-  enabled: boolean,
-  onComplete?: () => void
-): { displayedText: string; isStreaming: boolean } {
-  const words = useMemo(() => fullText.match(/\S+\s*/g) || [], [fullText]);
-  const totalWords = words.length;
-  const [visibleCount, setVisibleCount] = useState(enabled ? 0 : totalWords);
-  const onCompleteRef = useRef(onComplete);
-  onCompleteRef.current = onComplete;
-
-  useEffect(() => {
-    if (!enabled) {
-      setVisibleCount(totalWords);
-      return;
-    }
-    setVisibleCount(0);
-    let count = 0;
-    const interval = setInterval(() => {
-      count += 1 + Math.floor(Math.random() * 2);
-      if (count >= totalWords) {
-        setVisibleCount(totalWords);
-        clearInterval(interval);
-        onCompleteRef.current?.();
-      } else {
-        setVisibleCount(count);
-      }
-    }, 30);
-
-    return () => clearInterval(interval);
-  }, [enabled, fullText, totalWords]);
-
-  if (!enabled || visibleCount >= totalWords) {
-    return { displayedText: fullText, isStreaming: false };
+function renderBlock(block: MarkdownBlock, index: number, trailingDot = false) {
+  if (block.type === "heading") {
+    return <HeadingSection key={`md-heading-${index}`} block={block} index={index} trailingDot={trailingDot} />;
   }
-
-  return {
-    displayedText: words.slice(0, visibleCount).join(""),
-    isStreaming: true,
-  };
+  if (block.type === "paragraph") {
+    return <ParagraphSection key={`md-paragraph-${index}`} block={block} index={index} trailingDot={trailingDot} />;
+  }
+  if (block.type === "unordered_list") {
+    return <UnorderedListSection key={`md-ul-${index}`} block={block} index={index} trailingDot={trailingDot} />;
+  }
+  if (block.type === "ordered_list") {
+    return <OrderedListSection key={`md-ol-${index}`} block={block} index={index} trailingDot={trailingDot} />;
+  }
+  if (block.type === "blockquote") {
+    return <BlockquoteSection key={`md-quote-${index}`} block={block} index={index} trailingDot={trailingDot} />;
+  }
+  return <CodeBlockSection key={`md-code-${index}`} block={block} />;
 }
+
 
 interface ChatBubbleProps {
   message: AiChatMessage;
-  streaming?: boolean;
-  onStreamingComplete?: () => void;
   onApply?: () => void;
   onQuickReply?: (value: string) => Promise<void>;
   readOnly?: boolean;
 }
 
-export function ChatBubble({ message, streaming = false, onStreamingComplete, onApply, onQuickReply, readOnly = false }: ChatBubbleProps) {
+export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
-  const isNativeStreaming = message.streaming === true && !isUser && !isError;
+  const isAssistant = !isUser && !isError;
+  const isNativeStreaming = message.streaming === true && isAssistant;
   const nativeStreamingWaiting = isNativeStreaming && message.content.length === 0;
   const nativeStreamingActive = isNativeStreaming && message.content.length > 0;
-  const shouldStream = !isNativeStreaming && streaming && !isUser && !isError;
-  const { displayedText, isStreaming } = useStreamingText(
-    message.content,
-    shouldStream,
-    onStreamingComplete
-  );
   const hasQuestions = (message.questions?.length ?? 0) > 0;
   const actionLabel =
     message.action === "answer" && hasQuestions
@@ -195,6 +183,8 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
         : message.action === "replace_flow"
           ? "Flow rebuild"
           : null;
+
+  const showBadge = isAssistant && (actionLabel ?? isNativeStreaming);
 
   return (
     <motion.div
@@ -213,30 +203,20 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
               : "text-ink-200"
         )}
       >
-        {actionLabel && !isUser && !isError ? (
+        {showBadge ? (
           <div className="mb-1">
-            <Badge variant="neutral">{actionLabel}</Badge>
+            <Badge variant="neutral">{actionLabel ?? "Answer"}</Badge>
           </div>
         ) : null}
 
         {isUser || isError ? (
           <p className="whitespace-pre-wrap break-words text-[13px]">{message.content}</p>
         ) : nativeStreamingWaiting ? (
-          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-ember-400" />
+          <StreamingDot />
         ) : nativeStreamingActive ? (
-          <div>
-            <p className="whitespace-pre-wrap break-words text-[13px]">
-              {message.content}
-              <span className="ml-1 inline-block h-2 w-2 rounded-full bg-ember-400 align-middle" />
-            </p>
-          </div>
+          <MarkdownContent content={message.content} streaming />
         ) : (
-          <>
-            <MarkdownContent content={isStreaming ? displayedText : message.content} />
-            {isStreaming ? (
-              <span className="ml-1 inline-block h-2 w-2 rounded-full bg-ember-400 align-middle" />
-            ) : null}
-          </>
+          <MarkdownContent content={message.content} />
         )}
 
         {message.generatedDraft && onApply ? (
@@ -249,7 +229,7 @@ export function ChatBubble({ message, streaming = false, onStreamingComplete, on
           </div>
         ) : null}
 
-        {!isUser && !isError && hasQuestions && onQuickReply ? (
+        {isAssistant && hasQuestions && onQuickReply ? (
           <div className="mt-2 space-y-2">
             {message.questions?.map((question) => (
               <div

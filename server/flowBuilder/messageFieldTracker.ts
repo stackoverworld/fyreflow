@@ -137,21 +137,20 @@ export class MessageFieldTracker {
         } else {
           emitted += ch;
         }
-        continue;
-      }
-
-      if (ch === "\\") {
+      } else if (ch === "\\") {
         this.valueEscapeNext = true;
-        continue;
-      }
-
-      if (ch === '"') {
+      } else if (ch === '"') {
         this.state = "done";
         i++;
         break;
+      } else {
+        emitted += ch;
       }
 
-      emitted += ch;
+      if (emitted.length >= 8) {
+        this.onDelta(emitted);
+        emitted = "";
+      }
     }
 
     if (emitted.length > 0) {

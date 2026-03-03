@@ -1,5 +1,5 @@
 import { isAbortError } from "../abort.js";
-import { hasActiveClaudeApiKey } from "../providerCapabilities.js";
+import { canClaudeUseFastMode } from "../providerCapabilities.js";
 import type { PipelineStep } from "../types.js";
 import type { ProviderExecutionInput } from "./types.js";
 
@@ -60,7 +60,7 @@ export function buildClaudeTimeoutFallbackInput(input: ProviderExecutionInput): 
     step: {
       ...input.step,
       model: nextModel,
-      fastMode: hasActiveClaudeApiKey(input.provider),
+      fastMode: canClaudeUseFastMode(input.provider),
       reasoningEffort: "low",
       use1MContext: false,
       contextWindowTokens: Math.min(input.step.contextWindowTokens, 220_000)

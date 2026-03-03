@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildClaudeCliArgs } from "../../server/providers/clientFactory/cliRunner.js";
+import { buildClaudeCliArgs, shouldDisableClaudeStreamJson } from "../../server/providers/clientFactory/cliRunner.js";
 import type { ProviderExecutionInput } from "../../server/providers/types.js";
 
 function createInput(): ProviderExecutionInput {
@@ -55,6 +55,16 @@ describe("Claude CLI args", () => {
     expect(toolsIndex).toBeGreaterThan(-1);
     expect(args[toolsIndex + 1]).toBe("");
     expect(args).toContain("--settings");
+  });
+
+  it("uses non-interactive permission skipping by default", () => {
+    const args = buildClaudeCliArgs(createInput(), {
+      selectedModel: "claude-sonnet-4-6",
+      prompt: "hello"
+    });
+
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).not.toContain("--permission-mode");
   });
 
   it("keeps tools enabled for review/tester steps so they can inspect artifacts", () => {
@@ -123,7 +133,13 @@ describe("Claude CLI args", () => {
 
     const outputFormatIndex = args.indexOf("--output-format");
     expect(outputFormatIndex).toBeGreaterThan(-1);
-    expect(["stream-json", "text"]).toContain(args[outputFormatIndex + 1]);
+    const outputFormat = args[outputFormatIndex + 1];
+    expect(["stream-json", "text"]).toContain(outputFormat);
+    if (outputFormat === "stream-json") {
+      expect(args).toContain("--include-partial-messages");
+    } else {
+      expect(args).not.toContain("--include-partial-messages");
+    }
   });
 
   it("uses compatibility profile without effort flag when requested", () => {
@@ -152,5 +168,96 @@ describe("Claude CLI args", () => {
     expect(outputFormatIndex).toBeGreaterThan(-1);
     expect(["json", "stream-json"]).toContain(args[outputFormatIndex + 1]);
     expect(args).toContain("--json-schema");
+  });
+
+  it("passes fast mode through --settings when enabled", () => {
+    const input = createInput();
+    input.step.fastMode = true;
+
+    const args = buildClaudeCliArgs(input, {
+      selectedModel: "claude-opus-4-6",
+      prompt: "hello"
+    });
+
+    const settingsIndex = args.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThan(-1);
+    const parsed = JSON.parse(args[settingsIndex + 1]);
+    expect(parsed.fastMode).toBe(true);
+  });
+
+  it("passes fast mode off through --settings when disabled", () => {
+    const input = createInput();
+    input.step.fastMode = false;
+
+    const args = buildClaudeCliArgs(input, {
+      selectedModel: "claude-sonnet-4-6",
+      prompt: "hello"
+    });
+
+    const settingsIndex = args.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThan(-1);
+    const parsed = JSON.parse(args[settingsIndex + 1]);
+    expect(parsed.fastMode).toBe(false);
+  });
+
+  it("does not append system prompt workarounds for fast mode or 1M context", () => {
+    const input = createInput();
+    input.step.fastMode = true;
+    input.step.use1MContext = true;
+
+    const args = buildClaudeCliArgs(input, {
+      selectedModel: "claude-opus-4-6",
+      prompt: "hello"
+    });
+
+    const appendPromptArgs = args.filter((_, i) => i > 0 && args[i - 1] === "--append-system-prompt");
+    for (const value of appendPromptArgs) {
+      expect(value).not.toContain("Fast mode requested");
+      expect(value).not.toContain("1M context mode requested");
+    }
+  });
+
+  it("uses non-stream JSON output for OAuth auth-mode stability", () => {
+    const input = createInput();
+    input.outputMode = "json";
+    input.step.role = "planner";
+    input.step.name = "AI Flow Copilot";
+
+    const args = buildClaudeCliArgs(input, {
+      selectedModel: "claude-sonnet-4-6",
+      prompt: "respond in strict JSON",
+      disableStreamJson: true
+    });
+
+    const outputFormatIndex = args.indexOf("--output-format");
+    expect(outputFormatIndex).toBeGreaterThan(-1);
+    expect(args[outputFormatIndex + 1]).toBe("json");
+    expect(args).not.toContain("--include-partial-messages");
+  });
+
+  it("derives stream-json disablement for OAuth JSON runtime flows", () => {
+    const input = createInput();
+    input.outputMode = "json";
+    input.step.role = "planner";
+    input.step.name = "AI Flow Copilot";
+
+    expect(shouldDisableClaudeStreamJson(input)).toBe(true);
+  });
+
+  it("keeps stream-json enabled for OAuth markdown runtime flows", () => {
+    const input = createInput();
+    input.outputMode = "markdown";
+    input.step.role = "analysis";
+
+    expect(shouldDisableClaudeStreamJson(input)).toBe(false);
+  });
+
+  it("keeps stream-json enabled for API key JSON flows", () => {
+    const input = createInput();
+    input.provider.authMode = "api_key";
+    input.provider.apiKey = "sk-ant-test";
+    input.outputMode = "json";
+
+    expect(shouldDisableClaudeStreamJson(input)).toBe(false);
   });
 });

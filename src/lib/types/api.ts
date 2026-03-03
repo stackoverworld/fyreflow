@@ -195,6 +195,7 @@ export interface AiChatMessage {
   role: "user" | "assistant" | "error";
   content: string;
   streaming?: boolean;
+  nativeStreamed?: boolean;
   generatedDraft?: PipelinePayload;
   action?: FlowBuilderAction;
   questions?: FlowBuilderQuestion[];

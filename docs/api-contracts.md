@@ -268,4 +268,4 @@
 - Flow-builder quality-gate mapping no longer silently retargets unresolved delivery completion gate targets; unresolved targets stay `any_step` and are rejected by runtime validation.
 - Relative artifact templates may still use `output_dir`, but resolution is now confined to the run storage root to prevent path escape outside pipeline storage.
 - Provider SSE readers now enforce idle timeout via `LLM_STREAM_IDLE_TIMEOUT_MS` (default 90s, min 1s, max 10m) and fail stalled streams deterministically.
-- Claude CLI dangerous permission bypass is now opt-in (`CLAUDE_CLI_SKIP_PERMISSIONS` defaults to `0`).
+- Claude CLI dangerous permission bypass defaults to enabled (`CLAUDE_CLI_SKIP_PERMISSIONS` defaults to `1`); set it to `0` to force explicit permission mode.

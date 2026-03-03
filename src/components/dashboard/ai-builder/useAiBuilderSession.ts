@@ -57,6 +57,7 @@ interface AiBuilderSettings {
   reasoningEffort: ReasoningEffort;
   fastMode: boolean;
   use1MContext: boolean;
+  mode: AiBuilderMode;
 }
 
 const defaultSettings: AiBuilderSettings = {
@@ -65,6 +66,7 @@ const defaultSettings: AiBuilderSettings = {
   reasoningEffort: "high",
   fastMode: false,
   use1MContext: false,
+  mode: DEFAULT_AI_BUILDER_MODE,
 };
 
 function loadAiBuilderSettings(): AiBuilderSettings {
@@ -84,6 +86,7 @@ function loadAiBuilderSettings(): AiBuilderSettings {
         : defaultSettings.reasoningEffort,
       fastMode: typeof parsed.fastMode === "boolean" ? parsed.fastMode : defaultSettings.fastMode,
       use1MContext: typeof parsed.use1MContext === "boolean" ? parsed.use1MContext : defaultSettings.use1MContext,
+      mode: parsed.mode === "agent" || parsed.mode === "ask" ? parsed.mode : defaultSettings.mode,
     };
   } catch {
     return defaultSettings;
@@ -169,7 +172,7 @@ export function useAiBuilderSession({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(savedSettings.reasoningEffort);
   const [fastMode, setFastMode] = useState(savedSettings.fastMode);
   const [use1MContext, setUse1MContext] = useState(savedSettings.use1MContext);
-  const [mode, setMode] = useState<AiBuilderMode>(DEFAULT_AI_BUILDER_MODE);
+  const [mode, setMode] = useState<AiBuilderMode>(savedSettings.mode);
 
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
@@ -271,8 +274,8 @@ export function useAiBuilderSession({
   ]);
 
   useEffect(() => {
-    saveAiBuilderSettings({ providerId, model, reasoningEffort, fastMode, use1MContext });
-  }, [providerId, model, reasoningEffort, fastMode, use1MContext]);
+    saveAiBuilderSettings({ providerId, model, reasoningEffort, fastMode, use1MContext, mode });
+  }, [providerId, model, reasoningEffort, fastMode, use1MContext, mode]);
 
   useEffect(() => {
     const initialPage = loadAiChatHistoryPage(workflowKey, {
@@ -353,39 +356,77 @@ export function useAiBuilderSession({
     }
   }, [hasOlderMessages, hydratedWorkflowKey, workflowKey]);
 
-  const streamingContentRef = useRef("");
-  const streamingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamingBufferRef = useRef("");
+  const streamingRevealedRef = useRef(0);
+  const streamingRafRef = useRef<number | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamingHasModelTextRef = useRef(false);
+  const streamingDoneRef = useRef(false);
+  const streamingResolveRef = useRef<(() => void) | null>(null);
+
+  const CHARS_PER_SECOND = 80;
+  const streamingLastFrameRef = useRef(0);
 
   useEffect(() => {
     return () => {
-      if (streamingFlushTimerRef.current !== null) {
-        clearTimeout(streamingFlushTimerRef.current);
-        streamingFlushTimerRef.current = null;
+      if (streamingRafRef.current !== null) {
+        cancelAnimationFrame(streamingRafRef.current);
+        streamingRafRef.current = null;
       }
     };
   }, []);
 
-  const flushStreamingContent = useCallback(() => {
-    streamingFlushTimerRef.current = null;
+  const advanceStreamingReveal = useCallback((now: number) => {
+    streamingRafRef.current = null;
     const msgId = streamingMessageIdRef.current;
-    const content = streamingContentRef.current;
     if (!msgId) return;
+
+    const buffer = streamingBufferRef.current;
+    const revealed = streamingRevealedRef.current;
+
+    if (revealed >= buffer.length) {
+      if (streamingDoneRef.current && streamingResolveRef.current) {
+        streamingResolveRef.current();
+        streamingResolveRef.current = null;
+      }
+      return;
+    }
+
+    const elapsed = now - streamingLastFrameRef.current;
+    streamingLastFrameRef.current = now;
+
+    const charsBudget = streamingDoneRef.current
+      ? Math.max(4, Math.ceil((buffer.length - revealed) / 6))
+      : Math.max(1, Math.round((CHARS_PER_SECOND * elapsed) / 1000));
+
+    let nextRevealed = Math.min(buffer.length, revealed + charsBudget);
+
+    if (!streamingDoneRef.current && nextRevealed < buffer.length) {
+      const spaceAfter = buffer.indexOf(" ", nextRevealed);
+      if (spaceAfter !== -1 && spaceAfter - nextRevealed < 6) {
+        nextRevealed = spaceAfter + 1;
+      }
+    }
+
+    streamingRevealedRef.current = nextRevealed;
+    const displayContent = buffer.slice(0, nextRevealed);
 
     setMessages((current) => {
       const idx = current.findIndex((msg) => msg.id === msgId);
-      if (idx === -1 || current[idx].content === content) return current;
+      if (idx === -1 || current[idx].content === displayContent) return current;
       const next = [...current];
-      next[idx] = { ...current[idx], content };
+      next[idx] = { ...current[idx], content: displayContent };
       return next;
     });
+
+    streamingRafRef.current = requestAnimationFrame(advanceStreamingReveal);
   }, []);
 
   const scheduleStreamingFlush = useCallback(() => {
-    if (streamingFlushTimerRef.current !== null) return;
-    streamingFlushTimerRef.current = setTimeout(flushStreamingContent, 50);
-  }, [flushStreamingContent]);
+    if (streamingRafRef.current !== null) return;
+    streamingLastFrameRef.current = performance.now();
+    streamingRafRef.current = requestAnimationFrame(advanceStreamingReveal);
+  }, [advanceStreamingReveal]);
 
   const processCompletedResult = useCallback(
     async (
@@ -439,11 +480,20 @@ export function useAiBuilderSession({
 
       if (insertMode === "update_existing") {
         setMessages((current) =>
-          current.map((msg) =>
-            msg.id === messageId
-              ? { ...aiMsg, streaming: false }
-              : msg
-          )
+          current.map((msg) => {
+            if (msg.id !== messageId) return msg;
+            return {
+              ...msg,
+              streaming: false,
+              nativeStreamed: msg.nativeStreamed || msg.content.length > 0,
+              content: msg.content.length > 0 ? msg.content : assistantContent,
+              generatedDraft: generatedDraftSnapshot,
+              action: responseAction,
+              questions: result.questions,
+              source: result.source,
+              notes: resolvedNotes,
+            };
+          })
         );
       } else {
         appendVisibleMessages([aiMsg]);
@@ -488,19 +538,25 @@ export function useAiBuilderSession({
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
         const streamingMsgId = crypto.randomUUID();
-        streamingContentRef.current = "Thinking...";
+        streamingBufferRef.current = "";
+        streamingRevealedRef.current = 0;
+        streamingDoneRef.current = false;
+        streamingResolveRef.current = null;
         streamingMessageIdRef.current = streamingMsgId;
         streamingHasModelTextRef.current = false;
         appendVisibleMessages([{
           id: streamingMsgId,
           requestId,
           role: "assistant",
-          content: "Thinking...",
+          content: "",
           streaming: true,
+          nativeStreamed: true,
           timestamp: Date.now(),
         }]);
 
         try {
+          let completedResult: FlowBuilderResponse | null = null;
+
           await new Promise<void>((resolve, reject) => {
             generateFlowDraftStream(
               payload,
@@ -508,45 +564,27 @@ export function useAiBuilderSession({
                 onTextDelta: (delta) => {
                   if (!streamingHasModelTextRef.current) {
                     streamingHasModelTextRef.current = true;
-                    streamingContentRef.current = "";
+                    streamingBufferRef.current = "";
+                    streamingRevealedRef.current = 0;
                   }
-                  streamingContentRef.current += delta;
+                  streamingBufferRef.current += delta;
                   scheduleStreamingFlush();
                 },
-                onStatus: (message) => {
-                  if (streamingHasModelTextRef.current) {
-                    return;
-                  }
-                  streamingContentRef.current = message;
-                  scheduleStreamingFlush();
-                },
-                onComplete: async (result) => {
-                  if (streamingFlushTimerRef.current !== null) {
-                    clearTimeout(streamingFlushTimerRef.current);
-                    streamingFlushTimerRef.current = null;
-                  }
-                  streamingMessageIdRef.current = null;
-                  streamingHasModelTextRef.current = false;
-
-                  try {
-                    await processCompletedResult(
-                      result,
-                      streamingMsgId,
-                      requestId,
-                      requestMode,
-                      startedAt,
-                      resumed,
-                      "update_existing"
-                    );
+                onStatus: () => {},
+                onComplete: (result) => {
+                  completedResult = result;
+                  streamingDoneRef.current = true;
+                  if (streamingRevealedRef.current >= streamingBufferRef.current.length) {
                     resolve();
-                  } catch (error) {
-                    reject(error);
+                  } else {
+                    streamingResolveRef.current = resolve;
+                    scheduleStreamingFlush();
                   }
                 },
                 onError: (error) => {
-                  if (streamingFlushTimerRef.current !== null) {
-                    clearTimeout(streamingFlushTimerRef.current);
-                    streamingFlushTimerRef.current = null;
+                  if (streamingRafRef.current !== null) {
+                    cancelAnimationFrame(streamingRafRef.current);
+                    streamingRafRef.current = null;
                   }
                   streamingMessageIdRef.current = null;
                   streamingHasModelTextRef.current = false;
@@ -555,7 +593,27 @@ export function useAiBuilderSession({
               }
             ).catch(reject);
           });
+
+          streamingHasModelTextRef.current = false;
+
+          if (completedResult) {
+            await processCompletedResult(
+              completedResult,
+              streamingMsgId,
+              requestId,
+              requestMode,
+              startedAt,
+              resumed,
+              "update_existing"
+            );
+          }
+
+          streamingMessageIdRef.current = null;
         } catch (streamError) {
+          console.log(
+            "[ai-chat] streaming failed, falling back to non-streaming:",
+            streamError instanceof Error ? streamError.message : streamError
+          );
           setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
 
           appendAiChatDebugEvent(workflowKey, {

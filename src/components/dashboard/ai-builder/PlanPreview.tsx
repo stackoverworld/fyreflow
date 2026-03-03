@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type UIEvent } from "react";
 import { ArrowDown } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import type { AiChatMessage, PipelinePayload } from "@/lib/types";
 import { clonePipelinePayload } from "@/lib/pipelineDraft";
-import { Button } from "@/components/optics/button";
 import { ChatBubble, PlanPreviewGeneratingIndicator } from "./plan-preview/PlanPreviewSections";
 import { PlanPreviewHeader } from "./plan-preview/PlanPreviewHeader";
 
@@ -16,6 +16,73 @@ interface PlanPreviewProps {
   onApplyDraft: (draft: PipelinePayload) => void;
   onQuickReply: (value: string) => Promise<void>;
   onLoadOlderMessages: () => boolean;
+}
+
+interface SyntheticStreamingDecisionInput {
+  wasGenerating: boolean;
+  generating: boolean;
+  hasNativeStreaming: boolean;
+  sawNativeStreamingInCurrentRun: boolean;
+}
+
+export function shouldStartSyntheticStreaming({
+  wasGenerating,
+  generating,
+  hasNativeStreaming,
+  sawNativeStreamingInCurrentRun
+}: SyntheticStreamingDecisionInput): boolean {
+  void wasGenerating;
+  void generating;
+  void hasNativeStreaming;
+  void sawNativeStreamingInCurrentRun;
+  return false;
+}
+
+interface ScrollContainer {
+  scrollHeight: number;
+  scrollTop: number;
+  scrollTo?: (options: ScrollToOptions) => void;
+}
+
+export function scrollContainerToBottom(container: ScrollContainer): void {
+  if (typeof container.scrollTo === "function") {
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    return;
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+interface BooleanRef {
+  current: boolean;
+}
+
+export function cancelPendingRestoreAndScrollToBottom(
+  container: ScrollContainer,
+  pendingRestoreRef: BooleanRef
+): void {
+  pendingRestoreRef.current = false;
+  scrollContainerToBottom(container);
+}
+
+interface AutoLoadOlderMessagesInput {
+  scrollTop: number;
+  hasOlderMessages: boolean;
+  loadingOlderMessages: boolean;
+  pendingScrollRestore: boolean;
+}
+
+const LOAD_OLDER_TOP_THRESHOLD = 64;
+
+export function shouldAutoLoadOlderMessages({
+  scrollTop,
+  hasOlderMessages,
+  loadingOlderMessages,
+  pendingScrollRestore
+}: AutoLoadOlderMessagesInput): boolean {
+  if (!hasOlderMessages || loadingOlderMessages || pendingScrollRestore) {
+    return false;
+  }
+  return scrollTop <= LOAD_OLDER_TOP_THRESHOLD;
 }
 
 export function PlanPreview({
@@ -34,41 +101,22 @@ export function PlanPreview({
   const previousScrollTopRef = useRef(0);
   const previousScrollHeightRef = useRef(0);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  const prevGeneratingRef = useRef(generating);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-
+  const showScrollDownRef = useRef(false);
   const hasNativeStreaming = useMemo(() => messages.some((m) => m.streaming === true), [messages]);
 
   useEffect(() => {
-    const wasGenerating = prevGeneratingRef.current;
-    prevGeneratingRef.current = generating;
-
-    if (wasGenerating && !generating && !hasNativeStreaming) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg && lastMsg.role === "assistant") {
-        setStreamingMessageId(lastMsg.id);
-      }
-    }
-
-    if (!wasGenerating && generating) {
-      setStreamingMessageId(null);
-    }
-  }, [generating, hasNativeStreaming, messages]);
-
-  useEffect(() => {
-    const isActive = streamingMessageId || hasNativeStreaming;
-    if (!isActive) return;
+    if (!hasNativeStreaming) return;
     const container = containerRef.current;
     if (!container) return;
 
     const interval = setInterval(() => {
       const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
       if (distanceFromBottom < 150) {
-        messagesEndRef.current?.scrollIntoView({ block: "end" });
+        container.scrollTop = container.scrollHeight;
       }
     }, 150);
     return () => clearInterval(interval);
-  }, [streamingMessageId, hasNativeStreaming, messagesEndRef]);
+  }, [hasNativeStreaming]);
 
   const requestOlderMessages = useCallback(() => {
     const container = containerRef.current;
@@ -87,16 +135,47 @@ export function PlanPreview({
 
   const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const el = event.currentTarget;
-    if (el.scrollTop <= 64) {
+    if (pendingScrollRestoreRef.current && el.scrollTop > 96) {
+      pendingScrollRestoreRef.current = false;
+    }
+    if (shouldAutoLoadOlderMessages({
+      scrollTop: el.scrollTop,
+      hasOlderMessages,
+      loadingOlderMessages,
+      pendingScrollRestore: pendingScrollRestoreRef.current
+    })) {
       requestOlderMessages();
     }
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowScrollDown(distanceFromBottom > 120);
-  }, [requestOlderMessages]);
+    const shouldShow = showScrollDownRef.current
+      ? distanceFromBottom > 60
+      : distanceFromBottom > 200;
+    if (shouldShow !== showScrollDownRef.current) {
+      showScrollDownRef.current = shouldShow;
+      setShowScrollDown(shouldShow);
+    }
+  }, [hasOlderMessages, loadingOlderMessages, requestOlderMessages]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (shouldAutoLoadOlderMessages({
+      scrollTop: container.scrollTop,
+      hasOlderMessages,
+      loadingOlderMessages,
+      pendingScrollRestore: pendingScrollRestoreRef.current
+    })) {
+      requestOlderMessages();
+    }
+  }, [hasOlderMessages, loadingOlderMessages, messages.length, requestOlderMessages]);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messagesEndRef]);
+    const container = containerRef.current;
+    if (!container) return;
+    cancelPendingRestoreAndScrollToBottom(container, pendingScrollRestoreRef);
+    showScrollDownRef.current = false;
+    setShowScrollDown(false);
+  }, []);
 
   useLayoutEffect(() => {
     if (!pendingScrollRestoreRef.current) {
@@ -116,11 +195,16 @@ export function PlanPreview({
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={containerRef} onScroll={handleScroll} className="h-full overflow-y-auto p-3 space-y-3">
+      <div
+        ref={containerRef}
+        data-testid="ai-builder-chat-scroll"
+        onScroll={handleScroll}
+        className="h-full overflow-y-auto p-3 space-y-3"
+      >
         {loadingOlderMessages ? (
           <p className="py-1 text-center text-[11px] text-ink-600">Loading older messages...</p>
         ) : hasOlderMessages ? (
-          <p className="py-1 text-center text-[11px] text-ink-600">Scroll up to load older messages</p>
+          <p className="py-1 text-center text-[11px] text-ink-600">Older messages available</p>
         ) : null}
 
         {messages.length === 0 && !generating ? <PlanPreviewHeader /> : null}
@@ -131,8 +215,6 @@ export function PlanPreview({
             <ChatBubble
               key={msg.id}
               message={msg}
-              streaming={msg.id === streamingMessageId}
-              onStreamingComplete={() => setStreamingMessageId(null)}
               readOnly={readOnly || generating}
               onQuickReply={onQuickReply}
               onApply={
@@ -151,17 +233,28 @@ export function PlanPreview({
         <div ref={messagesEndRef} />
       </div>
 
-      {showScrollDown ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 gap-1 rounded-full border-ink-700/80 bg-ink-900/95 px-3 text-[11px]"
-          onClick={scrollToBottom}
-        >
-          <ArrowDown className="h-3 w-3" />
-          Latest
-        </Button>
-      ) : null}
+      <AnimatePresence>
+        {showScrollDown ? (
+          <motion.div
+            key="scroll-btn"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+            className="pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center"
+          >
+            <button
+              type="button"
+              data-testid="ai-builder-chat-latest"
+              className="pointer-events-auto flex items-center gap-1 rounded-full border border-ink-700/80 bg-ink-900/95 px-3 py-1.5 text-[11px] font-medium text-ink-200 hover:bg-ink-800/95"
+              onClick={scrollToBottom}
+            >
+              <ArrowDown className="h-3 w-3" />
+              Latest
+            </button>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

@@ -77,10 +77,24 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
     const abortController = new AbortController();
     let closed = false;
 
-    request.on("close", () => {
+    const handleClientDisconnect = (reason: string): void => {
+      if (closed) {
+        return;
+      }
       closed = true;
-      console.log("[stream-endpoint] client disconnected");
-      abortController.abort("Client disconnected");
+      console.log(`[stream-endpoint] ${reason}`);
+      abortController.abort(reason);
+    };
+
+    // `request.close` can fire once the POST body is fully consumed, even while
+    // the SSE response is still active. Track disconnect from response lifecycle.
+    request.on("aborted", () => {
+      handleClientDisconnect("client request aborted");
+    });
+    response.on("close", () => {
+      if (!response.writableEnded) {
+        handleClientDisconnect("client disconnected");
+      }
     });
 
     const heartbeat = setInterval(() => {
@@ -150,6 +164,11 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
         },
         onStatus: (message) => {
           emitStatus(message);
+        },
+        onThinking: (message) => {
+          if (!closed) {
+            writeSseEvent(response, "thinking", { message, at: new Date().toISOString() });
+          }
         },
         signal: abortController.signal
       });

@@ -4,7 +4,7 @@ export const defaultRolePrompts: Record<AgentRole, string> = {
   analysis: "Analyze the request, constraints, and acceptance criteria. Produce structured inputs for downstream steps.",
   planner: "Turn requirements into an execution plan with concrete stage outputs and dependencies.",
   orchestrator:
-    "Act as main orchestrator. Route work to connected agents, enforce quality gates, and drive pass/fail remediation loops.",
+    "Act as main orchestrator. Dispatch work to connected agents in parallel, collect their results, enforce quality gates, and decide whether to loop for remediation or proceed to the next phase.",
   executor: "Execute implementation tasks and produce concrete artifacts for the next stage.",
   tester: "Run validation and detect defects or regressions before approval.",
   review:

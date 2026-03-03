@@ -11,9 +11,118 @@ export function fallbackSpec(prompt: string): GeneratedFlowSpec {
     input.includes("frame map");
   const includesHtml = input.includes("html");
   const includesPdf = input.includes("pdf");
+  const includesParallelMultiAgent =
+    input.includes("multi-agent") ||
+    input.includes("multi agent") ||
+    input.includes("parallel agents") ||
+    input.includes("team of agents") ||
+    (input.includes("research") && input.includes("code") && input.includes("agent"));
   const disableOrchestrator =
     input.includes("without orchestrator") || input.includes("no orchestrator") || input.includes("without an orchestrator");
   const includeOrchestrator = !disableOrchestrator && (input.includes("orchestrator") || input.includes("loop"));
+
+  if (includesParallelMultiAgent) {
+    return {
+      name: "Parallel Multi-Agent Pipeline",
+      description: "Orchestrator dispatches work to parallel agents, collects results via fan-in reviewer, and loops on failure.",
+      runtime: {
+        maxLoops: 4,
+        maxStepExecutions: 32,
+        stageTimeoutMs: 420000
+      },
+      schedule: { ...defaultSchedule },
+      steps: [
+        {
+          name: "Orchestrator",
+          role: "orchestrator" as const,
+          enableDelegation: true,
+          delegationCount: 3,
+          enableSharedStorage: true,
+          outputFormat: "markdown" as const,
+          scenarios: [],
+          skipIfArtifacts: [],
+          policyProfileIds: [],
+          cacheBypassInputKeys: [],
+          cacheBypassOrchestratorPromptPatterns: []
+        },
+        {
+          name: "Research Agent",
+          role: "analysis" as const,
+          prompt:
+            "Research the topic thoroughly. Gather relevant context, references, and supporting data. Write findings to shared storage.",
+          enableSharedStorage: true,
+          enableIsolatedStorage: true,
+          outputFormat: "markdown" as const,
+          scenarios: [],
+          skipIfArtifacts: [],
+          policyProfileIds: [],
+          cacheBypassInputKeys: [],
+          cacheBypassOrchestratorPromptPatterns: []
+        },
+        {
+          name: "Code Agent",
+          role: "executor" as const,
+          prompt:
+            "Implement the requested code changes or produce code artifacts based on the task requirements.",
+          enableSharedStorage: true,
+          enableIsolatedStorage: true,
+          outputFormat: "markdown" as const,
+          scenarios: [],
+          skipIfArtifacts: [],
+          policyProfileIds: [],
+          cacheBypassInputKeys: [],
+          cacheBypassOrchestratorPromptPatterns: []
+        },
+        {
+          name: "QA Agent",
+          role: "tester" as const,
+          prompt:
+            "Validate outputs from other agents. Run tests, check for regressions, verify acceptance criteria, and return strict JSON GateResult fields: workflow_status, next_action, reasons.",
+          enableSharedStorage: true,
+          enableIsolatedStorage: true,
+          outputFormat: "json" as const,
+          requiredOutputFields: ["workflow_status", "next_action", "reasons"],
+          scenarios: [],
+          skipIfArtifacts: [],
+          policyProfileIds: [],
+          cacheBypassInputKeys: [],
+          cacheBypassOrchestratorPromptPatterns: []
+        },
+        {
+          name: "Reviewer",
+          role: "review" as const,
+          prompt:
+            "Collect and review results from all parallel agents. Assess overall quality and emit strict JSON GateResult fields: workflow_status, next_action, reasons.",
+          enableSharedStorage: true,
+          outputFormat: "json" as const,
+          requiredOutputFields: ["workflow_status", "next_action", "reasons"],
+          scenarios: [],
+          skipIfArtifacts: [],
+          policyProfileIds: [],
+          cacheBypassInputKeys: [],
+          cacheBypassOrchestratorPromptPatterns: []
+        }
+      ],
+      links: [
+        { source: "Orchestrator", target: "Research Agent", condition: "always" as const },
+        { source: "Orchestrator", target: "Code Agent", condition: "always" as const },
+        { source: "Orchestrator", target: "QA Agent", condition: "always" as const },
+        { source: "Research Agent", target: "Reviewer", condition: "always" as const },
+        { source: "Code Agent", target: "Reviewer", condition: "always" as const },
+        { source: "QA Agent", target: "Reviewer", condition: "always" as const },
+        { source: "Reviewer", target: "Orchestrator", condition: "on_fail" as const }
+      ] satisfies Array<{ source: string; target: string; condition: LinkCondition }>,
+      qualityGates: [
+        {
+          name: "Reviewer must emit workflow status",
+          target: "Reviewer",
+          kind: "json_field_exists",
+          jsonPath: "workflow_status",
+          blocking: true
+        }
+      ]
+    };
+  }
 
   if (includesDesignExtraction && includesHtml && includesPdf) {
     const steps = [

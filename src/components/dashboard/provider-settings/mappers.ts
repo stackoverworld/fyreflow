@@ -1,4 +1,5 @@
 import { MODEL_CATALOG } from "@/lib/modelCatalog";
+import { toModelSelectOption } from "@/lib/modelLabel";
 import type { AuthMode, ProviderConfig, ProviderId } from "@/lib/types";
 
 export type ProviderDrafts = Record<ProviderId, ProviderConfig>;
@@ -11,10 +12,7 @@ export const PROVIDER_DISPLAY_LABEL: Record<ProviderId, string> = {
 };
 
 export function getProviderModelOptions(providerId: ProviderId) {
-  return MODEL_CATALOG[providerId].map((entry) => ({
-    value: entry.id,
-    label: entry.label
-  }));
+  return MODEL_CATALOG[providerId].map(toModelSelectOption);
 }
 
 export function setProviderAuthMode(

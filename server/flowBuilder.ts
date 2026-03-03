@@ -1,8 +1,8 @@
 import { nanoid } from "nanoid";
 import { executeProviderStep } from "./providers.js";
 import {
+  canClaudeUseFastMode,
   getClaudeFastModeAvailabilityNote,
-  hasActiveClaudeApiKey,
   isClaudeFastModeEnabledForInput
 } from "./providerCapabilities.js";
 import {
@@ -75,14 +75,25 @@ function normalizeFlowBuilderStatusMessage(value: string): string | null {
   return `${normalized.slice(0, 217)}...`;
 }
 
-function extractFlowBuilderStatusFromProviderLog(line: string): string | null {
+interface ProviderLogClassification {
+  kind: "status" | "thinking";
+  message: string;
+}
+
+function classifyProviderLog(line: string): ProviderLogClassification | null {
   const trimmed = line.trim();
   if (trimmed.length === 0) {
     return null;
   }
 
+  if (trimmed.startsWith("Model thinking:")) {
+    const message = normalizeFlowBuilderStatusMessage(trimmed.slice("Model thinking:".length));
+    return message ? { kind: "thinking", message } : null;
+  }
+
   if (trimmed.startsWith("Model summary:")) {
-    return normalizeFlowBuilderStatusMessage(trimmed.slice("Model summary:".length)) ?? null;
+    const message = normalizeFlowBuilderStatusMessage(trimmed.slice("Model summary:".length));
+    return message ? { kind: "status", message } : null;
   }
 
   if (trimmed.startsWith("Provider dispatch started:")) {
@@ -93,14 +104,14 @@ function extractFlowBuilderStatusFromProviderLog(line: string): string | null {
     const authMode = authModeMatch?.[1]?.trim();
     const model = modelMatch?.[1]?.trim();
     if (!provider || !authMode || !model) {
-      return "Dispatching provider request.";
+      return { kind: "status", message: "Dispatching provider request." };
     }
     const providerLabel = provider === "openai" ? "OpenAI" : provider === "claude" ? "Anthropic" : provider;
-    return `Using ${providerLabel} (${authMode}) with ${model}.`;
+    return { kind: "status", message: `Using ${providerLabel} (${authMode}) with ${model}.` };
   }
 
   if (trimmed.startsWith("Codex CLI does not support --json")) {
-    return "Codex CLI fallback mode enabled.";
+    return { kind: "status", message: "Codex CLI fallback mode enabled." };
   }
 
   return null;
@@ -124,11 +135,15 @@ function createFlowBuilderStatusContext(streamOptions?: FlowBuilderStreamOptions
   };
 
   const onProviderLog = (line: string): void => {
-    const status = extractFlowBuilderStatusFromProviderLog(line);
-    if (!status) {
+    const classified = classifyProviderLog(line);
+    if (!classified) {
       return;
     }
-    emit(status);
+    if (classified.kind === "thinking") {
+      streamOptions?.onThinking?.(classified.message);
+      return;
+    }
+    emit(classified.message);
   };
 
   return {
@@ -149,7 +164,7 @@ function prepareFlowBuilderRequest(
   const providerRuntime: FlowBuilderProviderRuntimeContext = {
     providerId: request.providerId,
     authMode: provider.authMode,
-    claudeFastModeAvailable: hasActiveClaudeApiKey(provider),
+    claudeFastModeAvailable: canClaudeUseFastMode(provider),
     fastModeRequested,
     fastModeEffective,
     fastModeNote: getClaudeFastModeAvailabilityNote(provider, request.fastMode)

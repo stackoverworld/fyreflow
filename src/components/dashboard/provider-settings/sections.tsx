@@ -1,8 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Download,
   ExternalLink,
@@ -15,6 +16,7 @@ import {
   XCircle,
   Zap
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { Badge } from "@/components/optics/badge";
 import { Button } from "@/components/optics/button";
 import { Input } from "@/components/optics/input";
@@ -211,7 +213,13 @@ export function ProviderSettingsSection({
   onSave
 }: ProviderSettingsSectionProps) {
   const { rotation: refreshRotation, triggerSpin: triggerRefreshSpin } = useIconSpin();
+  const [tokenEditOpen, setTokenEditOpen] = useState(false);
   const authMode: AuthMode = provider.authMode;
+
+  useEffect(() => {
+    setTokenEditOpen(false);
+  }, [authMode]);
+
   const isClaudeProvider = providerId === "claude";
   const isAuthReady = status ? status.canUseApi || status.canUseCli || status.loggedIn : false;
   const cliAvailable = status?.cliAvailable === true;
@@ -247,8 +255,16 @@ export function ProviderSettingsSection({
         ) : null}
       </div>
 
-      {authMode === "oauth" ? (
-        <>
+      <AnimatePresence mode="wait" initial={false}>
+        {authMode === "oauth" ? (
+        <motion.div
+          key="oauth-mode"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 6 }}
+          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+          className="space-y-3"
+        >
           {isClaudeProvider ? (
             <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">
               {/* Header: title + badge */}
@@ -267,7 +283,7 @@ export function ProviderSettingsSection({
                   {runtimeProbe ? (
                     <Badge variant={runtimeProbe.status === "pass" ? "success" : "danger"}>
                       {runtimeProbe.status === "pass" ? (
-                        <><Zap className="h-3 w-3" /> API OK</>
+                        <><Zap className="h-3 w-3" /> {runtimeProbe.latencyMs != null ? `${runtimeProbe.latencyMs}ms` : "API OK"}</>
                       ) : (
                         <><Unplug className="h-3 w-3" /> API fail</>
                       )}
@@ -288,7 +304,7 @@ export function ProviderSettingsSection({
                 {runtimeProbe ? (
                   <p className="text-[11px] leading-relaxed text-ink-500">
                     {runtimeProbe.status === "pass"
-                      ? `API responded in ${runtimeProbe.latencyMs ?? "?"}ms — ready to use.`
+                      ? "API connection verified — ready to use."
                       : `${runtimeProbe.message || "Connection test failed."} Verify your token is correct.`}
                   </p>
                 ) : claudeTokenConnected ? (
@@ -428,9 +444,20 @@ export function ProviderSettingsSection({
             />
           ) : null}
 
-          {isClaudeProvider ? (
-            <ClaudeOAuthGuide isRemoteMode={isRemoteMode} />
-          ) : null}
+          <AnimatePresence initial={false}>
+            {isClaudeProvider && !claudeTokenConnected ? (
+              <motion.div
+                key="claude-oauth-guide"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                style={{ overflow: "hidden" }}
+              >
+                <ClaudeOAuthGuide isRemoteMode={isRemoteMode} />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
           {/* ── Auth URL link (remote fallback, no device code) ── */}
           {!isClaudeProvider && hasAuthUrl ? (
@@ -449,47 +476,101 @@ export function ProviderSettingsSection({
 
           {/* ── OAuth credential card ── */}
           <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5 space-y-1.5">
-            <p className="text-xs text-ink-100">
-              {isClaudeProvider ? "Setup token (API fallback)" : "OAuth Token"}
-            </p>
+            {isClaudeProvider && claudeTokenConnected ? (
+              <>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 text-left"
+                  onClick={() => setTokenEditOpen((v) => !v)}
+                >
+                  <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                  <span className="flex-1 text-xs text-ink-100">Setup token configured</span>
+                  <ChevronDown
+                    className="h-3.5 w-3.5 shrink-0 text-ink-500 transition-transform duration-150"
+                    style={{ transform: tokenEditOpen ? "rotate(180deg)" : undefined }}
+                  />
+                </button>
+                <AnimatePresence initial={false}>
+                  {tokenEditOpen ? (
+                    <motion.div
+                      key="token-input-expand"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      style={{ overflow: "hidden" }}
+                    >
+                      <div className="space-y-1.5 pt-1.5">
+                        <Input
+                          type="password"
+                          value={provider.oauthToken}
+                          onChange={(event) => {
+                            onCredentialChange(providerId, event.target.value);
+                          }}
+                          placeholder="sk-ant-oat01-..."
+                        />
+                        <p className="text-[11px] text-ink-500">
+                          {`Paste Claude setup-token from \`claude setup-token\` and save.${isRemoteMode ? " In remote mode this is the only token format accepted for API fallback." : " Browser Authentication Code from claude.ai cannot be saved in this field."}`}
+                        </p>
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-ink-100">
+                  {isClaudeProvider ? "Setup token (API fallback)" : "OAuth Token"}
+                </p>
+                <Input
+                  type="password"
+                  value={provider.oauthToken}
+                  onChange={(event) => {
+                    onCredentialChange(providerId, event.target.value);
+                  }}
+                  placeholder={
+                    isClaudeProvider
+                      ? "sk-ant-oat01-..."
+                      : "sk-..."
+                  }
+                />
+                <p className="text-[11px] text-ink-500">
+                  {isClaudeProvider
+                    ? `Paste Claude setup-token from \`claude setup-token\` and save.${isRemoteMode ? " In remote mode this is the only token format accepted for API fallback." : " Browser Authentication Code from claude.ai cannot be saved in this field."}`
+                    : "Optional. Edit manually and save to apply."}
+                </p>
+              </>
+            )}
+          </div>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="apikey-mode"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 6 }}
+          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+        >
+          {/* ── API key card ── */}
+          <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5 space-y-1.5">
+            <p className="text-xs text-ink-100">API Key</p>
             <Input
               type="password"
-              value={provider.oauthToken}
+              value={provider.apiKey}
               onChange={(event) => {
                 onCredentialChange(providerId, event.target.value);
               }}
-              placeholder={
-                isClaudeProvider
-                  ? "sk-ant-oat01-..."
-                  : "sk-..."
-              }
+              placeholder="sk-..."
             />
             <p className="text-[11px] text-ink-500">
-              {isClaudeProvider
-                ? `Paste Claude setup-token from \`claude setup-token\` and save.${isRemoteMode ? " In remote mode this is the only token format accepted for API fallback." : " Browser Authentication Code from claude.ai cannot be saved in this field."}`
-                : "Optional. Edit manually and save to apply."}
+              {providerId === "claude"
+                ? "Your Anthropic API key. Find it at console.anthropic.com."
+                : "Your OpenAI API key. Find it at platform.openai.com."}
             </p>
           </div>
-        </>
-      ) : (
-        /* ── API key card ── */
-        <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)] px-3 py-2.5 space-y-1.5">
-          <p className="text-xs text-ink-100">API Key</p>
-          <Input
-            type="password"
-            value={provider.apiKey}
-            onChange={(event) => {
-              onCredentialChange(providerId, event.target.value);
-            }}
-            placeholder="sk-..."
-          />
-          <p className="text-[11px] text-ink-500">
-            {providerId === "claude"
-              ? "Your Anthropic API key. Find it at console.anthropic.com."
-              : "Your OpenAI API key. Find it at platform.openai.com."}
-          </p>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       {/* ── Configuration card ── */}
       <div className="rounded-xl border border-ink-800 bg-[var(--surface-inset)]">

@@ -7,6 +7,7 @@ import { Switch } from "@/components/optics/switch";
 import { SegmentedControl } from "@/components/optics/segmented-control";
 import { OpenAIIcon, AnthropicIcon } from "@/components/optics/icons";
 import { cn } from "@/lib/cn";
+import { toModelSelectOption } from "@/lib/modelLabel";
 import { PlanPreview } from "@/components/dashboard/ai-builder/PlanPreview";
 import { PromptEditor } from "@/components/dashboard/ai-builder/PromptEditor";
 import { useAiBuilderSession } from "@/components/dashboard/ai-builder/useAiBuilderSession";
@@ -146,7 +147,7 @@ export function AiBuilderPanel({
                   value={model}
                   disabled={readOnly}
                   onValueChange={setModel}
-                  options={modelCatalog.map((entry) => ({ value: entry.id, label: entry.label }))}
+                  options={modelCatalog.map(toModelSelectOption)}
                 />
               </div>
 

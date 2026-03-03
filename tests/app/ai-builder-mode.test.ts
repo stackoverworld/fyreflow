@@ -8,6 +8,7 @@ import {
   hasReplaceIntent,
   resolveAiBuilderMode
 } from "../../src/components/dashboard/ai-builder/mode.ts";
+import { shouldStartSyntheticStreaming } from "../../src/components/dashboard/ai-builder/PlanPreview";
 
 describe("AI builder mode behavior", () => {
   it("defaults to agent mode when unlocked", () => {
@@ -35,5 +36,36 @@ describe("AI builder mode behavior", () => {
 
   it("exposes a deterministic ask-mode block message", () => {
     expect(ASK_MODE_MUTATION_BLOCK_MESSAGE).toBe("Ask mode is read-only. Switch to Agent mode to request flow changes.");
+  });
+
+  describe("synthetic streaming behavior", () => {
+    it("always returns false because synthetic streaming is disabled in favor of native SSE streaming", () => {
+      expect(
+        shouldStartSyntheticStreaming({
+          wasGenerating: true,
+          generating: false,
+          hasNativeStreaming: false,
+          sawNativeStreamingInCurrentRun: false
+        })
+      ).toBe(false);
+
+      expect(
+        shouldStartSyntheticStreaming({
+          wasGenerating: true,
+          generating: false,
+          hasNativeStreaming: false,
+          sawNativeStreamingInCurrentRun: true
+        })
+      ).toBe(false);
+
+      expect(
+        shouldStartSyntheticStreaming({
+          wasGenerating: true,
+          generating: true,
+          hasNativeStreaming: false,
+          sawNativeStreamingInCurrentRun: false
+        })
+      ).toBe(false);
+    });
   });
 });

@@ -194,36 +194,6 @@ export const MODEL_CATALOG: Record<ProviderId, ModelCatalogEntry[]> = {
       supportsFastMode: false,
       supports1MContext: false
     },
-    {
-      id: "sonnet",
-      label: "sonnet (alias)",
-      providerId: "claude",
-      source: "claude-local",
-      contextWindowTokens: 200000,
-      reasoningEfforts: claudeEffort,
-      supportsFastMode: true,
-      supports1MContext: true
-    },
-    {
-      id: "opus",
-      label: "opus (alias)",
-      providerId: "claude",
-      source: "claude-local",
-      contextWindowTokens: 200000,
-      reasoningEfforts: claudeEffort,
-      supportsFastMode: true,
-      supports1MContext: true
-    },
-    {
-      id: "haiku",
-      label: "haiku (alias)",
-      providerId: "claude",
-      source: "claude-local",
-      contextWindowTokens: 200000,
-      reasoningEfforts: claudeEffort,
-      supportsFastMode: false,
-      supports1MContext: false
-    }
   ]
 };
 

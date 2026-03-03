@@ -303,7 +303,7 @@ describe("generateFlowDraftStream", () => {
     expect(onComplete).toHaveBeenCalledWith(responsePayload);
   });
 
-  it("fails fast when stream heartbeats continue without output progress", async () => {
+  it("keeps stream alive when heartbeats arrive during extended thinking", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-03-03T12:00:00.000Z");
     vi.setSystemTime(startedAt);
@@ -344,7 +344,45 @@ describe("generateFlowDraftStream", () => {
     expect(onTextDelta).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
-    expect((onError.mock.calls[0]?.[0] as Error).message).toContain("Stream stalled");
+    expect((onError.mock.calls[0]?.[0] as Error).message).toContain("Stream ended without");
+  });
+
+  it("fails fast when the stream stops delivering bytes after ready", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: ready\ndata: {"at":"2026-03-03T12:00:00.000Z"}\n\n'));
+            // Keep the stream open with no further chunks to simulate proxy buffering/stall.
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    ) as typeof fetch;
+
+    const onTextDelta = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const streamPromise = generateFlowDraftStream(flowBuilderRequest, {
+      onTextDelta,
+      onComplete,
+      onError
+    });
+
+    await vi.advanceTimersByTimeAsync(46_000);
+    await streamPromise;
+
+    expect(onTextDelta).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]?.[0] as Error).message).toContain("no stream data");
   });
 });
 

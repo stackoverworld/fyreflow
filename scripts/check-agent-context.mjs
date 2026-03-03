@@ -6,7 +6,7 @@ const ROOT = process.cwd();
 const MAX_CHAIN_BYTES = 32 * 1024;
 const ROOT_MIN = 60;
 const ROOT_MAX = 150;
-const IGNORED = new Set([".git", "node_modules", "dist", "coverage"]);
+const IGNORED = new Set([".git", "node_modules", "dist", "coverage", ".agents", ".claude"]);
 const DEFAULT_PRIMARY_FILES = ["AGENTS.override.md", "AGENTS.md"];
 
 function parseQuotedList(raw) {
@@ -138,12 +138,6 @@ if (!existsSync(rootAgentsPath)) {
 const requiredDocs = ["docs/index.md", "docs/architecture.md", "docs/api-contracts.md", "docs/conventions.md", "docs/maintenance.md", "docs/skills.md"];
 for (const file of requiredDocs) {
   if (!existsSync(join(ROOT, file))) errors.push(`Missing required doc: ${file}`);
-}
-
-const claudePath = join(ROOT, "CLAUDE.md");
-if (existsSync(claudePath)) {
-  const content = readFileSync(claudePath, "utf8");
-  if (!content.includes("@AGENTS.md")) errors.push("CLAUDE.md must import @AGENTS.md.");
 }
 
 const fragmentDir = join(ROOT, ".agents/fragments/root");

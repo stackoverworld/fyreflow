@@ -85,16 +85,16 @@ describe("deriveStepLiveActivityEvents", () => {
     const lines = deriveStepLiveActivityLines(run, step);
 
     const commandEvent = events.find((event) => event.kind === "command");
-    expect(commandEvent).toBeTruthy();
+    expect(commandEvent).toBeDefined();
     expect(commandEvent?.command).toContain("/Users/moiseencov/.local/bin/claude");
     expect(commandEvent?.cwd).toBe("/Users/moiseencov/Downloads/Projects/agents-dashboard");
     expect(commandEvent?.timeoutMs).toBe(420000);
     const modelCommandEvent = events.find((event) => event.title.includes("Model shell command"));
-    expect(modelCommandEvent).toBeTruthy();
+    expect(modelCommandEvent).toBeDefined();
     expect(modelCommandEvent?.command).toBe("cd pdf-folder && ls -la");
     expect(modelCommandEvent?.cwd).toBe("/Users/moiseencov/Downloads/Projects/agents-dashboard");
     const readActionEvent = events.find((event) => event.title.includes("Model tool action (Read file)"));
-    expect(readActionEvent).toBeTruthy();
+    expect(readActionEvent).toBeDefined();
     expect(readActionEvent?.kind).toBe("tool");
     expect(readActionEvent?.detail).toContain("not terminal");
     const summaryEvent = events.find((event) => event.kind === "summary");

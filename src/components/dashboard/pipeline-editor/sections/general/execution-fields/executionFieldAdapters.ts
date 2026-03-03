@@ -1,4 +1,5 @@
 import { getDefaultContextWindowForModel } from "@/lib/modelCatalog";
+import { toModelSelectOption } from "@/lib/modelLabel";
 import type { GeneralSectionProps } from "../../../types";
 import {
   getModelMeta,
@@ -40,10 +41,7 @@ export function getModelPresetOptions(
   providerId: GeneralSectionProps["selectedStep"]["providerId"]
 ) {
   return [
-    ...(modelCatalog[providerId] ?? []).map((option) => ({
-      value: option.id,
-      label: option.label
-    })),
+    ...(modelCatalog[providerId] ?? []).map(toModelSelectOption),
     { value: "__custom__", label: "Custom model id" }
   ];
 }

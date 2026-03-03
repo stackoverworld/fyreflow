@@ -19,6 +19,13 @@
 - Any user-visible feature or behavior change must include a test delta in the same change.
 - Choose test depth by risk: `vitest` for logic/contracts/edge-cases and `playwright` for critical end-to-end user journeys.
 
+## Test Quality Bar
+- Default to behavior-driven assertions: verify externally observable outcomes, not just internal helper calls.
+- Add at least one boundary or race-condition assertion when behavior depends on pagination, async state, or event ordering.
+- For scroll/timing/UI interaction bugs, add or update a Playwright regression that checks a numeric invariant.
+- Keep tests deterministic: fixed timestamps/IDs, no local machine data files, no debug logging assertions.
+- Prefer specific assertions over generic truthy checks unless existence is the exact contract.
+
 ## Verification
 - `node scripts/check-agent-context.mjs`
 - `node scripts/check-doc-freshness.mjs`

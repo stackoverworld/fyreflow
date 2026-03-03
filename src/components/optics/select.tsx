@@ -8,6 +8,7 @@ import { SELECT_DROPDOWN_CONTENT_CLASS } from "@/components/optics/overlay-class
 export interface SelectOption {
   value: string;
   label: string;
+  labelNode?: React.ReactNode;
 }
 
 interface SelectProps {
@@ -160,7 +161,7 @@ export function Select({ value, onValueChange, options, placeholder, className, 
                       isActive ? "opacity-100" : "opacity-0"
                     )}
                   />
-                  <span className="truncate">{option.label}</span>
+                  <span className="truncate">{option.labelNode ?? option.label}</span>
                 </button>
               );
             })}
@@ -190,8 +191,8 @@ export function Select({ value, onValueChange, options, placeholder, className, 
           disabled && "cursor-not-allowed opacity-55"
         )}
       >
-        <span className={cn("truncate", !selected && "text-ink-500")}>
-          {selected?.label ?? placeholder ?? "Select..."}
+        <span className={cn("min-w-0 truncate", !selected && "text-ink-500")}>
+          {selected?.labelNode ?? selected?.label ?? placeholder ?? "Select..."}
         </span>
         <motion.span
           className="ml-2 inline-flex items-center justify-center"

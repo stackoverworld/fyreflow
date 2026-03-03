@@ -9,7 +9,11 @@ export function canUseClaudeFastMode(provider: ProviderConfig | null | undefined
     return false;
   }
 
-  return provider.authMode === "api_key" && isNonEmpty(provider.apiKey);
+  if (provider.authMode === "api_key") {
+    return isNonEmpty(provider.apiKey);
+  }
+
+  return provider.authMode === "oauth";
 }
 
 export function getClaudeFastModeUnavailableNote(provider: ProviderConfig | null | undefined): string {
@@ -17,11 +21,7 @@ export function getClaudeFastModeUnavailableNote(provider: ProviderConfig | null
     return "Fast mode is unavailable while provider settings are loading.";
   }
 
-  if (provider.authMode !== "api_key") {
-    return "Fast mode requires Claude API key auth in Provider Auth.";
-  }
-
-  if (!isNonEmpty(provider.apiKey)) {
+  if (provider.authMode === "api_key" && !isNonEmpty(provider.apiKey)) {
     return "Fast mode requires an active Claude API key in Provider Auth.";
   }
 

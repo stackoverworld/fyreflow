@@ -1,7 +1,7 @@
 import type { ProviderConfig } from "./types.js";
 import { getCachedCodexAccessToken, getProviderOAuthStatus } from "./oauth.js";
 import { createAbortError, isAbortError } from "./abort.js";
-import { hasActiveClaudeApiKey } from "./providerCapabilities.js";
+import { canClaudeUseFastMode } from "./providerCapabilities.js";
 import { ProviderApiError, executeClaudeWithApi, executeOpenAIWithApi, executeViaCli } from "./providers/clientFactory.js";
 import { buildClaudeTimeoutFallbackInput, shouldTryClaudeTimeoutFallback } from "./providers/retryPolicy.js";
 import type { ClaudeApiOptions, ProviderExecutionInput as ProviderExecutionInputShape } from "./providers/types.js";
@@ -228,7 +228,7 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
   const fastModeUnavailable =
     input.provider.id === "claude" &&
     input.step.fastMode &&
-    !hasActiveClaudeApiKey(input.provider);
+    !canClaudeUseFastMode(input.provider);
   const effectiveInput: ProviderExecutionInput = fastModeUnavailable
     ? {
         ...input,

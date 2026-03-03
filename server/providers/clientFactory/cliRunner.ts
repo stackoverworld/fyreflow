@@ -846,7 +846,8 @@ function runCommand(
   timeoutMs = 240000,
   signal?: AbortSignal,
   onLog?: (message: string) => void,
-  onStdoutLine?: (line: string) => void
+  onStdoutLine?: (line: string) => void,
+  env?: Record<string, string>
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     const preview = (value: string, maxChars = 160): string =>
@@ -864,7 +865,8 @@ function runCommand(
       })
     );
     const child = spawn(command, args, {
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"],
+      env: env ? { ...process.env, ...env } : undefined
     });
     const inspectStreamJson = args.includes("stream-json");
     const inspectStdoutLines = inspectStreamJson || typeof onStdoutLine === "function";
@@ -1196,6 +1198,7 @@ interface BuildClaudeCliArgsInput {
   compatibilityMode?: boolean;
   disableDiagnostics?: boolean;
   forcePlainTextOutput?: boolean;
+  disableStreamJson?: boolean;
 }
 
 function shouldDisableClaudeCliTools(input: ProviderExecutionInput): boolean {
@@ -1218,23 +1221,30 @@ function shouldRequireGateResultContract(input: ProviderExecutionInput): boolean
   return /\bdeliver(y|ed|ing)?\b/i.test(input.step.name);
 }
 
+export function shouldDisableClaudeStreamJson(input: ProviderExecutionInput): boolean {
+  const outputMode = input.outputMode ?? "markdown";
+  return input.provider.authMode === "oauth" && outputMode === "json";
+}
+
 interface ResolveClaudeCliOutputFormatInput {
   outputMode: ProviderExecutionInput["outputMode"];
   compatibilityMode?: boolean;
   forcePlainTextOutput?: boolean;
+  disableStreamJson?: boolean;
 }
 
 function resolveClaudeCliOutputFormat({
   outputMode,
   compatibilityMode = false,
-  forcePlainTextOutput = false
+  forcePlainTextOutput = false,
+  disableStreamJson = false
 }: ResolveClaudeCliOutputFormatInput): ClaudeCliOutputFormat {
   if (forcePlainTextOutput) {
     return "text";
   }
 
   if (outputMode === "json") {
-    if (!compatibilityMode && CLAUDE_CLI_STREAM_JSON) {
+    if (!disableStreamJson && !compatibilityMode && CLAUDE_CLI_STREAM_JSON) {
       return "stream-json";
     }
     return "json";
@@ -1242,7 +1252,7 @@ function resolveClaudeCliOutputFormat({
 
   // Markdown steps default to stream-json so UI can render real live activity
   // (thinking phases, tool progress, and partial output).
-  if (!compatibilityMode && CLAUDE_CLI_STREAM_JSON && CLAUDE_CLI_MARKDOWN_STREAM_JSON) {
+  if (!disableStreamJson && !compatibilityMode && CLAUDE_CLI_STREAM_JSON && CLAUDE_CLI_MARKDOWN_STREAM_JSON) {
     return "stream-json";
   }
 
@@ -1304,13 +1314,18 @@ export function buildClaudeCliArgs(input: ProviderExecutionInput, params: BuildC
   const compatibilityMode = params.compatibilityMode === true;
   const disableDiagnostics = params.disableDiagnostics === true;
   const forcePlainTextOutput = params.forcePlainTextOutput === true;
+  const disableStreamJson = params.disableStreamJson === true;
   const outputMode = input.outputMode ?? "markdown";
   const cliOutputFormat = resolveClaudeCliOutputFormat({
     outputMode,
     compatibilityMode,
-    forcePlainTextOutput
+    forcePlainTextOutput,
+    disableStreamJson
   });
   const args = ["--print", "--output-format", cliOutputFormat];
+  if (cliOutputFormat === "stream-json") {
+    args.push("--include-partial-messages");
+  }
   if (compatibilityMode) {
     applyClaudeCompatibilityFlags(args);
   } else {
@@ -1323,9 +1338,7 @@ export function buildClaudeCliArgs(input: ProviderExecutionInput, params: BuildC
     // Keep orchestrator runs deterministic and routing-only.
     args.push("--tools", "");
   }
-  // Agent SDK print mode does not support fast mode and can emit warnings plus model fallback.
-  // Force standard mode for deterministic behavior and lower startup latency in automated runs.
-  args.push("--settings", '{"fastMode":false}');
+  args.push("--settings", JSON.stringify({ fastMode: input.step.fastMode === true }));
   if (outputMode === "json" && !forcePlainTextOutput) {
     const schema = buildClaudeJsonSchema(input);
     if (schema) {
@@ -1338,14 +1351,6 @@ export function buildClaudeCliArgs(input: ProviderExecutionInput, params: BuildC
   }
   if (CLAUDE_CLI_FALLBACK_MODEL.length > 0 && CLAUDE_CLI_FALLBACK_MODEL !== params.selectedModel) {
     args.push("--fallback-model", CLAUDE_CLI_FALLBACK_MODEL);
-  }
-
-  if (input.step.fastMode) {
-    args.push("--append-system-prompt", "Fast mode requested. Prioritize lower latency and concise responses.");
-  }
-
-  if (input.step.use1MContext) {
-    args.push("--append-system-prompt", "1M context mode requested for compatible Sonnet/Opus models.");
   }
 
   args.push(params.prompt);
@@ -1363,6 +1368,11 @@ function parseClaudeJsonPayloads(stdout: string): Record<string, unknown>[] {
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       return [parsed as Record<string, unknown>];
     }
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry): entry is Record<string, unknown> => {
+        return typeof entry === "object" && entry !== null && !Array.isArray(entry);
+      });
+    }
   } catch {
     // fall through and try line-delimited JSON payloads
   }
@@ -1377,6 +1387,14 @@ function parseClaudeJsonPayloads(stdout: string): Record<string, unknown>[] {
       const parsed = JSON.parse(line) as unknown;
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
         payloads.push(parsed as Record<string, unknown>);
+        continue;
+      }
+      if (Array.isArray(parsed)) {
+        for (const entry of parsed) {
+          if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+            payloads.push(entry as Record<string, unknown>);
+          }
+        }
       }
     } catch {
       // continue scanning
@@ -1384,6 +1402,32 @@ function parseClaudeJsonPayloads(stdout: string): Record<string, unknown>[] {
   }
 
   return payloads;
+}
+
+function extractTextFromClaudeContent(content: unknown): string {
+  if (typeof content === "string" && content.trim().length > 0) {
+    return content.trim();
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const text = content
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+        const value = (entry as { text?: unknown }).text;
+        return typeof value === "string" ? value : "";
+      }
+      return "";
+    })
+    .join("")
+    .trim();
+
+  return text;
 }
 
 function getClaudePayloadText(payload: Record<string, unknown>): string | null {
@@ -1405,31 +1449,34 @@ function getClaudePayloadText(payload: Record<string, unknown>): string | null {
   }
 
   const content = payload.content;
-  if (typeof content === "string" && content.trim().length > 0) {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    const text = content
-      .map((entry) => {
-        if (typeof entry === "string") {
-          return entry;
-        }
-        if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
-          const value = (entry as { text?: unknown }).text;
-          return typeof value === "string" ? value : "";
-        }
-        return "";
-      })
-      .join("")
-      .trim();
-    if (text.length > 0) {
-      return text;
-    }
+  const contentText = extractTextFromClaudeContent(content);
+  if (contentText.length > 0) {
+    return contentText;
   }
 
   const message = payload.message;
   if (typeof message === "string" && message.trim().length > 0) {
     return message.trim();
+  }
+  if (typeof message === "object" && message !== null && !Array.isArray(message)) {
+    const messageRecord = message as Record<string, unknown>;
+    const messageResult = messageRecord.result;
+    if (typeof messageResult === "string" && messageResult.trim().length > 0) {
+      return messageResult.trim();
+    }
+    if (typeof messageResult === "object" && messageResult !== null && !Array.isArray(messageResult)) {
+      return JSON.stringify(messageResult);
+    }
+
+    const messageContentText = extractTextFromClaudeContent(messageRecord.content);
+    if (messageContentText.length > 0) {
+      return messageContentText;
+    }
+
+    const messageText = maybeString(messageRecord.text);
+    if (messageText) {
+      return messageText;
+    }
   }
 
   return null;
@@ -1455,7 +1502,7 @@ function getClaudePayloadDelta(payload: Record<string, unknown>): string {
   return "";
 }
 
-function extractClaudeCliOutput(
+export function extractClaudeCliOutput(
   stdout: string,
   outputMode: ProviderExecutionInput["outputMode"],
   cliOutputFormat: ClaudeCliOutputFormat,
@@ -1505,10 +1552,12 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
   const prompt = composeCliPrompt(input);
   const selectedModel = input.step.model || input.provider.defaultModel;
   const outputMode = input.outputMode ?? "markdown";
+  const disableStreamJson = shouldDisableClaudeStreamJson(input);
   const initialOutputFormat = resolveClaudeCliOutputFormat({
     outputMode,
     compatibilityMode: false,
-    forcePlainTextOutput: false
+    forcePlainTextOutput: false,
+    disableStreamJson
   });
   const timeoutMs = resolveClaudeCliAttemptTimeoutMs(input.step, input.provider.defaultModel, input.stageTimeoutMs);
   input.log?.(
@@ -1542,6 +1591,11 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
       }
     : undefined;
 
+  const claudeCliEnv: Record<string, string> = {};
+  if (input.step.use1MContext === false) {
+    claudeCliEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+  }
+
   let stdout = "";
   let usedCompatibilityFallback = false;
   let usedForcePlainText = false;
@@ -1553,13 +1607,15 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
         selectedModel,
         prompt,
         compatibilityMode: false,
-        disableDiagnostics: false
+        disableDiagnostics: false,
+        disableStreamJson
       }),
       undefined,
       timeoutMs,
       input.signal,
       input.log,
-      forwardStreamJsonDelta
+      forwardStreamJsonDelta,
+      Object.keys(claudeCliEnv).length > 0 ? claudeCliEnv : undefined
     ));
   } catch (error) {
     if (!(isUnknownClaudeOptionError(error) || isUnsupportedClaudeOutputFormatError(error))) {
@@ -1580,12 +1636,15 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
         prompt,
         compatibilityMode: true,
         disableDiagnostics: true,
-        forcePlainTextOutput: true
+        forcePlainTextOutput: true,
+        disableStreamJson
       }),
       undefined,
       timeoutMs,
       input.signal,
-      input.log
+      input.log,
+      undefined,
+      Object.keys(claudeCliEnv).length > 0 ? claudeCliEnv : undefined
     ));
   }
   const trimmed = extractClaudeCliOutput(

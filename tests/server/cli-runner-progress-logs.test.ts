@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compactProcessSnapshot,
+  extractClaudeCliOutput,
   extractCodexJsonStatus,
   extractCodexJsonTextDelta,
   extractStreamJsonCommandHints,
@@ -194,5 +195,55 @@ describe("CLI runner progress logging", () => {
         })
       )
     ).toBe("Rate limit exceeded");
+  });
+
+  it("extracts assistant text from Claude JSON array output payload", () => {
+    const output = JSON.stringify([
+      {
+        type: "system",
+        subtype: "init"
+      },
+      {
+        type: "assistant",
+        message: {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: '{"action":"answer","message":"Hello from assistant content."}'
+            }
+          ]
+        }
+      },
+      {
+        type: "ratelimit_event",
+        status: "allowed"
+      }
+    ]);
+
+    const extracted = extractClaudeCliOutput(output, "json", "json");
+    expect(extracted).toBe('{"action":"answer","message":"Hello from assistant content."}');
+  });
+
+  it("extracts final result text from Claude JSON array output payload", () => {
+    const output = JSON.stringify([
+      {
+        type: "assistant",
+        message: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: '{"action":"answer","message":"Intermediate"}' }]
+        }
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: '{"action":"answer","message":"Final result"}'
+      }
+    ]);
+
+    const extracted = extractClaudeCliOutput(output, "json", "json");
+    expect(extracted).toBe('{"action":"answer","message":"Final result"}');
   });
 });

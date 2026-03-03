@@ -548,6 +548,10 @@ function summarizeOpenAiStreamEvent(type: string, payload: Record<string, unknow
     return "Request accepted; model started processing.";
   }
 
+  if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_summary_part.delta") {
+    return "AI is reasoning through the request.";
+  }
+
   if (type === "response.output_text.delta") {
     return "Model is generating response.";
   }
@@ -573,6 +577,11 @@ function summarizeClaudeStreamEvent(eventType: string, payload: Record<string, u
   }
 
   if (eventType === "content_block_delta") {
+    const delta = maybeRecord(payload.delta);
+    const deltaType = maybeString(delta?.type)?.toLowerCase();
+    if (deltaType === "thinking_delta") {
+      return "AI is reasoning through the request.";
+    }
     return "Model is generating response.";
   }
 
@@ -583,6 +592,9 @@ function summarizeClaudeStreamEvent(eventType: string, payload: Record<string, u
   if (eventType === "content_block_start") {
     const block = maybeRecord(payload.content_block);
     const blockType = maybeString(block?.type)?.toLowerCase();
+    if (blockType === "thinking") {
+      return "AI is reasoning through the request.";
+    }
     if (blockType === "tool_use") {
       const toolName = maybeString(block?.name);
       return toolName ? `Model invoked tool ${toolName}.` : "Model invoked a tool.";
@@ -620,6 +632,10 @@ async function readOpenAiStreamingOutput(
   let eventCount = 0;
   let output = "";
   let finalOutput = "";
+  let inReasoningPhase = false;
+  let reasoningStartedAt = 0;
+  let lastReasoningProgressAt = 0;
+  const REASONING_PROGRESS_INTERVAL_MS = 8_000;
   const mcpToolCalls: ProviderMcpToolCall[] = [];
   const emittedSummaries = new Set<string>();
   const emitSummary = (summary: string | undefined): void => {
@@ -666,7 +682,27 @@ async function readOpenAiStreamingOutput(
         throw new Error(`OpenAI streaming error: ${errorMessage}`);
       }
 
+      if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_summary_part.delta") {
+        if (!inReasoningPhase) {
+          inReasoningPhase = true;
+          reasoningStartedAt = now;
+          lastReasoningProgressAt = now;
+          log?.("Model thinking: AI is reasoning through the request.");
+        }
+        if (now - lastReasoningProgressAt >= REASONING_PROGRESS_INTERVAL_MS) {
+          lastReasoningProgressAt = now;
+          const elapsed = Math.round((now - reasoningStartedAt) / 1000);
+          log?.(`Model thinking: AI is reasoning (${elapsed}s elapsed).`);
+        }
+        return;
+      }
+
       if (type === "response.output_text.delta") {
+        if (inReasoningPhase) {
+          inReasoningPhase = false;
+          const elapsed = Math.round((now - reasoningStartedAt) / 1000);
+          log?.(`Model thinking: Reasoning complete (${elapsed}s). Generating output.`);
+        }
         const delta = extractOpenAiDelta(payload);
         output += delta;
         if (delta.length > 0) {
@@ -733,6 +769,10 @@ async function readClaudeStreamingOutput(
   let lastEventLogAt = 0;
   let eventCount = 0;
   let output = "";
+  let inThinkingBlock = false;
+  let thinkingStartedAt = 0;
+  let lastThinkingProgressAt = 0;
+  const THINKING_PROGRESS_INTERVAL_MS = 8_000;
   const mcpToolCalls: ProviderMcpToolCall[] = [];
   const toolUseInputsByIndex = new Map<number, { name: string; input: Record<string, unknown> | null; inputJson: string }>();
   const emittedSummaries = new Set<string>();
@@ -789,6 +829,14 @@ async function readClaudeStreamingOutput(
             block.inputJson += partialJson;
           }
         }
+        if (inThinkingBlock && deltaType === "thinking_delta") {
+          if (now - lastThinkingProgressAt >= THINKING_PROGRESS_INTERVAL_MS) {
+            lastThinkingProgressAt = now;
+            const elapsed = Math.round((now - thinkingStartedAt) / 1000);
+            log?.(`Model thinking: AI is reasoning (${elapsed}s elapsed).`);
+          }
+          return;
+        }
         const textDelta = extractClaudeDelta(payload);
         output += textDelta;
         if (textDelta.length > 0) {
@@ -800,6 +848,13 @@ async function readClaudeStreamingOutput(
       if (eventType === "content_block_start") {
         const block = maybeRecord(payload.content_block);
         const blockType = maybeString(block?.type)?.toLowerCase();
+        if (blockType === "thinking") {
+          inThinkingBlock = true;
+          thinkingStartedAt = now;
+          lastThinkingProgressAt = now;
+          log?.("Model thinking: AI is reasoning through the request.");
+          return;
+        }
         if (blockType !== "tool_use") {
           return;
         }
@@ -824,6 +879,11 @@ async function readClaudeStreamingOutput(
       }
 
       if (eventType === "content_block_stop") {
+        if (inThinkingBlock) {
+          inThinkingBlock = false;
+          const elapsed = Math.round((Date.now() - thinkingStartedAt) / 1000);
+          log?.(`Model thinking: Reasoning complete (${elapsed}s). Generating output.`);
+        }
         const index = typeof payload.index === "number" && Number.isFinite(payload.index) ? payload.index : null;
         if (index === null) {
           return;
