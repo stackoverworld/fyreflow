@@ -214,6 +214,15 @@
 - When `requestId` repeats with the same request payload, server returns or awaits the same generation result instead of re-running provider work.
 - Reusing the same `requestId` with a different payload is rejected with `409`.
 
+## AI Builder Streaming Contract (2026-03-03)
+- `POST /api/flow-builder/generate-stream` is SSE (`text/event-stream; charset=utf-8`) with `Cache-Control: no-cache, no-transform`.
+- Stream emits `ready` first: `{ requestId?, at }`.
+- Stream emits incremental `text_delta`: `{ delta }` while provider output is processed.
+- Stream emits `heartbeat`: `{ at }` about every 15s while the stream is active.
+- Terminal events:
+- `complete`: `{ response }` where `response` matches `FlowBuilderResponse`.
+- `error`: `{ message }`.
+
 ## Subagent Execution Semantics (2026-02-21)
 - `PipelineStep.enableDelegation` and `PipelineStep.delegationCount` drive real runtime parallelism in the run executor.
 - When at least one step has delegation enabled, ready steps can run concurrently using worker slots, capped by the maximum configured `delegationCount` (clamped to `1..8`).

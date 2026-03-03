@@ -147,6 +147,7 @@ describe("API runner streaming mode", () => {
     expect(capturedHeaders[0]?.["x-api-key"]).toBeUndefined();
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).not.toContain("interleaved-thinking-2025-05-14");
     expect(logs.some((line) => line.includes("setup-token compatibility"))).toBe(false);
   });
 

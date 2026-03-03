@@ -488,28 +488,22 @@ export function useAiBuilderSession({
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
         const streamingMsgId = crypto.randomUUID();
         streamingContentRef.current = "";
-        streamingMessageIdRef.current = null;
+        streamingMessageIdRef.current = streamingMsgId;
+        appendVisibleMessages([{
+          id: streamingMsgId,
+          requestId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          timestamp: Date.now(),
+        }]);
 
         try {
           await new Promise<void>((resolve, reject) => {
-            let receivedDeltas = false;
-
             generateFlowDraftStream(
               payload,
               {
                 onTextDelta: (delta) => {
-                  if (!receivedDeltas) {
-                    receivedDeltas = true;
-                    streamingMessageIdRef.current = streamingMsgId;
-                    appendVisibleMessages([{
-                      id: streamingMsgId,
-                      requestId,
-                      role: "assistant",
-                      content: "",
-                      streaming: true,
-                      timestamp: Date.now(),
-                    }]);
-                  }
                   streamingContentRef.current += delta;
                   scheduleStreamingFlush();
                 },
@@ -521,9 +515,15 @@ export function useAiBuilderSession({
                   streamingMessageIdRef.current = null;
 
                   try {
-                    const insertMode = receivedDeltas ? "update_existing" : "append_new";
-                    const msgId = receivedDeltas ? streamingMsgId : crypto.randomUUID();
-                    await processCompletedResult(result, msgId, requestId, requestMode, startedAt, resumed, insertMode);
+                    await processCompletedResult(
+                      result,
+                      streamingMsgId,
+                      requestId,
+                      requestMode,
+                      startedAt,
+                      resumed,
+                      "update_existing"
+                    );
                     resolve();
                   } catch (error) {
                     reject(error);

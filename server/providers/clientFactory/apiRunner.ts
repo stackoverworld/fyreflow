@@ -206,7 +206,7 @@ function buildClaudeOutputFormat(
 
 type ClaudeAuthHeaderMode = "oauth_bearer" | "api_key";
 
-const CLAUDE_DEFAULT_BETA_HEADERS = ["fine-grained-tool-streaming-2025-05-14", "interleaved-thinking-2025-05-14"] as const;
+const CLAUDE_DEFAULT_BETA_HEADERS = ["fine-grained-tool-streaming-2025-05-14"] as const;
 const CLAUDE_OAUTH_BETA_HEADERS = ["claude-code-20250219", "oauth-2025-04-20", ...CLAUDE_DEFAULT_BETA_HEADERS] as const;
 
 function isClaudeInvalidBearerTokenResponse(statusCode: number, responseBody: string): boolean {

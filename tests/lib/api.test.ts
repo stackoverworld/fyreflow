@@ -10,6 +10,7 @@ import {
   claimPairingSession,
   createPairingSession,
   generateFlowDraft,
+  generateFlowDraftStream,
   getHealth,
   buildStorageDownloadFileUrl,
   getManagedUpdateStatus,
@@ -206,6 +207,88 @@ describe("generateFlowDraft", () => {
       "Network timeout (POST /api/flow-builder/generate): Request timed out after 480000ms"
     );
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("generateFlowDraftStream", () => {
+  it("calls onError when the stream closes without complete or error events", async () => {
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: ready\ndata: {"at":"2026-03-03T12:00:00.000Z"}\n\n'));
+            controller.enqueue(encoder.encode('event: heartbeat\ndata: {"at":"2026-03-03T12:00:01.000Z"}\n\n'));
+            controller.close();
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    ) as typeof fetch;
+
+    const onTextDelta = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    await generateFlowDraftStream(flowBuilderRequest, {
+      onTextDelta,
+      onComplete,
+      onError
+    });
+
+    expect(onTextDelta).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]?.[0] as Error).message).toContain(
+      "Stream ended without a complete or error event"
+    );
+  });
+
+  it("fails fast when stream heartbeats continue without output progress", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-03-03T12:00:00.000Z");
+    vi.setSystemTime(startedAt);
+
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: ready\ndata: {"at":"2026-03-03T12:00:00.000Z"}\n\n'));
+            setTimeout(() => {
+              vi.setSystemTime(new Date(startedAt.getTime() + 181_000));
+              controller.enqueue(encoder.encode('event: heartbeat\ndata: {"at":"2026-03-03T12:03:01.000Z"}\n\n'));
+              controller.close();
+            }, 25);
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    ) as typeof fetch;
+
+    const onTextDelta = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const streamPromise = generateFlowDraftStream(flowBuilderRequest, {
+      onTextDelta,
+      onComplete,
+      onError
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await streamPromise;
+
+    expect(onTextDelta).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]?.[0] as Error).message).toContain("Stream stalled");
   });
 });
 

@@ -35,6 +35,7 @@ const FLOW_BUILDER_RETRY_ATTEMPTS = 2;
 const FLOW_BUILDER_RETRY_DELAY_MS = 250;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 120_000;
 const FLOW_BUILDER_REQUEST_TIMEOUT_MS = 480_000;
+const FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS = 180_000;
 const STORAGE_UPLOAD_CHUNK_BYTES = 512 * 1024;
 export const STORAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 const WS_PROTOCOL = "fyreflow.realtime.v1";
@@ -1628,6 +1629,8 @@ export async function generateFlowDraftStream(
     };
   })();
 
+  console.log("[stream] POST", `${connection.apiBaseUrl}${FLOW_BUILDER_STREAM_PATH}`);
+
   let response: Response;
   try {
     response = await fetch(`${connection.apiBaseUrl}${FLOW_BUILDER_STREAM_PATH}`, {
@@ -1637,6 +1640,7 @@ export async function generateFlowDraftStream(
       signal: timeoutController.signal
     });
   } catch (error) {
+    console.log("[stream] fetch error:", error instanceof Error ? error.message : error);
     clearTimeout(timeout);
     cleanupSignalForwarding();
     if (timedOut) {
@@ -1647,50 +1651,96 @@ export async function generateFlowDraftStream(
     return;
   }
 
+  console.log("[stream] response status:", response.status, "ok:", response.ok, "hasBody:", !!response.body);
+
   if (!response.ok || !response.body) {
     clearTimeout(timeout);
     cleanupSignalForwarding();
     const text = await response.text().catch(() => "");
+    console.log("[stream] non-ok response body:", text.slice(0, 200));
     callbacks.onError(new Error(text || `Stream request failed with ${response.status}`));
     return;
   }
 
   let settled = false;
+  let lastProgressAt = Date.now();
 
+  const emitCompleteOnce = (responsePayload: FlowBuilderResponse): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    callbacks.onComplete(responsePayload);
+  };
+
+  const emitErrorOnce = (error: Error): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    callbacks.onError(error);
+  };
+
+  let deltaCount = 0;
   try {
     await consumeSseStream(response.body, ({ event, data }) => {
+      const now = Date.now();
+
       if (event === "text_delta") {
         const parsed = tryParseJsonObject(data);
         if (parsed && typeof parsed.delta === "string") {
+          deltaCount++;
+          if (deltaCount <= 3 || deltaCount % 50 === 0) {
+            console.log(`[stream] text_delta #${deltaCount}:`, parsed.delta.slice(0, 60));
+          }
+          lastProgressAt = now;
           callbacks.onTextDelta(parsed.delta);
         }
         return;
       }
 
+      if (event === "heartbeat") {
+        console.log("[stream] heartbeat received");
+      }
+
       if (event === "complete") {
+        console.log("[stream] complete event received, deltaCount:", deltaCount);
         const parsed = tryParseJsonObject(data);
         if (parsed && parsed.response) {
-          settled = true;
-          callbacks.onComplete(parsed.response as FlowBuilderResponse);
+          lastProgressAt = now;
+          emitCompleteOnce(parsed.response as FlowBuilderResponse);
+          return;
         }
-        return;
+        throw new Error("Stream complete event is missing response payload");
       }
 
       if (event === "error") {
         const parsed = tryParseJsonObject(data);
         const message = parsed && typeof parsed.message === "string" ? parsed.message : "Stream error";
-        settled = true;
-        callbacks.onError(new Error(message));
+        console.log("[stream] error event:", message);
+        emitErrorOnce(new Error(message));
+        return;
+      }
+
+      if (event === "ready" || event === "heartbeat") {
+        console.log("[stream]", event, "received");
+        if (now - lastProgressAt >= FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS) {
+          throw new Error(
+            `Stream stalled: no model output progress for ${FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS}ms`
+          );
+        }
       }
     });
+    console.log("[stream] SSE stream ended normally, settled:", settled);
   } catch (error) {
-    settled = true;
-    callbacks.onError(error instanceof Error ? error : new Error("Stream read failed"));
+    console.log("[stream] SSE stream catch:", error instanceof Error ? error.message : error);
+    emitErrorOnce(error instanceof Error ? error : new Error("Stream read failed"));
   } finally {
     clearTimeout(timeout);
     cleanupSignalForwarding();
     if (!settled) {
-      callbacks.onError(new Error("Stream ended without a complete or error event"));
+      console.log("[stream] stream ended without settle — firing fallback onError");
+      emitErrorOnce(new Error("Stream ended without a complete or error event"));
     }
   }
 }

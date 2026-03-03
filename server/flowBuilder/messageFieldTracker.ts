@@ -1,11 +1,14 @@
-type TrackerState = "scanning" | "in_value" | "done";
-
-const MESSAGE_KEY_PATTERN = /"message"\s*:\s*"/;
+type TrackerState = "scanning" | "awaiting_value_quote" | "in_value" | "done";
 
 export class MessageFieldTracker {
   private state: TrackerState = "scanning";
-  private buffer = "";
-  private escapeNext = false;
+  private depth = 0;
+  private inString = false;
+  private stringEscape = false;
+  private currentString = "";
+  private lastKeyAtDepth1 = "";
+  private expectingValue = false;
+  private valueEscapeNext = false;
   private readonly onDelta: (delta: string) => void;
 
   constructor(onDelta: (delta: string) => void) {
@@ -13,46 +16,104 @@ export class MessageFieldTracker {
   }
 
   push(delta: string): void {
-    if (this.state === "done") {
-      return;
-    }
-
-    if (this.state === "scanning") {
-      this.buffer += delta;
-      const match = MESSAGE_KEY_PATTERN.exec(this.buffer);
-      if (!match) {
-        if (this.buffer.length > 200) {
-          this.buffer = this.buffer.slice(-50);
-        }
+    let i = 0;
+    while (i < delta.length) {
+      if (this.state === "done") {
         return;
       }
 
-      const valueStart = match.index + match[0].length;
-      const remainder = this.buffer.slice(valueStart);
-      this.buffer = "";
-      this.state = "in_value";
+      if (this.state === "in_value") {
+        i = this.consumeValue(delta, i);
+        continue;
+      }
 
-      if (remainder.length > 0) {
-        this.consumeValue(remainder);
+      this.processScanChar(delta[i]);
+      i++;
+    }
+  }
+
+  private processScanChar(ch: string): void {
+    if (this.state === "awaiting_value_quote") {
+      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+        return;
+      }
+      if (ch === '"') {
+        this.state = "in_value";
+        return;
+      }
+      this.state = "scanning";
+    }
+
+    if (this.inString) {
+      if (this.stringEscape) {
+        this.stringEscape = false;
+        this.currentString += ch;
+        return;
+      }
+      if (ch === "\\") {
+        this.stringEscape = true;
+        return;
+      }
+      if (ch === '"') {
+        this.inString = false;
+        if (this.depth === 1 && !this.expectingValue) {
+          this.lastKeyAtDepth1 = this.currentString;
+        }
+        this.currentString = "";
+        return;
+      }
+      this.currentString += ch;
+      return;
+    }
+
+    if (ch === '"') {
+      this.inString = true;
+      this.currentString = "";
+      this.stringEscape = false;
+      return;
+    }
+
+    if (ch === ":" && this.depth === 1) {
+      this.expectingValue = true;
+      if (this.lastKeyAtDepth1 === "message") {
+        this.state = "awaiting_value_quote";
       }
       return;
     }
 
-    this.consumeValue(delta);
+    if (ch === "," && this.depth === 1) {
+      this.expectingValue = false;
+      this.lastKeyAtDepth1 = "";
+      return;
+    }
+
+    if (ch === "{" || ch === "[") {
+      this.depth++;
+      return;
+    }
+
+    if (ch === "}" || ch === "]") {
+      if (this.depth === 1) {
+        this.expectingValue = false;
+        this.lastKeyAtDepth1 = "";
+      }
+      this.depth--;
+    }
   }
 
-  private consumeValue(chunk: string): void {
+  private consumeValue(chunk: string, startIndex: number): number {
     let emitted = "";
+    let i = startIndex;
 
-    for (let i = 0; i < chunk.length; i++) {
+    for (; i < chunk.length; i++) {
       if (this.state === "done") {
         break;
       }
 
       const ch = chunk[i];
 
-      if (this.escapeNext) {
-        this.escapeNext = false;
+      if (this.valueEscapeNext) {
+        this.valueEscapeNext = false;
         if (ch === "n") {
           emitted += "\n";
         } else if (ch === "t") {
@@ -80,12 +141,13 @@ export class MessageFieldTracker {
       }
 
       if (ch === "\\") {
-        this.escapeNext = true;
+        this.valueEscapeNext = true;
         continue;
       }
 
       if (ch === '"') {
         this.state = "done";
+        i++;
         break;
       }
 
@@ -95,6 +157,8 @@ export class MessageFieldTracker {
     if (emitted.length > 0) {
       this.onDelta(emitted);
     }
+
+    return i;
   }
 
   get isDone(): boolean {
@@ -103,7 +167,12 @@ export class MessageFieldTracker {
 
   reset(): void {
     this.state = "scanning";
-    this.buffer = "";
-    this.escapeNext = false;
+    this.depth = 0;
+    this.inString = false;
+    this.stringEscape = false;
+    this.currentString = "";
+    this.lastKeyAtDepth1 = "";
+    this.expectingValue = false;
+    this.valueEscapeNext = false;
   }
 }
