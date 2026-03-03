@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compactProcessSnapshot,
   extractStreamJsonCommandHints,
+  extractStreamJsonTextDelta,
   extractStreamJsonSummaryHints,
   formatCliCommandStartLog,
   formatCliRunningLog
@@ -146,5 +147,27 @@ describe("CLI runner progress logging", () => {
     const hints = extractStreamJsonSummaryHints(line);
     expect(hints.some((entry) => /workflow=PASS/i.test(entry.summary))).toBe(true);
     expect(hints.some((entry) => /Слайды/i.test(entry.summary))).toBe(false);
+  });
+
+  it("extracts streaming text delta from data-prefixed JSON line", () => {
+    const line =
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello stream"}}';
+
+    expect(extractStreamJsonTextDelta(line)).toBe("Hello stream");
+  });
+
+  it("extracts streaming text delta from JSON array payload", () => {
+    const line = JSON.stringify([
+      { type: "content_block_delta", delta: { type: "text_delta", text: "Hello " } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "world" } }
+    ]);
+
+    expect(extractStreamJsonTextDelta(line)).toBe("Hello world");
+  });
+
+  it("ignores non-payload stream lines for text delta extraction", () => {
+    expect(extractStreamJsonTextDelta("event: message")).toBe("");
+    expect(extractStreamJsonTextDelta("data: [DONE]")).toBe("");
+    expect(extractStreamJsonTextDelta("not-json")).toBe("");
   });
 });

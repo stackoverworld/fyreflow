@@ -501,6 +501,102 @@ export function extractStreamJsonSummaryHints(line: string): StreamJsonSummaryHi
   return hints;
 }
 
+function normalizeStreamJsonPayloadLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (trimmed.length === 0 || trimmed.length > STREAM_JSON_MAX_LINE_CHARS) {
+    return null;
+  }
+
+  if (trimmed.startsWith("event:")) {
+    return null;
+  }
+
+  const payload = trimmed.startsWith("data:") ? trimmed.slice("data:".length).trimStart() : trimmed;
+  if (payload.length === 0 || payload === "[DONE]") {
+    return null;
+  }
+
+  const first = payload[0];
+  if (first !== "{" && first !== "[") {
+    return null;
+  }
+
+  return payload;
+}
+
+function parseStreamJsonLine(line: string): unknown | null {
+  const payload = normalizeStreamJsonPayloadLine(line);
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payload) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function getClaudePayloadIncrementalDelta(payload: Record<string, unknown>): string {
+  const delta = payload.delta;
+  if (typeof delta === "string") {
+    return delta;
+  }
+  if (typeof delta === "object" && delta !== null && !Array.isArray(delta)) {
+    const text = (delta as { text?: unknown }).text;
+    if (typeof text === "string") {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+export function extractStreamJsonTextDelta(line: string): string {
+  const parsed = parseStreamJsonLine(line);
+  if (!parsed) {
+    return "";
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  let delta = "";
+  for (const entry of entries) {
+    const record = maybeRecord(entry);
+    if (!record) {
+      continue;
+    }
+    delta += getClaudePayloadIncrementalDelta(record);
+  }
+
+  return delta;
+}
+
+function extractStreamJsonCumulativeText(line: string): string {
+  const parsed = parseStreamJsonLine(line);
+  if (!parsed) {
+    return "";
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  let cumulative = "";
+  for (const entry of entries) {
+    const record = maybeRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const completion = maybeString(record.completion) ?? "";
+    if (completion.length > cumulative.length) {
+      cumulative = completion;
+    }
+    const text = getClaudePayloadText(record) ?? "";
+    if (text.length > cumulative.length) {
+      cumulative = text;
+    }
+  }
+
+  return cumulative;
+}
+
 export function compactProcessSnapshot(value: string, maxChars = 220): string {
   return value
     .replace(/\s+/g, " ")
@@ -1207,17 +1303,29 @@ async function runClaudeCli(input: ProviderExecutionInput): Promise<string> {
   );
   input.log?.("Model summary: Request accepted; model started processing.");
 
+  let streamedCumulativeText = "";
   const forwardStreamJsonDelta = input.onTextDelta && initialOutputFormat === "stream-json"
     ? (line: string): void => {
-        try {
-          const parsed = JSON.parse(line);
-          if (typeof parsed === "object" && parsed !== null) {
-            const delta = getClaudePayloadDelta(parsed);
-            if (delta.length > 0) {
-              input.onTextDelta!(delta);
-            }
+        const delta = extractStreamJsonTextDelta(line);
+        if (delta.length > 0) {
+          input.onTextDelta!(delta);
+          return;
+        }
+
+        const cumulative = extractStreamJsonCumulativeText(line);
+        if (cumulative.length === 0) {
+          return;
+        }
+
+        if (cumulative.startsWith(streamedCumulativeText)) {
+          const suffix = cumulative.slice(streamedCumulativeText.length);
+          if (suffix.length > 0) {
+            input.onTextDelta!(suffix);
           }
-        } catch {}
+        }
+        if (cumulative.length >= streamedCumulativeText.length) {
+          streamedCumulativeText = cumulative;
+        }
       }
     : undefined;
 

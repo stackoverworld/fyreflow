@@ -49,12 +49,12 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
 
     const payload = stripFlowBuilderRequestId(input);
 
-    response.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
+    response.status(200);
+    response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    response.setHeader("Cache-Control", "no-cache, no-transform");
+    response.setHeader("Connection", "keep-alive");
+    response.setHeader("X-Accel-Buffering", "no");
+    response.flushHeaders?.();
 
     const abortController = new AbortController();
     let closed = false;
@@ -76,6 +76,11 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
       if (!closed) {
         writeSseEvent(response, "text_delta", { delta });
       }
+    });
+
+    writeSseEvent(response, "ready", {
+      requestId: typeof input.requestId === "string" ? input.requestId : undefined,
+      at: new Date().toISOString()
     });
 
     try {
