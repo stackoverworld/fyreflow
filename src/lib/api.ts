@@ -35,7 +35,7 @@ const FLOW_BUILDER_RETRY_ATTEMPTS = 2;
 const FLOW_BUILDER_RETRY_DELAY_MS = 250;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 120_000;
 const FLOW_BUILDER_REQUEST_TIMEOUT_MS = 480_000;
-const FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS = 180_000;
+const FLOW_BUILDER_STREAM_PROGRESS_TIMEOUT_MS = 90_000;
 const STORAGE_UPLOAD_CHUNK_BYTES = 512 * 1024;
 export const STORAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 const WS_PROTOCOL = "fyreflow.realtime.v1";
@@ -1709,7 +1709,6 @@ export async function generateFlowDraftStream(
         const message =
           parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
         if (message.length > 0) {
-          lastProgressAt = now;
           callbacks.onStatus?.(message);
         }
         return;
