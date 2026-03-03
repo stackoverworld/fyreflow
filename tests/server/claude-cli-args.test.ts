@@ -82,6 +82,22 @@ describe("Claude CLI args", () => {
     expect(testerArgs).toContain("--json-schema");
   });
 
+  it("disables tools for AI Flow planner steps to avoid interactive tool permission stalls", () => {
+    const input = createInput();
+    input.step.role = "planner";
+    input.step.name = "AI Flow Copilot";
+    input.outputMode = "json";
+
+    const args = buildClaudeCliArgs(input, {
+      selectedModel: "claude-sonnet-4-6",
+      prompt: "respond in strict JSON"
+    });
+
+    const toolsIndex = args.indexOf("--tools");
+    expect(toolsIndex).toBeGreaterThan(-1);
+    expect(args[toolsIndex + 1]).toBe("");
+  });
+
   it("keeps tools enabled for executor steps that must write artifacts", () => {
     const input = createInput();
     input.step.role = "executor";

@@ -10,6 +10,13 @@ import {
 import { MessageFieldTracker } from "../../../flowBuilder/messageFieldTracker.js";
 
 const flowBuilderRequestRegistry = createFlowBuilderRequestRegistry();
+const FLOW_BUILDER_STREAM_MAX_DURATION_MS = (() => {
+  const raw = Number.parseInt(process.env.FLOW_BUILDER_STREAM_MAX_DURATION_MS ?? "120000", 10);
+  if (!Number.isFinite(raw)) {
+    return 120_000;
+  }
+  return Math.max(30_000, Math.min(600_000, raw));
+})();
 
 function writeSseEvent(response: Response, event: string, data: unknown): boolean {
   const ok = response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -84,6 +91,17 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
       console.log("[stream-endpoint] sending heartbeat");
       writeSseEvent(response, "heartbeat", { at: new Date().toISOString() });
     }, 15_000);
+    const maxDurationTimer = setTimeout(() => {
+      if (closed) {
+        return;
+      }
+      const message = `Flow builder stream timed out after ${FLOW_BUILDER_STREAM_MAX_DURATION_MS}ms`;
+      console.log(`[stream-endpoint] timeout: ${message}`);
+      writeSseEvent(response, "error", { message });
+      closed = true;
+      response.end();
+      abortController.abort(message);
+    }, FLOW_BUILDER_STREAM_MAX_DURATION_MS);
 
     let trackerDeltaCount = 0;
     let rawDeltaCount = 0;
@@ -149,6 +167,7 @@ export function registerFlowBuilderRoutes(app: Express, deps: PipelineRouteConte
         writeSseEvent(response, "error", { message });
       }
     } finally {
+      clearTimeout(maxDurationTimer);
       clearInterval(heartbeat);
       if (!closed) {
         response.end();

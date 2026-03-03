@@ -1203,6 +1203,10 @@ function shouldDisableClaudeCliTools(input: ProviderExecutionInput): boolean {
     return true;
   }
 
+  if (/^ai flow\b/i.test(input.step.name.trim())) {
+    return true;
+  }
+
   return false;
 }
 
