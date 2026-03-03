@@ -7,7 +7,7 @@ import {
 } from "../../src/components/dashboard/ai-builder/PlanPreview";
 
 describe("scrollContainerToBottom", () => {
-  it("uses smooth scrolling when scrollTo is available", () => {
+  it("scrolls to the bottom immediately and still uses smooth scrolling when available", () => {
     const scrollTo = vi.fn();
     const container = {
       scrollHeight: 960,
@@ -19,7 +19,7 @@ describe("scrollContainerToBottom", () => {
 
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollTo).toHaveBeenCalledWith({ top: 960, behavior: "smooth" });
-    expect(container.scrollTop).toBe(120);
+    expect(container.scrollTop).toBe(960);
   });
 
   it("falls back to direct scrollTop assignment when scrollTo is unavailable", () => {

@@ -45,11 +45,10 @@ interface ScrollContainer {
 }
 
 export function scrollContainerToBottom(container: ScrollContainer): void {
+  container.scrollTop = container.scrollHeight;
   if (typeof container.scrollTo === "function") {
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-    return;
   }
-  container.scrollTop = container.scrollHeight;
 }
 
 interface BooleanRef {
