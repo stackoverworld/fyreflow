@@ -41,7 +41,6 @@ export const defaultSchedule: FlowSchedule = {
   inputs: {} as Record<string, string>
 };
 
-export const orchestratorClaudeModel = "claude-sonnet-4-6";
 export const orchestratorContextWindowCap = 220_000;
 
 export const defaultContextTemplate =

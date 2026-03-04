@@ -5,13 +5,24 @@ export const NODE_HEIGHT = 116;
 export const NODE_COLLISION_GAP = 16;
 export const MAX_COLLISION_PASSES = 12;
 export const DELEGATION_SPINE_HEIGHT = 8;
-export const DELEGATION_CARD_HEIGHT = 56;
+export const DELEGATION_CARD_HEIGHT_BASE = 56;
+export const DELEGATION_CARD_ROW_HEIGHT = 24;
+export const DELEGATION_BADGES_PER_ROW = 4;
+
+export function delegationCardHeight(delegationCount: number): number {
+  const visibleCount = Math.min(delegationCount, 6);
+  const hasOverflow = delegationCount > 6;
+  const totalBadges = visibleCount + (hasOverflow ? 1 : 0);
+  const rows = Math.ceil(totalBadges / DELEGATION_BADGES_PER_ROW);
+  if (rows <= 1) return DELEGATION_CARD_HEIGHT_BASE;
+  return DELEGATION_CARD_HEIGHT_BASE + (rows - 1) * DELEGATION_CARD_ROW_HEIGHT;
+}
 export const DRAG_GRID_SIZE = 24;
 
 /** Total visual height of a node including its delegation sub-card. */
 export function nodeVisualHeight(node: FlowNode): number {
   return hasDelegationCard(node)
-    ? NODE_HEIGHT + DELEGATION_SPINE_HEIGHT + DELEGATION_CARD_HEIGHT
+    ? NODE_HEIGHT + DELEGATION_SPINE_HEIGHT + delegationCardHeight(node.delegationCount!)
     : NODE_HEIGHT;
 }
 
@@ -25,11 +36,12 @@ export function nodeDelegationRect(node: FlowNode): Rect | null {
   }
 
   const top = node.position.y + NODE_HEIGHT + DELEGATION_SPINE_HEIGHT;
+  const cardHeight = delegationCardHeight(node.delegationCount!);
   return {
     left: node.position.x,
     right: node.position.x + NODE_WIDTH,
     top,
-    bottom: top + DELEGATION_CARD_HEIGHT
+    bottom: top + cardHeight
   };
 }
 
@@ -83,44 +95,8 @@ export function expandRect(rect: Rect, padding: number): Rect {
   };
 }
 
-export function rangeOverlaps(a1: number, a2: number, b1: number, b2: number): boolean {
-  const minA = Math.min(a1, a2);
-  const maxA = Math.max(a1, a2);
-  const minB = Math.min(b1, b2);
-  const maxB = Math.max(b1, b2);
-  return maxA >= minB && maxB >= minA;
-}
-
-export function segmentIntersectsRect(start: Point, end: Point, rect: Rect): boolean {
-  if (start.x === end.x) {
-    return start.x >= rect.left && start.x <= rect.right && rangeOverlaps(start.y, end.y, rect.top, rect.bottom);
-  }
-
-  if (start.y === end.y) {
-    return start.y >= rect.top && start.y <= rect.bottom && rangeOverlaps(start.x, end.x, rect.left, rect.right);
-  }
-
-  return false;
-}
-
 export function rectsOverlap(a: Rect, b: Rect): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-export function rectFromPosition(position: { x: number; y: number }): Rect {
-  return {
-    left: position.x,
-    right: position.x + NODE_WIDTH,
-    top: position.y,
-    bottom: position.y + NODE_HEIGHT
-  };
-}
-
-export function rectCenter(rect: Rect): Point {
-  return {
-    x: (rect.left + rect.right) / 2,
-    y: (rect.top + rect.bottom) / 2
-  };
 }
 
 export function rectFromPoints(a: Point, b: Point): Rect {

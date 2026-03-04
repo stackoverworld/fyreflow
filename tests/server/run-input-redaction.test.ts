@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatRunInputsSummary } from "../../server/runInputs.js";
+import { extractInputKeysFromText, formatRunInputsSummary, replaceInputTokens } from "../../server/runInputs.js";
 import { redactContextForRunState } from "../../server/runner/scheduling/state.js";
 
 describe("run input redaction", () => {
@@ -33,5 +33,31 @@ describe("run input redaction", () => {
 
     expect(redacted).toContain("[REDACTED]");
     expect(redacted).not.toContain("sk-live-secret");
+  });
+
+  it("replaces both input and secret placeholders from run inputs", () => {
+    const rendered = replaceInputTokens(
+      [
+        "Repo: {{input.gitlab_repo}}",
+        "Token: {{secret.gitlab_token}}",
+        "Missing: {{secret.github_token}}"
+      ].join("\n"),
+      {
+        gitlab_repo: "group/project",
+        gitlab_token: "glpat-secret-token"
+      }
+    );
+
+    expect(rendered).toContain("Repo: group/project");
+    expect(rendered).toContain("Token: glpat-secret-token");
+    expect(rendered).toContain("Missing: MISSING_INPUT:github_token");
+  });
+
+  it("extracts keys from both input and secret token placeholders", () => {
+    const keys = extractInputKeysFromText(
+      "Use {{input.gitlab_repo}}, {{secret.gitlab_token}}, and {{input.gitlab_site_path}}."
+    );
+
+    expect(keys).toEqual(expect.arrayContaining(["gitlab_repo", "gitlab_token", "gitlab_site_path"]));
   });
 });

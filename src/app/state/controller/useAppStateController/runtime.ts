@@ -151,6 +151,9 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
     syncRunStatusNotifications(runs, runStatusSnapshotRef, notifyDesktop, {
       onRunCompleted: (run) => {
         setRunCompletionModal(buildRunCompletionModalContext(run));
+      },
+      onRunFailed: (run) => {
+        setRunCompletionModal(buildRunCompletionModalContext(run));
       }
     });
   }, [notifyDesktop, runStatusSnapshotRef, runs, setRunCompletionModal]);

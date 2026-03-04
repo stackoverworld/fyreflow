@@ -52,6 +52,7 @@ import { routeMatchesCondition } from "./runner/qualityGates.js";
 import { validateDeliveryCompletionGateTargets } from "./runner/qualityGateTargeting.js";
 import { resolveSkipIfArtifactsBypassReason } from "./runner/skipPolicy.js";
 import { validateStepSkipArtifactsQuality } from "./runner/policyProfiles.js";
+import { buildRuntimeInputRequestOutputFromFailure } from "./runner/inputRemediation.js";
 
 export { validateStepSkipArtifactsQuality } from "./runner/policyProfiles.js";
 
@@ -596,7 +597,19 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
         if (abortSignal?.aborted) {
           return stopForAbort(step, attempt);
         } else {
-          markStepFailed(store, runId, step, failureMessage, attempt);
+          const remediationOutput = buildRuntimeInputRequestOutputFromFailure({
+            step,
+            errorMessage: failureMessage,
+            runInputs
+          });
+          markStepFailed(store, runId, step, failureMessage, attempt, remediationOutput ?? undefined);
+          if (remediationOutput) {
+            appendRunLog(
+              store,
+              runId,
+              `${stepLabel} inferred recoverable input issue from runtime failure; prompting for updated inputs.`
+            );
+          }
         }
         await persistRunStateSnapshot(store, runId, runRootPath);
         return "stop";
@@ -615,7 +628,19 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
 
       const message = error instanceof Error ? error.message : "Unknown step execution error";
       if (step) {
-        markStepFailed(store, runId, step, message, attempt);
+        const remediationOutput = buildRuntimeInputRequestOutputFromFailure({
+          step,
+          errorMessage: message,
+          runInputs
+        });
+        markStepFailed(store, runId, step, message, attempt, remediationOutput ?? undefined);
+        if (remediationOutput) {
+          appendRunLog(
+            store,
+            runId,
+            `${normalizeStepLabel(step.name, step.id)} inferred recoverable input issue from runtime failure; prompting for updated inputs.`
+          );
+        }
       } else {
         appendRunLog(store, runId, `Failed ${stepId}: ${message}`);
       }

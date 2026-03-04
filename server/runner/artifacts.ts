@@ -78,18 +78,6 @@ export async function checkArtifactState(
   };
 }
 
-export async function checkArtifactsExist(
-  templates: string[],
-  storagePaths: StepStoragePaths,
-  runInputs: RunInputs
-): Promise<ArtifactExistenceCheck[]> {
-  const checks: ArtifactExistenceCheck[] = [];
-  for (const template of templates) {
-    checks.push(await checkArtifactExists(template, storagePaths, runInputs));
-  }
-  return checks;
-}
-
 export async function checkArtifactsState(
   templates: string[],
   storagePaths: StepStoragePaths,

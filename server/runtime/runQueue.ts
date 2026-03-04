@@ -30,8 +30,12 @@ export class RunPreflightError extends Error {
 
   constructor(failedChecks: SmartRunCheck[]) {
     const firstFailure = failedChecks[0];
+    const isRecoverableInputCompositionFailure =
+      Boolean(firstFailure?.id) && firstFailure.id.startsWith("input:url_");
     const message = firstFailure
-      ? `Run blocked by preflight: ${firstFailure.title}: ${firstFailure.message}`
+      ? isRecoverableInputCompositionFailure
+        ? `Run requires corrected runtime inputs: ${firstFailure.message}`
+        : `Run blocked by preflight: ${firstFailure.title}: ${firstFailure.message}`
       : "Run blocked by preflight checks.";
     super(message);
     this.name = "RunPreflightError";
@@ -46,6 +50,9 @@ export function isRunPreflightError(error: unknown): error is RunPreflightError 
 export function formatFailedPreflightCheck(check: SmartRunCheck | undefined): string {
   if (!check) {
     return "Unknown preflight failure.";
+  }
+  if (check.id.startsWith("input:url_")) {
+    return `Runtime inputs need correction: ${check.message}`;
   }
   return `${check.title}: ${check.message}`;
 }

@@ -773,10 +773,6 @@ export async function updateProvider(providerId: ProviderId, payload: Partial<Pr
   });
 }
 
-export async function listMcpServers() {
-  return request<{ mcpServers: McpServerConfig[] }>("/api/mcp-servers");
-}
-
 export async function createMcpServer(payload: McpServerPayload) {
   return request<{ mcpServer: McpServerConfig }>("/api/mcp-servers", {
     method: "POST",
@@ -946,18 +942,6 @@ export async function fetchStorageRawFileBlob(options: {
   return response.blob();
 }
 
-export function buildStorageRawFileUrl(options: {
-  pipelineId: string;
-  scope: StorageFilesScope;
-  runId?: string | null;
-  path: string;
-}): string {
-  return buildStorageRawUrl({
-    ...options,
-    directory: false
-  });
-}
-
 export function buildStorageRawDirectoryUrl(options: {
   pipelineId: string;
   scope: StorageFilesScope;
@@ -1113,16 +1097,6 @@ export async function startProviderOAuthLogin(providerId: ProviderId) {
     `/api/providers/${providerId}/oauth/start`,
     {
       method: "POST"
-    }
-  );
-}
-
-export async function submitProviderOAuthCode(providerId: ProviderId, code: string) {
-  return request<{ result: { message: string; accepted: boolean }; status: ProviderOAuthStatus }>(
-    `/api/providers/${providerId}/oauth/submit-code`,
-    {
-      method: "POST",
-      body: JSON.stringify({ code })
     }
   );
 }

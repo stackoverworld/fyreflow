@@ -29,11 +29,6 @@ export const defaultSchedule: NormalizedCronSchedule = {
   inputs: {}
 };
 
-export const scheduleModeSegments = [
-  { value: "smart" as const, label: "Smart Run" },
-  { value: "quick" as const, label: "Quick Run" }
-];
-
 export const presets: CronPreset[] = [
   { label: "Hourly", cron: "0 * * * *", timezone: "UTC", task: "Hourly scheduled run" },
   { label: "Daily 09:00", cron: "0 9 * * *", timezone: "UTC", task: "Daily scheduled run" },

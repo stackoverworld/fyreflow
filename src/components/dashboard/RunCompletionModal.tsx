@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, ExternalLink, FolderOpen, TerminalSquare, X } from "lucide-react";
+import { CheckCircle2, ClipboardList, ExternalLink, FolderOpen, TerminalSquare, X, XCircle } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/optics/button";
@@ -37,6 +37,7 @@ export function RunCompletionModal({
   const [revealState, setRevealState] = useState<"idle" | "opening" | "error">("idle");
   const runFolderPath = completion ? buildRunFolderPath(storageConfig, completion.runId) : null;
   const finishedAt = formatTimestamp(completion?.finishedAt);
+  const runFailed = completion?.status === "failed";
   const desktopBridge = typeof window !== "undefined" ? window.desktop : undefined;
   const canRevealPath = Boolean(
     runFolderPath &&
@@ -44,6 +45,24 @@ export function RunCompletionModal({
     typeof desktopBridge.revealPath === "function"
   );
   const revealButtonLabel = getRevealFolderButtonLabel(desktopBridge?.platform);
+  const statusLabel = runFailed ? "Run failed" : "Run completed";
+  const statusSummary = completion
+    ? runFailed
+      ? `${completion.completedSteps}/${completion.totalSteps} steps completed before failure`
+      : `${completion.completedSteps}/${completion.totalSteps} steps completed`
+    : null;
+  const taskSummary = completion
+    ? completion.task.trim().length > 0
+      ? completion.task
+      : runFailed
+        ? "Run failed without a task description."
+        : "Run completed without a task description."
+    : "";
+  const outputLabel = runFailed ? "Last output before failure" : "Final output";
+  const sectionTitle = runFailed ? "What happened" : "What was done";
+  const runPanelDetails = runFailed
+    ? "Open the Run panel and expand this entry under Recent runs to inspect step outputs, provider logs, and retry with corrected inputs."
+    : "Open the Run panel and expand this entry under Recent runs to inspect full step outputs and logs.";
 
   useEffect(() => {
     if (!open) {
@@ -92,17 +111,21 @@ export function RunCompletionModal({
               className="glass-panel-dense w-full max-w-[620px] overflow-hidden rounded-2xl border border-ink-700/40"
               role="dialog"
               aria-modal="true"
-              aria-label="Run completed"
+              aria-label={statusLabel}
             >
               <header className="flex items-start justify-between gap-3 border-b border-ink-800 px-4 py-3">
                 <div>
-                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Run completed
+                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-400">
+                    {runFailed ? (
+                      <XCircle className="h-3.5 w-3.5 text-red-400" />
+                    ) : (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                    )}
+                    {statusLabel}
                   </p>
                   <h2 className="mt-1 text-sm font-semibold text-ink-100">{completion.pipelineName}</h2>
                   <p className="mt-1 text-xs text-ink-400">
-                    {completion.completedSteps}/{completion.totalSteps} steps completed
+                    {statusSummary}
                     {finishedAt ? ` · Finished ${finishedAt}` : ""}
                   </p>
                 </div>
@@ -120,20 +143,45 @@ export function RunCompletionModal({
                 <section className="space-y-4">
                   <div className="flex items-center gap-2 text-ink-400">
                     <ClipboardList className="h-3.5 w-3.5" />
-                    <span className="text-[11px] font-semibold uppercase tracking-wider">What was done</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider">{sectionTitle}</span>
                   </div>
 
                   <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
-                    <p className="text-xs font-medium text-ink-200">
-                      {completion.task.trim().length > 0 ? completion.task : "Run completed without a task description."}
-                    </p>
+                    <p className="text-xs font-medium text-ink-200">{taskSummary}</p>
                     <p className="mt-1 text-[11px] text-ink-500">Run ID: {completion.runId}</p>
+                    {runFailed ? (
+                      <div className="mt-2 flex items-start gap-1.5 rounded-md bg-[var(--surface-overlay)] px-2.5 py-2">
+                        <XCircle className="mt-px h-3.5 w-3.5 shrink-0 text-red-400" />
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-500">
+                            Failure reason{completion.failureStepName ? ` · ${completion.failureStepName}` : ""}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-ink-300">
+                            {completion.failureReason ?? "Run failed before returning a specific reason."}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+
+                  {runFailed && completion.failureDetails && completion.failureDetails.length > 0 ? (
+                    <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Recent failure signals</p>
+                      <ol className="mt-2 space-y-2">
+                        {completion.failureDetails.map((detail, index) => (
+                          <li key={`${completion.runId}-failure-${index}`} className="border-l-2 border-l-ink-700 pl-3 py-1">
+                            <p className="text-[11px] text-ink-300">{detail}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  ) : null}
 
                   {completion.finalOutputPreview ? (
                     <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                        Final output{completion.finalStepName ? ` · ${completion.finalStepName}` : ""}
+                        {outputLabel}
+                        {completion.finalStepName ? ` · ${completion.finalStepName}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-ink-300">{completion.finalOutputPreview}</p>
                     </div>
@@ -145,14 +193,14 @@ export function RunCompletionModal({
                 <section className="space-y-3">
                   <div className="flex items-center gap-2 text-ink-400">
                     <FolderOpen className="h-3.5 w-3.5" />
-                    <span className="text-[11px] font-semibold uppercase tracking-wider">Where to find results</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider">
+                      {runFailed ? "Where to inspect failure" : "Where to find results"}
+                    </span>
                   </div>
 
                   <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-raised)] px-3 py-2.5">
                     <p className="text-xs font-medium text-ink-200">Run panel</p>
-                    <p className="mt-1 text-[11px] text-ink-500">
-                      Open the Run panel and expand this entry under Recent runs to inspect full step outputs and logs.
-                    </p>
+                    <p className="mt-1 text-[11px] text-ink-500">{runPanelDetails}</p>
                   </div>
 
                   {runFolderPath ? (

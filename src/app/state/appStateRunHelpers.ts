@@ -85,7 +85,8 @@ export function selectRuntimeInputPromptCandidateRuns(runs: DashboardState["runs
         run.status === "running" ||
         run.status === "queued" ||
         run.status === "paused" ||
-        run.status === "awaiting_approval"
+        run.status === "awaiting_approval" ||
+        run.status === "failed"
     )
     .slice(0, 20);
 }

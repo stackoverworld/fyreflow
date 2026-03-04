@@ -1,4 +1,3 @@
-import type { McpServerConfig } from "@/lib/types";
 import type { McpServerTemplate } from "@/lib/mcpTemplates";
 
 export interface McpDraft {
@@ -26,21 +25,6 @@ export const HEALTH_DOT: Record<McpDraft["health"], string> = {
   degraded: "bg-amber-400",
   down: "bg-red-500"
 };
-
-export function toServerDraft(server: McpServerConfig): McpDraft {
-  return {
-    name: server.name,
-    enabled: server.enabled,
-    transport: server.transport,
-    command: server.command,
-    args: server.args,
-    url: server.url,
-    env: server.env,
-    headers: server.headers,
-    toolAllowlist: server.toolAllowlist,
-    health: server.health
-  };
-}
 
 export function createNewServerDraft(): McpDraft {
   return {

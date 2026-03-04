@@ -124,14 +124,6 @@ export async function isCommandAvailable(command: string): Promise<boolean> {
   }
 }
 
-export function launchDetached(command: string, args: string[]): void {
-  const child = spawn(command, args, {
-    detached: true,
-    stdio: "ignore"
-  });
-  child.unref();
-}
-
 export async function launchDetachedAndCapture(
   command: string,
   args: string[],

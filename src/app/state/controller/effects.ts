@@ -30,6 +30,7 @@ interface UseDesktopNotificationCallbackArgs {
 
 interface RunStatusNotificationOptions {
   onRunCompleted?: (run: PipelineRun) => void;
+  onRunFailed?: (run: PipelineRun) => void;
 }
 
 function isUnauthorizedMessage(rawMessage: string): boolean {
@@ -121,6 +122,7 @@ export function syncRunStatusNotifications(
       const failedStep = [...run.steps].reverse().find((step) => step.status === "failed");
       const latestLogLine = [...run.logs].reverse().find((entry) => entry.trim().length > 0);
       notifyDesktop("runFailed", `Flow failed: ${run.pipelineName}`, failedStep?.error ?? latestLogLine ?? "Run failed.");
+      options?.onRunFailed?.(run);
       continue;
     }
 

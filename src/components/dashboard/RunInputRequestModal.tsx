@@ -21,12 +21,85 @@ interface RunInputRequestModalProps {
 }
 
 const CUSTOM_VALUE = "__custom__";
+export const MASKED_SECRET_INPUT_VALUE = "[secure]";
+const REPO_SLUG_REGEX = /^[^/\s]+(?:\/[^/\s]+)+$/;
+const REPO_HINT_REGEX = /(owner\/repo|repo format|without protocol|nested url)/i;
+const RELATIVE_PATH_HINT_REGEX = /(without leading ["/]?\/["/]?|no leading \/|relative path)/i;
 
-function isRequiredMissing(request: RunInputRequest, values: Record<string, string>): boolean {
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function formatRequestTypeLabel(type: RunInputRequest["type"]): string {
+  if (type === "multiline") return "Multiline";
+  if (type === "secret") return "Secret";
+  if (type === "path") return "Path";
+  if (type === "url") return "URL";
+  if (type === "select") return "Select";
+  return "Text";
+}
+
+export function normalizeSeededInputValue(request: RunInputRequest, seededRaw: string): string {
+  const trimmed = seededRaw.trim();
+  if (request.type === "secret" && trimmed === MASKED_SECRET_INPUT_VALUE) {
+    return MASKED_SECRET_INPUT_VALUE;
+  }
+  if (trimmed === MASKED_SECRET_INPUT_VALUE) {
+    return "";
+  }
+  return trimmed;
+}
+
+export function isRequiredMissing(request: RunInputRequest, values: Record<string, string>): boolean {
   if (!request.required) {
     return false;
   }
-  return (values[request.key] ?? "").trim().length === 0;
+
+  const normalized = (values[request.key] ?? "").trim();
+  if (request.type === "secret" && normalized === MASKED_SECRET_INPUT_VALUE) {
+    return false;
+  }
+
+  return normalized.length === 0;
+}
+
+export function getRequestValidationError(request: RunInputRequest, values: Record<string, string>): string | null {
+  const value = (values[request.key] ?? "").trim();
+  if (value.length === 0) {
+    return null;
+  }
+
+  if (request.type === "secret") {
+    return null;
+  }
+
+  const repoHint = REPO_HINT_REGEX.test(`${request.reason} ${request.placeholder ?? ""}`);
+  const relativePathHint = RELATIVE_PATH_HINT_REGEX.test(`${request.reason} ${request.placeholder ?? ""}`);
+
+  if (/repo|repository/i.test(request.key) && repoHint) {
+    if (/https?:\/\/|ssh:\/\/|git@/i.test(value)) {
+      return 'Expected owner/repo format without protocol (example: "org/project").';
+    }
+    if (!REPO_SLUG_REGEX.test(value)) {
+      return 'Use owner/repo format (example: "org/project").';
+    }
+    return null;
+  }
+
+  if (request.type === "url" && !isValidHttpUrl(value)) {
+    return "Enter a valid URL starting with https://";
+  }
+
+  if (request.type === "path" && relativePathHint && /^\/+/.test(value)) {
+    return 'Use a relative path without leading "/"';
+  }
+
+  return null;
 }
 
 export function RunInputRequestModal({
@@ -55,7 +128,7 @@ export function RunInputRequestModal({
     for (const request of requests) {
       const key = request.key;
       const seededRaw = initialValues?.[key] ?? request.defaultValue ?? "";
-      const seededValue = seededRaw === "[secure]" ? "" : seededRaw.trim();
+      const seededValue = normalizeSeededInputValue(request, seededRaw);
 
       if (request.type === "select" && request.options && request.options.length > 0) {
         const matching = request.options.find((option) => option.value === seededValue);
@@ -82,7 +155,14 @@ export function RunInputRequestModal({
     () => requests.filter((request) => isRequiredMissing(request, values)),
     [requests, values]
   );
-  const canConfirm = !busy && missingRequired.length === 0;
+  const invalidFields = useMemo(
+    () =>
+      requests
+        .map((request) => ({ request, error: getRequestValidationError(request, values) }))
+        .filter((entry): entry is { request: RunInputRequest; error: string } => Boolean(entry.error)),
+    [requests, values]
+  );
+  const canConfirm = !busy && missingRequired.length === 0 && invalidFields.length === 0;
 
   return (
     <AnimatePresence>
@@ -155,12 +235,16 @@ export function RunInputRequestModal({
                       const showSelect = request.type === "select" && (request.options?.length ?? 0) > 0;
                       const useCustomInput = showSelect && selectChoice[key] === CUSTOM_VALUE;
                       const missing = isRequiredMissing(request, values);
+                      const validationError = missing ? null : getRequestValidationError(request, values);
 
                       return (
                         <label key={key} className="block space-y-1.5">
                           <span className="flex items-center gap-1 text-xs text-ink-300">
                             {request.label}
                             {request.required ? <span className="text-red-400">*</span> : null}
+                            <span className="ml-1 rounded border border-ink-700 bg-ink-900/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-500">
+                              {formatRequestTypeLabel(request.type)}
+                            </span>
                           </span>
 
                           {showSelect ? (
@@ -243,7 +327,11 @@ export function RunInputRequestModal({
                           ) : (
                             <Input
                               type={request.type === "secret" ? "password" : request.type === "url" ? "url" : "text"}
-                              value={values[key] ?? ""}
+                              value={
+                                request.type === "secret" && (values[key] ?? "") === MASKED_SECRET_INPUT_VALUE
+                                  ? ""
+                                  : (values[key] ?? "")
+                              }
                               disabled={busy}
                               onChange={(event) =>
                                 setValues((current) => ({
@@ -251,12 +339,17 @@ export function RunInputRequestModal({
                                   [key]: event.target.value
                                 }))
                               }
-                              placeholder={request.placeholder}
+                              placeholder={
+                                request.type === "secret" && (values[key] ?? "") === MASKED_SECRET_INPUT_VALUE
+                                  ? "Stored securely (leave empty to reuse)"
+                                  : request.placeholder
+                              }
                             />
                           )}
 
                           <p className="text-[11px] text-ink-500">{request.reason}</p>
                           {missing ? <p className="text-[11px] text-red-400">Required field is empty.</p> : null}
+                          {validationError ? <p className="text-[11px] text-red-400">{validationError}</p> : null}
                         </label>
                       );
                     })}
@@ -271,6 +364,13 @@ export function RunInputRequestModal({
                   <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     Missing required: {missingRequired.map((entry) => entry.label).join(", ")}
+                  </div>
+                ) : null}
+
+                {invalidFields.length > 0 ? (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    Invalid format: {invalidFields.map((entry) => entry.request.label).join(", ")}
                   </div>
                 ) : null}
               </div>

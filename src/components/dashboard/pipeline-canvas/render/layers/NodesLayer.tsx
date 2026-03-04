@@ -3,7 +3,7 @@ import { Badge } from "@/components/optics/badge";
 import { AnthropicIcon, OpenAIIcon } from "@/components/optics/icons";
 import { cn } from "@/lib/cn";
 import type { ProviderId } from "@/lib/types";
-import { DELEGATION_CARD_HEIGHT, DELEGATION_SPINE_HEIGHT, NODE_HEIGHT, NODE_WIDTH } from "../../useNodeLayout";
+import { delegationCardHeight, DELEGATION_SPINE_HEIGHT, NODE_HEIGHT, NODE_WIDTH } from "../../useNodeLayout";
 import { isMultiSelectModifier } from "../../selectionState";
 import type { NodesLayerProps } from "./types";
 
@@ -297,7 +297,7 @@ export function NodesLayer({
                 style={{
                   top: NODE_HEIGHT + DELEGATION_SPINE_HEIGHT,
                   width: NODE_WIDTH,
-                  height: DELEGATION_CARD_HEIGHT
+                  height: delegationCardHeight(node.delegationCount!)
                 }}
               >
                 <div className="mb-1.5 flex items-center gap-1.5">

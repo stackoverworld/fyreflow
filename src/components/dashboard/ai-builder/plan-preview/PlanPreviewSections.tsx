@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
@@ -12,6 +12,7 @@ import {
 } from "./planPreviewFormatters";
 
 const transition = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
+const metaTransition = { duration: 0.24, ease: [0.16, 1, 0.3, 1] as const };
 
 type HeadingBlock = Extract<MarkdownBlock, { type: "heading" }>;
 type ParagraphBlock = Extract<MarkdownBlock, { type: "paragraph" }>;
@@ -31,20 +32,29 @@ function HeadingSection({ block, index, trailingDot }: { block: HeadingBlock; in
   return (
     <p className={headingClass}>
       {renderInlineMarkdown(block.text, `md-heading-${index}`)}
-      {trailingDot ? <StreamingDot /> : null}
+      {trailingDot ? <ThinkingIndicator inline /> : null}
     </p>
   );
 }
 
-const StreamingDot = () => (
-  <span className="ml-1 inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-ember-400 align-middle" />
-);
+function ThinkingIndicator({ inline = false }: { inline?: boolean }) {
+  return (
+    <span className={cn("inline-flex items-center align-middle text-[11px] font-medium text-ink-500", inline ? "ml-1" : null)}>
+      <span className="shiny-text">Thinking</span>
+      <span aria-hidden className="ml-0.5 inline-flex text-ink-600">
+        <span className="animate-pulse [animation-delay:0ms]">.</span>
+        <span className="animate-pulse [animation-delay:120ms]">.</span>
+        <span className="animate-pulse [animation-delay:240ms]">.</span>
+      </span>
+    </span>
+  );
+}
 
 function ParagraphSection({ block, index, trailingDot }: { block: ParagraphBlock; index: number; trailingDot?: boolean }) {
   return (
     <p className="break-words text-[13px]">
       {renderInlineMarkdownWithLineBreaks(block.lines.join("\n"), `md-paragraph-${index}`)}
-      {trailingDot ? <StreamingDot /> : null}
+      {trailingDot ? <ThinkingIndicator inline /> : null}
     </p>
   );
 }
@@ -55,7 +65,7 @@ function UnorderedListSection({ block, index, trailingDot }: { block: UnorderedL
       {block.items.map((item, itemIndex) => (
         <li key={`md-ul-${index}-item-${itemIndex}`} className="break-words text-[13px]">
           {renderInlineMarkdown(item, `md-ul-${index}-item-${itemIndex}`)}
-          {trailingDot && itemIndex === block.items.length - 1 ? <StreamingDot /> : null}
+          {trailingDot && itemIndex === block.items.length - 1 ? <ThinkingIndicator inline /> : null}
         </li>
       ))}
     </ul>
@@ -68,7 +78,7 @@ function OrderedListSection({ block, index, trailingDot }: { block: OrderedListB
       {block.items.map((item, itemIndex) => (
         <li key={`md-ol-${index}-item-${itemIndex}`} className="break-words text-[13px]">
           {renderInlineMarkdown(item, `md-ol-${index}-item-${itemIndex}`)}
-          {trailingDot && itemIndex === block.items.length - 1 ? <StreamingDot /> : null}
+          {trailingDot && itemIndex === block.items.length - 1 ? <ThinkingIndicator inline /> : null}
         </li>
       ))}
     </ol>
@@ -79,7 +89,7 @@ function BlockquoteSection({ block, index, trailingDot }: { block: BlockquoteBlo
   return (
     <blockquote className="border-l-2 border-ink-700 pl-3 text-ink-300">
       {renderInlineMarkdownWithLineBreaks(block.lines.join("\n"), `md-quote-${index}`)}
-      {trailingDot ? <StreamingDot /> : null}
+      {trailingDot ? <ThinkingIndicator inline /> : null}
     </blockquote>
   );
 }
@@ -111,7 +121,7 @@ export function MarkdownContent({ content, streaming = false }: { content: strin
     return (
       <p className="whitespace-pre-wrap break-words text-[13px]">
         {content}
-        {streaming ? <StreamingDot /> : null}
+        {streaming ? <ThinkingIndicator inline /> : null}
       </p>
     );
   }
@@ -184,7 +194,8 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
           ? "Flow rebuild"
           : null;
 
-  const showBadge = isAssistant && (actionLabel ?? isNativeStreaming);
+  const showBadge = isAssistant && !isNativeStreaming;
+  const showTimestamp = !isNativeStreaming;
 
   return (
     <motion.div
@@ -203,16 +214,25 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
               : "text-ink-200"
         )}
       >
-        {showBadge ? (
-          <div className="mb-1">
-            <Badge variant="neutral">{actionLabel ?? "Answer"}</Badge>
-          </div>
-        ) : null}
+        <AnimatePresence initial={false}>
+          {showBadge ? (
+            <motion.div
+              key="assistant-badge"
+              initial={{ opacity: 0, y: 3 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -2 }}
+              transition={metaTransition}
+              className="mb-1"
+            >
+              <Badge variant="neutral">{actionLabel ?? "Answer"}</Badge>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         {isUser || isError ? (
           <p className="whitespace-pre-wrap break-words text-[13px]">{message.content}</p>
         ) : nativeStreamingWaiting ? (
-          <StreamingDot />
+          <ThinkingIndicator />
         ) : nativeStreamingActive ? (
           <MarkdownContent content={message.content} streaming />
         ) : (
@@ -257,7 +277,20 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
           </div>
         ) : null}
 
-        <p className="mt-1 text-[10px] text-ink-600">{new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+        <AnimatePresence initial={false}>
+          {showTimestamp ? (
+            <motion.p
+              key="message-time"
+              initial={{ opacity: 0, y: 3 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -2 }}
+              transition={metaTransition}
+              className="mt-1 text-[10px] text-ink-600"
+            >
+              {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </motion.p>
+          ) : null}
+        </AnimatePresence>
       </div>
     </motion.div>
   );
@@ -266,7 +299,7 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
 export function PlanPreviewGeneratingIndicator() {
   return (
     <div className="px-3 py-2">
-      <span className="shiny-text text-xs font-medium">Thinking...</span>
+      <ThinkingIndicator />
     </div>
   );
 }

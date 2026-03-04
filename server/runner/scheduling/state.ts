@@ -233,14 +233,23 @@ export function markStepCompleted(
   });
 }
 
-export function markStepFailed(store: LocalStore, runId: string, step: PipelineStep, error: string, attempt: number): void {
+export function markStepFailed(
+  store: LocalStore,
+  runId: string,
+  step: PipelineStep,
+  error: string,
+  attempt: number,
+  output?: string
+): void {
   store.updateRun(runId, (run) => {
     const stepLabel = normalizeStepLabel(step.name, step.id);
     const nextRun = updateRunStep(run, step, (current) => ({
       ...current,
       status: "failed",
       attempts: attempt,
+      workflowOutcome: "fail",
       error,
+      output: typeof output === "string" && output.trim().length > 0 ? output : current.output,
       qualityGateResults: [],
       finishedAt: nowIso()
     }));

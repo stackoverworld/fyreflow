@@ -336,6 +336,7 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
               runId: previewRun?.id ?? "test-run-preview",
               pipelineId: previewRun?.pipelineId ?? "test-pipeline-preview",
               pipelineName: previewRun?.pipelineName ?? "Test Run Completion Preview",
+              status: "completed",
               task:
                 previewRun?.task && previewRun.task.trim().length > 0
                   ? previewRun.task

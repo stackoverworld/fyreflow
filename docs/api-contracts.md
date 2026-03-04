@@ -269,3 +269,8 @@
 - Relative artifact templates may still use `output_dir`, but resolution is now confined to the run storage root to prevent path escape outside pipeline storage.
 - Provider SSE readers now enforce idle timeout via `LLM_STREAM_IDLE_TIMEOUT_MS` (default 90s, min 1s, max 10m) and fail stalled streams deterministically.
 - Claude CLI dangerous permission bypass defaults to enabled (`CLAUDE_CLI_SKIP_PERMISSIONS` defaults to `1`); set it to `0` to force explicit permission mode.
+- Prompt/context token replacement now supports both `{{input.<key>}}` and `{{secret.<key>}}`; both resolve against merged runtime inputs.
+- Smart-run preflight now validates rendered URL composition in prompts/context and surfaces malformed nested URLs as deterministic checks.
+- Startup-check maps recoverable input-composition failures to `needs_input` requests (with suggested fields/defaults) so clients can remediate via modal instead of hard preflight block messaging.
+- Recovery input requests now include format-oriented guidance in `reason`/`placeholder` (for example `owner/repo` and relative-path hints) to reduce invalid retries.
+- Runtime step failures that match recoverable auth/network/malformed-endpoint patterns now emit structured `needs_input` payloads with inferred `input_requests`, enabling modal-based remediation/restart flow.

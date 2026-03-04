@@ -7,7 +7,7 @@ import {
 } from "../../src/components/dashboard/ai-builder/PlanPreview";
 
 describe("scrollContainerToBottom", () => {
-  it("scrolls to the bottom immediately and still uses smooth scrolling when available", () => {
+  it("uses direct scrollTop assignment when scrollTo is available", () => {
     const scrollTo = vi.fn();
     const container = {
       scrollHeight: 960,
@@ -17,8 +17,7 @@ describe("scrollContainerToBottom", () => {
 
     scrollContainerToBottom(container);
 
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 960, behavior: "smooth" });
+    expect(scrollTo).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(960);
   });
 
@@ -45,7 +44,8 @@ describe("scrollContainerToBottom", () => {
     cancelPendingRestoreAndScrollToBottom(container, pendingRestoreRef);
 
     expect(pendingRestoreRef.current).toBe(false);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 720, behavior: "smooth" });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(720);
   });
 });
 
@@ -54,9 +54,11 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 32,
+        generating: false,
         hasOlderMessages: true,
         loadingOlderMessages: false,
-        pendingScrollRestore: false
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
       })
     ).toBe(true);
   });
@@ -65,9 +67,11 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 64,
+        generating: false,
         hasOlderMessages: true,
         loadingOlderMessages: false,
-        pendingScrollRestore: false
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
       })
     ).toBe(true);
   });
@@ -76,9 +80,11 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 0,
+        generating: false,
         hasOlderMessages: true,
         loadingOlderMessages: true,
-        pendingScrollRestore: false
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
       })
     ).toBe(false);
   });
@@ -87,9 +93,24 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 0,
+        generating: false,
         hasOlderMessages: true,
         loadingOlderMessages: false,
-        pendingScrollRestore: true
+        pendingScrollRestore: true,
+        suppressAutoLoad: false
+      })
+    ).toBe(false);
+  });
+
+  it("returns false while auto-load is temporarily suppressed", () => {
+    expect(
+      shouldAutoLoadOlderMessages({
+        scrollTop: 0,
+        generating: false,
+        hasOlderMessages: true,
+        loadingOlderMessages: false,
+        pendingScrollRestore: false,
+        suppressAutoLoad: true
       })
     ).toBe(false);
   });
@@ -98,9 +119,11 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 128,
+        generating: false,
         hasOlderMessages: true,
         loadingOlderMessages: false,
-        pendingScrollRestore: false
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
       })
     ).toBe(false);
   });
@@ -109,9 +132,24 @@ describe("shouldAutoLoadOlderMessages", () => {
     expect(
       shouldAutoLoadOlderMessages({
         scrollTop: 0,
+        generating: false,
         hasOlderMessages: false,
         loadingOlderMessages: false,
-        pendingScrollRestore: false
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
+      })
+    ).toBe(false);
+  });
+
+  it("returns false while the assistant is generating", () => {
+    expect(
+      shouldAutoLoadOlderMessages({
+        scrollTop: 0,
+        generating: true,
+        hasOlderMessages: true,
+        loadingOlderMessages: false,
+        pendingScrollRestore: false,
+        suppressAutoLoad: false
       })
     ).toBe(false);
   });

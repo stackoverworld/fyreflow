@@ -1,13 +1,5 @@
 import type { ProviderConfig } from "./types.js";
 
-export function hasActiveClaudeApiKey(provider: ProviderConfig): boolean {
-  if (provider.id !== "claude") {
-    return false;
-  }
-
-  return provider.authMode === "api_key" && provider.apiKey.trim().length > 0;
-}
-
 export function canClaudeUseFastMode(provider: ProviderConfig): boolean {
   if (provider.id !== "claude") {
     return false;

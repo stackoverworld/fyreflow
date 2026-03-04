@@ -562,14 +562,6 @@ function resolveProfilesForStep(step: PipelineStep): StepPolicyProfileDefinition
   return selectedProfiles;
 }
 
-export function listAvailablePolicyProfiles(): Array<{ id: string; summary: string }> {
-  return POLICY_PROFILES.map((profile) => ({ id: profile.id, summary: profile.summary }));
-}
-
-export function resolvePolicyProfileIdsForStep(step: PipelineStep): string[] {
-  return resolveProfilesForStep(step).map((profile) => profile.id);
-}
-
 export function resolveCacheBypassInputKeysForStep(step: PipelineStep): string[] {
   const profileDefaults = resolveProfilesForStep(step).flatMap((profile) => profile.defaultCacheBypassInputKeys ?? []);
   const stepKeys = Array.isArray(step.cacheBypassInputKeys)

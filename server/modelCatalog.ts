@@ -233,10 +233,6 @@ export const MODEL_CATALOG: Record<ProviderId, ModelCatalogEntry[]> = {
   claude: claudeModels
 };
 
-export function modelCatalogForProvider(providerId: ProviderId): ModelCatalogEntry[] {
-  return MODEL_CATALOG[providerId];
-}
-
 export function getModelEntry(providerId: ProviderId, modelId: string): ModelCatalogEntry | undefined {
   return MODEL_CATALOG[providerId].find((entry) => entry.id === modelId);
 }

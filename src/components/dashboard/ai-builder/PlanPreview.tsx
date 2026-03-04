@@ -41,14 +41,10 @@ export function shouldStartSyntheticStreaming({
 interface ScrollContainer {
   scrollHeight: number;
   scrollTop: number;
-  scrollTo?: (options: ScrollToOptions) => void;
 }
 
 export function scrollContainerToBottom(container: ScrollContainer): void {
   container.scrollTop = container.scrollHeight;
-  if (typeof container.scrollTo === "function") {
-    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }
 }
 
 interface BooleanRef {
@@ -65,20 +61,24 @@ export function cancelPendingRestoreAndScrollToBottom(
 
 interface AutoLoadOlderMessagesInput {
   scrollTop: number;
+  generating: boolean;
   hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
   pendingScrollRestore: boolean;
+  suppressAutoLoad: boolean;
 }
 
 const LOAD_OLDER_TOP_THRESHOLD = 64;
 
 export function shouldAutoLoadOlderMessages({
   scrollTop,
+  generating,
   hasOlderMessages,
   loadingOlderMessages,
-  pendingScrollRestore
+  pendingScrollRestore,
+  suppressAutoLoad
 }: AutoLoadOlderMessagesInput): boolean {
-  if (!hasOlderMessages || loadingOlderMessages || pendingScrollRestore) {
+  if (generating || !hasOlderMessages || loadingOlderMessages || pendingScrollRestore || suppressAutoLoad) {
     return false;
   }
   return scrollTop <= LOAD_OLDER_TOP_THRESHOLD;
@@ -99,6 +99,8 @@ export function PlanPreview({
   const pendingScrollRestoreRef = useRef(false);
   const previousScrollTopRef = useRef(0);
   const previousScrollHeightRef = useRef(0);
+  const suppressAutoLoadUntilRef = useRef(0);
+  const latestSnapTimeoutRef = useRef<number | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const showScrollDownRef = useRef(false);
   const hasNativeStreaming = useMemo(() => messages.some((m) => m.streaming === true), [messages]);
@@ -116,6 +118,14 @@ export function PlanPreview({
     }, 150);
     return () => clearInterval(interval);
   }, [hasNativeStreaming]);
+
+  useEffect(() => {
+    return () => {
+      if (latestSnapTimeoutRef.current !== null) {
+        window.clearTimeout(latestSnapTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const requestOlderMessages = useCallback(() => {
     const container = containerRef.current;
@@ -137,11 +147,14 @@ export function PlanPreview({
     if (pendingScrollRestoreRef.current && el.scrollTop > 96) {
       pendingScrollRestoreRef.current = false;
     }
+    const suppressAutoLoad = suppressAutoLoadUntilRef.current > Date.now();
     if (shouldAutoLoadOlderMessages({
       scrollTop: el.scrollTop,
+      generating,
       hasOlderMessages,
       loadingOlderMessages,
-      pendingScrollRestore: pendingScrollRestoreRef.current
+      pendingScrollRestore: pendingScrollRestoreRef.current,
+      suppressAutoLoad
     })) {
       requestOlderMessages();
     }
@@ -153,25 +166,36 @@ export function PlanPreview({
       showScrollDownRef.current = shouldShow;
       setShowScrollDown(shouldShow);
     }
-  }, [hasOlderMessages, loadingOlderMessages, requestOlderMessages]);
+  }, [generating, hasOlderMessages, loadingOlderMessages, requestOlderMessages]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const suppressAutoLoad = suppressAutoLoadUntilRef.current > Date.now();
     if (shouldAutoLoadOlderMessages({
       scrollTop: container.scrollTop,
+      generating,
       hasOlderMessages,
       loadingOlderMessages,
-      pendingScrollRestore: pendingScrollRestoreRef.current
+      pendingScrollRestore: pendingScrollRestoreRef.current,
+      suppressAutoLoad
     })) {
       requestOlderMessages();
     }
-  }, [hasOlderMessages, loadingOlderMessages, messages.length, requestOlderMessages]);
+  }, [generating, hasOlderMessages, loadingOlderMessages, messages.length, requestOlderMessages]);
 
   const scrollToBottom = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+    suppressAutoLoadUntilRef.current = Date.now() + 750;
     cancelPendingRestoreAndScrollToBottom(container, pendingScrollRestoreRef);
+    if (latestSnapTimeoutRef.current !== null) {
+      window.clearTimeout(latestSnapTimeoutRef.current);
+    }
+    latestSnapTimeoutRef.current = window.setTimeout(() => {
+      latestSnapTimeoutRef.current = null;
+      container.scrollTop = container.scrollHeight;
+    }, 700);
     showScrollDownRef.current = false;
     setShowScrollDown(false);
   }, []);

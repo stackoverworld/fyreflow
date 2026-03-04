@@ -21,12 +21,16 @@ export interface RunCompletionModalContext {
   runId: string;
   pipelineId: string;
   pipelineName: string;
+  status: "completed" | "failed";
   task: string;
   completedSteps: number;
   totalSteps: number;
   finishedAt?: string;
   finalStepName?: string;
   finalOutputPreview?: string;
+  failureStepName?: string;
+  failureReason?: string;
+  failureDetails?: string[];
 }
 
 export interface UseAppStateOptions {

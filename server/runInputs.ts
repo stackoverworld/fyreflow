@@ -2,7 +2,7 @@ export interface RunInputs {
   [key: string]: string;
 }
 
-const INPUT_TOKEN_REGEX = /\{\{\s*input\.([a-zA-Z0-9._-]+)\s*\}\}/g;
+const INPUT_TOKEN_REGEX = /\{\{\s*(?:input|secret)\.([a-zA-Z0-9._-]+)\s*\}\}/g;
 const KEY_SEPARATOR_REGEX = /[.\-\s]+/g;
 const EDGE_UNDERSCORE_REGEX = /^_+|_+$/g;
 const DUPLICATE_UNDERSCORE_REGEX = /_+/g;

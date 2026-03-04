@@ -6,11 +6,6 @@ export type ProviderDrafts = Record<ProviderId, ProviderConfig>;
 
 export const PROVIDER_ORDER: ProviderId[] = ["openai", "claude"];
 
-export const PROVIDER_DISPLAY_LABEL: Record<ProviderId, string> = {
-  openai: "OpenAI / Codex",
-  claude: "Anthropic"
-};
-
 export function getProviderModelOptions(providerId: ProviderId) {
   return MODEL_CATALOG[providerId].map(toModelSelectOption);
 }

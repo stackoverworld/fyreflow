@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { DashboardState, PipelinePayload, PipelineRun, PipelineScheduleConfig } from "@/lib/types";
+import type { DashboardState, PipelinePayload, PipelineRun } from "@/lib/types";
 import {
   selectActivePipelineRun,
   selectActiveRunPipelineIds,
@@ -12,7 +12,6 @@ import {
   selectRuntimeDraft,
   selectRunStateFlags,
   selectScheduleDraft,
-  selectScheduleRunPlanSignature,
   selectSelectedPipeline
 } from "./stateSelectors";
 
@@ -154,17 +153,4 @@ export function useAppStateControllerDerivedState(args: UseAppStateControllerDer
     aiWorkflowKey,
     autosaveStatusLabel
   };
-}
-
-interface UseScheduleRunPlanSignatureArgs {
-  selectedPipelineId: string | null;
-  scheduleDraft: PipelineScheduleConfig;
-}
-
-export function useScheduleRunPlanSignature(args: UseScheduleRunPlanSignatureArgs): string {
-  const { selectedPipelineId, scheduleDraft } = args;
-
-  return useMemo(() => {
-    return selectScheduleRunPlanSignature(selectedPipelineId, scheduleDraft.runMode, scheduleDraft.inputs);
-  }, [scheduleDraft.inputs, scheduleDraft.runMode, selectedPipelineId]);
 }

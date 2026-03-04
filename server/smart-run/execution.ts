@@ -2,6 +2,7 @@ import type { DashboardState, Pipeline, SmartRunCheck, SmartRunField, SmartRunPl
 import { getRunInputValue, normalizeRunInputs, type RunInputs } from "../runInputs.js";
 import { collectFieldsFromPipeline } from "./planning.js";
 import { collectRuntimeChecks } from "./guards.js";
+import { collectRenderedInputSanityChecks } from "./inputSanity.js";
 
 export function validateRequiredInputs(fields: SmartRunField[], runInputs: RunInputs): SmartRunCheck[] {
   const checks: SmartRunCheck[] = [];
@@ -28,7 +29,8 @@ export async function buildSmartRunPlan(
   const fields = collectFieldsFromPipeline(pipeline);
   const runInputs = normalizeRunInputs(rawInputs);
   const runtimeChecks = await collectRuntimeChecks(pipeline, state);
-  const checks = [...runtimeChecks, ...validateRequiredInputs(fields, runInputs)];
+  const inputSanityChecks = collectRenderedInputSanityChecks(pipeline, runInputs);
+  const checks = [...runtimeChecks, ...validateRequiredInputs(fields, runInputs), ...inputSanityChecks];
   const canRun = checks.every((check) => check.status !== "fail");
 
   return {

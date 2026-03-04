@@ -44,18 +44,3 @@ export async function autoLayoutPipelineDraftSmart(
     }))
   };
 }
-
-export function autoLayoutPipelineDraft(
-  draft: PipelinePayload,
-  options: FlowLayoutOptions = {}
-): PipelinePayload {
-  const positions = computeAutoLayoutPositions(draft.steps, draft.links, options);
-
-  return {
-    ...draft,
-    steps: draft.steps.map((step) => ({
-      ...step,
-      position: positions[step.id] ?? step.position
-    }))
-  };
-}
