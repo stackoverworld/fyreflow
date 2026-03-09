@@ -60,6 +60,7 @@ describe("flow builder contexts", () => {
       expect(context).toContain("cacheBypassOrchestratorPromptPatterns");
       expect(context).toContain("on_fail remediation route");
       expect(context).toContain("configured MCP servers");
+      expect(context).toContain("Never invent a cron expression");
     });
 
     it("chat planner context includes policy profile instructions", () => {
@@ -74,6 +75,7 @@ describe("flow builder contexts", () => {
       expect(context).toContain("cacheBypassOrchestratorPromptPatterns");
       expect(context).toContain("on_fail remediation route");
       expect(context).toContain("prefer action=answer");
+      expect(context).toContain("does not provide a valid 5-field cron expression");
     });
   });
 

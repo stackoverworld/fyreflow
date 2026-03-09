@@ -267,6 +267,7 @@ export function AiBuilderPanel({
       <div className="flex items-center border-b border-ink-800/60">
         <button
           type="button"
+          data-testid="ai-builder-settings-toggle"
           disabled={readOnly}
           onClick={() => setSettingsOpen((v) => !v)}
           className={cn(
@@ -355,7 +356,10 @@ export function AiBuilderPanel({
             transition={transition}
             className="relative z-10 border-b border-ink-800/60"
           >
-            <div className="p-3">
+            <div
+              data-testid="ai-builder-settings-scroll"
+              className="max-h-[min(32rem,calc(100vh-11rem))] overflow-y-auto overscroll-contain p-3"
+            >
               <section className="space-y-4">
                 <div className="flex items-center gap-2 text-ink-400">
                   {providerId === "claude" ? <AnthropicIcon className="h-3.5 w-3.5" /> : <OpenAIIcon className="h-3.5 w-3.5" />}

@@ -227,6 +227,37 @@ test.describe("Critical AI Regression Flows", () => {
       .toBeLessThanOrEqual(2);
   });
 
+  test("AI builder settings panel scrolls after opening model settings", async ({ page }) => {
+    await mockDashboardApi(page);
+
+    await page.goto("/");
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+
+    await page.getByRole("button", { name: "AI builder" }).click();
+    await page.getByTestId("ai-builder-settings-toggle").click();
+
+    const settingsScroll = page.getByTestId("ai-builder-settings-scroll");
+    await expect(settingsScroll).toBeVisible();
+
+    const initialScrollState = await settingsScroll.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+      scrollTop: element.scrollTop
+    }));
+
+    expect(initialScrollState.scrollHeight).toBeGreaterThan(initialScrollState.clientHeight);
+    expect(initialScrollState.scrollTop).toBe(0);
+
+    await settingsScroll.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+
+    await expect
+      .poll(async () => settingsScroll.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+  });
+
   test("run panel starts a smart run and shows run history", async ({ page }) => {
     await mockDashboardApi(page, {
       defaultStepIsolatedStorage: true,

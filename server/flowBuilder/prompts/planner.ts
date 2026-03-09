@@ -93,6 +93,8 @@ export function buildPlannerContext(request: PlannerRequest): string {
     "- Platform supports startup-check and runtime needs_input prompts with secure secret persistence per pipeline.",
     "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
     "- Only set schedule.enabled=true when user explicitly asks for automatic scheduled runs.",
+    "- Never invent a cron expression. Only populate schedule.cron when the user supplied a valid 5-field cron expression or an existing valid schedule must be preserved.",
+    "- Never place natural-language scheduling text inside schedule.cron; it must remain a valid 5-field cron string.",
     "- Platform supports per-step MCP access via enabledMcpServerIds and per-step isolated/shared storage.",
     "- Set step.sandboxMode to secure for local-only steps and full for steps that must access external network targets (GitHub/GitLab/APIs/publish/deploy).",
     "- sandboxMode allowed values: auto, secure, full.",

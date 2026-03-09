@@ -3,7 +3,7 @@
 - Last reviewed: 2026-02-25
 
 ## Prerequisites
-- Node.js 20+ and Bun installed.
+- Node.js 22+ and Bun installed.
 - Git installed.
 
 ## First-Time Setup

@@ -19,6 +19,7 @@ export interface ModelCatalogEntry {
 
 export const ONE_MILLION_CONTEXT_TOKENS = 1_000_000;
 export const GPT_5_4_CONTEXT_WINDOW_TOKENS = 1_050_000;
+export const DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS = 272_000;
 export const MAX_CONTEXT_WINDOW_TOKENS = GPT_5_4_CONTEXT_WINDOW_TOKENS;
 
 const codexXHigh: ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
@@ -38,28 +39,28 @@ const codexModels: ModelCatalogEntry[] = [
     label: "gpt-5.4",
     providerId: "openai",
     source: "manual",
-    contextWindowTokens: GPT_5_4_CONTEXT_WINDOW_TOKENS,
+    contextWindowTokens: DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS,
     reasoningEfforts: codexXHigh,
     supportsFastMode: true,
     supports1MContext: true,
     runtimeAvailability: fullRuntime,
     lifecycle: currentLifecycle,
     notes:
-      "GPT-5.4 default. OpenAI's March 5, 2026 release ships 1,050,000-token default context, fast mode, and full CLI/API overlap."
+      "GPT-5.4 default. Keep the standard context window by default and only opt into 1M context explicitly."
   },
   {
     id: "gpt-5.4-pro",
     label: "gpt-5.4-pro",
     providerId: "openai",
     source: "manual",
-    contextWindowTokens: GPT_5_4_CONTEXT_WINDOW_TOKENS,
+    contextWindowTokens: DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS,
     reasoningEfforts: codexProXHigh,
     supportsFastMode: true,
     supports1MContext: true,
     runtimeAvailability: apiOnlyRuntime,
     lifecycle: currentLifecycle,
     notes:
-      "GPT-5.4 Pro is Responses API-only. Show it only when OpenAI has an API-capable credential or imported Codex access token."
+      "GPT-5.4 Pro is Responses API-only. Keep the standard context window by default and only opt into 1M context explicitly."
   },
   {
     id: "gpt-5.3-codex",
@@ -298,7 +299,7 @@ export function resolveDefaultContextWindow(providerId: ProviderId, modelId?: st
   if (providerId === "claude") {
     return 200_000;
   }
-  return 272_000;
+  return DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS;
 }
 
 export function modelUsesExtendedContextByDefault(entry: ModelCatalogEntry | undefined): boolean {

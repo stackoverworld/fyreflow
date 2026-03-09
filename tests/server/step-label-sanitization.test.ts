@@ -65,7 +65,7 @@ describe("Step label sanitization", () => {
     expect(normalized.name).toBe(normalized.id);
   });
 
-  it("upgrades stale gpt-5.4 defaults to the model's 1.05M context window", () => {
+  it("downgrades stale gpt-5.4 defaults back to the standard context window when 1M is not enabled", () => {
     const normalized = normalizeStep(
       {
         name: "OpenAI executor",
@@ -79,8 +79,8 @@ describe("Step label sanitization", () => {
       0
     );
 
-    expect(normalized.use1MContext).toBe(true);
-    expect(normalized.contextWindowTokens).toBe(1_050_000);
+    expect(normalized.use1MContext).toBe(false);
+    expect(normalized.contextWindowTokens).toBe(272_000);
   });
 
   it("keeps run logs free of [object Object] when step name is malformed", async () => {

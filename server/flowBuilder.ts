@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { parseCronExpression } from "./cron.js";
 import { executeProviderStep } from "./providers.js";
 import {
   canProviderUseFastMode,
@@ -37,6 +38,7 @@ import {
 import type {
   DraftOnlyResult,
   FlowBuilderAction,
+  FlowBuilderQuestion,
   FlowBuilderRequest,
   FlowBuilderResponse,
   FlowBuilderStreamOptions
@@ -65,6 +67,10 @@ interface FlowBuilderStatusContext {
   emit: (message: string) => void;
   onProviderLog: (line: string) => void;
 }
+
+const cronTokenPattern = /^[\d*/,\-]+$/;
+const scheduleRequestPattern =
+  /\b(cron|schedule(?:d|r)?|scheduled execution|scheduled runs|run on a schedule|hourly|daily|weekly|monthly)\b/i;
 
 function normalizeFlowBuilderStatusMessage(value: string): string | null {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -181,6 +187,217 @@ function prepareFlowBuilderRequest(
         ? [fastModeNote]
         : []
   };
+}
+
+function sanitizeCronToken(token: string): string {
+  return token.replace(/^[`"'([{]+|[`"',.;:!?)\]}]+$/g, "");
+}
+
+function isValidCronValue(value: string): boolean {
+  return parseCronExpression(value).ok;
+}
+
+function extractValidCronExpression(text: string): string | null {
+  const groups: string[][] = [];
+  let currentGroup: string[] = [];
+
+  for (const rawToken of text.split(/\s+/)) {
+    const token = sanitizeCronToken(rawToken.trim());
+    if (token.length === 0) {
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+        currentGroup = [];
+      }
+      continue;
+    }
+
+    if (cronTokenPattern.test(token)) {
+      currentGroup.push(token);
+      continue;
+    }
+
+    if (currentGroup.length > 0) {
+      groups.push(currentGroup);
+      currentGroup = [];
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  for (const group of groups) {
+    if (group.length !== 5) {
+      continue;
+    }
+    const candidate = group.join(" ");
+    if (isValidCronValue(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function findCronInRequest(request: FlowBuilderRequest): string | null {
+  const promptCandidate = extractValidCronExpression(request.prompt);
+  if (promptCandidate) {
+    return promptCandidate;
+  }
+
+  const history = request.history ?? [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (entry.role !== "user") {
+      continue;
+    }
+    const candidate = extractValidCronExpression(entry.content);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function hasValidCurrentDraftSchedule(request: FlowBuilderRequest): boolean {
+  const schedule = request.currentDraft?.schedule;
+  return schedule?.enabled === true && typeof schedule.cron === "string" && isValidCronValue(schedule.cron.trim());
+}
+
+function requestMentionsScheduling(request: FlowBuilderRequest): boolean {
+  if (scheduleRequestPattern.test(request.prompt)) {
+    return true;
+  }
+
+  const history = request.history ?? [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (entry.role === "user" && scheduleRequestPattern.test(entry.content)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildScheduleClarificationQuestions(): FlowBuilderQuestion[] {
+  return [
+    {
+      id: "schedule_cron",
+      question: "Which 5-field cron expression should I use for the scheduled run?",
+      options: [
+        {
+          label: "Hourly",
+          value: "Use this cron schedule: 0 * * * *.",
+          description: "Run at the start of every hour."
+        },
+        {
+          label: "Daily 09:00",
+          value: "Use this cron schedule: 0 9 * * *.",
+          description: "Run every day at 09:00."
+        },
+        {
+          label: "Weekdays 09:00",
+          value: "Use this cron schedule: 0 9 * * 1-5.",
+          description: "Run on weekdays at 09:00."
+        }
+      ]
+    }
+  ];
+}
+
+function withDraftSchedule(
+  response: FlowBuilderResponse,
+  patch: NonNullable<FlowBuilderResponse["draft"]>["schedule"],
+  note: string
+): FlowBuilderResponse {
+  if (!response.draft) {
+    return response;
+  }
+
+  return {
+    ...response,
+    draft: {
+      ...response.draft,
+      schedule: patch
+    },
+    notes: [...response.notes, note]
+  };
+}
+
+function toScheduleClarificationResponse(response: FlowBuilderResponse, note: string): FlowBuilderResponse {
+  return {
+    ...response,
+    action: "answer",
+    message: "I need a valid 5-field cron expression before I can enable scheduled execution.",
+    draft: undefined,
+    questions: buildScheduleClarificationQuestions(),
+    notes: [...response.notes, note]
+  };
+}
+
+function finalizeFlowBuilderResponse(request: FlowBuilderRequest, response: FlowBuilderResponse): FlowBuilderResponse {
+  if (!response.draft) {
+    return response;
+  }
+
+  const draftSchedule = response.draft.schedule;
+  const draftHasValidEnabledSchedule =
+    draftSchedule.enabled === true && typeof draftSchedule.cron === "string" && isValidCronValue(draftSchedule.cron.trim());
+  const requestedCron = findCronInRequest(request);
+  const requestedScheduling = requestMentionsScheduling(request);
+
+  if (draftSchedule.enabled && !draftHasValidEnabledSchedule) {
+    if (requestedCron) {
+      return withDraftSchedule(
+        response,
+        {
+          ...draftSchedule,
+          enabled: true,
+          cron: requestedCron
+        },
+        "Recovered schedule.cron from the user request because the model returned an invalid cron expression."
+      );
+    }
+
+    if (response.action === "update_current_flow" && hasValidCurrentDraftSchedule(request) && request.currentDraft?.schedule) {
+      return withDraftSchedule(
+        response,
+        {
+          ...request.currentDraft.schedule
+        },
+        "Preserved the existing valid schedule because the model returned an invalid cron expression."
+      );
+    }
+
+    return toScheduleClarificationResponse(
+      response,
+      "Converted the response into a clarification because the model returned an invalid cron expression."
+    );
+  }
+
+  if (!draftHasValidEnabledSchedule && requestedCron) {
+    return withDraftSchedule(
+      response,
+      {
+        ...draftSchedule,
+        enabled: true,
+        cron: requestedCron,
+        task: draftSchedule.task.trim().length > 0 ? draftSchedule.task : "Scheduled run"
+      },
+      "Enabled scheduling from the valid cron expression found in the user request."
+    );
+  }
+
+  if (!draftHasValidEnabledSchedule && requestedScheduling && !requestedCron && !hasValidCurrentDraftSchedule(request)) {
+    return toScheduleClarificationResponse(
+      response,
+      "Converted the response into a clarification because scheduled execution was requested without a valid cron expression."
+    );
+  }
+
+  return response;
 }
 
 async function generateDraftOnly(
@@ -570,7 +787,7 @@ export async function generateFlowDraft(
   const hasConversationContext =
     Boolean(prepared.request.currentDraft) || (prepared.request.history?.length ?? 0) > 0;
   if (hasConversationContext) {
-    return generateConversationResponse(
+    const response = await generateConversationResponse(
       prepared.request,
       provider,
       prepared.providerRuntime,
@@ -578,6 +795,7 @@ export async function generateFlowDraft(
       streamOptions,
       statusContext
     );
+    return finalizeFlowBuilderResponse(prepared.request, response);
   }
 
   const generated = await generateDraftOnly(
@@ -588,7 +806,7 @@ export async function generateFlowDraft(
     streamOptions,
     statusContext
   );
-  return {
+  return finalizeFlowBuilderResponse(prepared.request, {
     action: "replace_flow",
     message:
       generated.source === "model"
@@ -598,5 +816,5 @@ export async function generateFlowDraft(
     source: generated.source,
     notes: generated.notes,
     rawOutput: generated.rawOutput
-  };
+  });
 }

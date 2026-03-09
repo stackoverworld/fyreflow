@@ -79,8 +79,8 @@ describe("model catalogs", () => {
 
   it("keeps OpenAI context window metadata aligned for default and optional 1M models", () => {
     const expected: Record<string, { contextWindowTokens: number; supports1MContext: boolean }> = {
-      "gpt-5.4": { contextWindowTokens: 1_050_000, supports1MContext: true },
-      "gpt-5.4-pro": { contextWindowTokens: 1_050_000, supports1MContext: true },
+      "gpt-5.4": { contextWindowTokens: 272_000, supports1MContext: true },
+      "gpt-5.4-pro": { contextWindowTokens: 272_000, supports1MContext: true },
       "gpt-5.3-codex": { contextWindowTokens: 272_000, supports1MContext: false },
       "gpt-5.2-codex": { contextWindowTokens: 272_000, supports1MContext: false },
       "gpt-5.1-codex-max": { contextWindowTokens: 272_000, supports1MContext: false },

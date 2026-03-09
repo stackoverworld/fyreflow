@@ -288,6 +288,8 @@ export function buildChatPlannerContext(request: ChatRequest): string {
     "- Platform supports startup-check and runtime needs_input prompts, including secure per-pipeline secret persistence.",
     "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
     "- Only set schedule.enabled=true when user explicitly asks for scheduled execution.",
+    "- If the user asks for scheduled execution but does not provide a valid 5-field cron expression, prefer action=answer with a clarification question instead of guessing the cron.",
+    "- Never invent, paraphrase, or translate cron into natural language inside schedule.cron; it must stay a valid 5-field cron string.",
     "- Platform supports per-step MCP access via enabledMcpServerIds and isolated/shared storage toggles.",
     "- Set step.sandboxMode to secure for local-only steps and full for steps that must access external network targets (GitHub/GitLab/APIs/publish/deploy).",
     "- sandboxMode allowed values: auto, secure, full.",
