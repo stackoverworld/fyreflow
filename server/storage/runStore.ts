@@ -15,6 +15,7 @@ import type { RunStateContainer } from "./types.js";
 
 const MAX_RUN_APPROVALS = 300;
 const MAX_STEP_GATE_RESULTS = 200;
+const MAX_RUN_LOGS = 500;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -210,7 +211,11 @@ export function updateRun(
     return undefined;
   }
 
-  state.runs[index] = updater(state.runs[index]);
+  const nextRun = updater(state.runs[index]);
+  state.runs[index] = {
+    ...nextRun,
+    logs: Array.isArray(nextRun.logs) ? nextRun.logs.slice(-MAX_RUN_LOGS) : []
+  };
   return state.runs[index];
 }
 

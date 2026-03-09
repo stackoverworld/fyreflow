@@ -38,6 +38,7 @@ export const generatedFlowSchema = z.object({
         enableIsolatedStorage: z.boolean().optional(),
         enableSharedStorage: z.boolean().optional(),
         enabledMcpServerIds: z.array(z.string().min(1)).max(16).optional(),
+        sandboxMode: z.enum(["auto", "secure", "full"]).optional(),
         outputFormat: z.enum(["markdown", "json"]).optional(),
         requiredOutputFields: z.array(z.string().min(1)).max(40).optional(),
         requiredOutputFiles: z.array(z.string().min(1)).max(40).optional(),
@@ -55,7 +56,8 @@ export const generatedFlowSchema = z.object({
       z.object({
         source: z.string().min(1),
         target: z.string().min(1),
-        condition: z.enum(["always", "on_pass", "on_fail"]).optional()
+        condition: z.enum(["always", "on_pass", "on_fail"]).optional(),
+        conditionExpression: z.string().max(240).optional()
       })
     )
     .optional(),

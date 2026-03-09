@@ -8,6 +8,7 @@ export type {
   McpTransport,
   McpHealth,
   StepOutputFormat,
+  StepSandboxMode,
   QualityGateKind,
   QualityGateTarget,
   QualityGateResultStatus,
@@ -31,6 +32,7 @@ export type {
 export type {
   DashboardState,
   StepRunStatus,
+  StepTriggerReason,
   RunStatus,
   RunApproval,
   StepQualityGateResult,

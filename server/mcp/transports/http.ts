@@ -1,6 +1,7 @@
 import { mergeAbortSignals } from "../../abort.js";
+import { assertResolvedPublicAddress } from "../../security/networkTargets.js";
 import type { McpServerConfig } from "../../types.js";
-import { parseHeaders } from "../parsers.js";
+import { parseCsv, parseHeaders } from "../parsers.js";
 
 interface McpToolCallLike {
   tool: string;
@@ -16,6 +17,16 @@ export async function callHttpLikeMcp(
   const endpoint = server.url.trim();
   if (endpoint.length === 0) {
     throw new Error("MCP server URL is empty");
+  }
+  const allowedHosts = parseCsv(server.hostAllowlist).map((entry) => entry.toLowerCase());
+  if (allowedHosts.length === 0) {
+    throw new Error("MCP HTTP host allowlist is empty.");
+  }
+
+  const parsedEndpoint = await assertResolvedPublicAddress(endpoint, "MCP server URL");
+  const endpointHost = parsedEndpoint.hostname.trim().toLowerCase();
+  if (!allowedHosts.includes(endpointHost)) {
+    throw new Error(`MCP server host "${endpointHost}" is not allowed by hostAllowlist.`);
   }
 
   const controller = new AbortController();

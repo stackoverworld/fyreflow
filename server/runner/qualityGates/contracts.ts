@@ -8,7 +8,22 @@ export interface StepContractEvaluationResult {
 
 const DELIVERY_STEP_NAME_PATTERN = /\bdeliver(y|ed|ing)?\b/i;
 
-export function isGateResultContractStep(step: Pick<PipelineStep, "role" | "name">): boolean {
+export function hasExplicitJsonStepContract(
+  step: Pick<PipelineStep, "outputFormat" | "requiredOutputFields" | "requiredOutputFiles">
+): boolean {
+  return (
+    step.outputFormat === "json" &&
+    (step.requiredOutputFields.length > 0 || step.requiredOutputFiles.length > 0)
+  );
+}
+
+export function isGateResultContractStep(
+  step: Pick<PipelineStep, "role" | "name" | "outputFormat" | "requiredOutputFields" | "requiredOutputFiles">
+): boolean {
+  if (hasExplicitJsonStepContract(step)) {
+    return false;
+  }
+
   if (step.role === "review" || step.role === "tester") {
     return true;
   }

@@ -1,4 +1,5 @@
 import { mergeAbortSignals } from "../../abort.js";
+import { isGateResultContractStep } from "../../runner/qualityGates/contracts.js";
 import type { ClaudeApiOptions, ProviderExecutionInput } from "../types.js";
 import {
   buildClaudeSystemPrompt,
@@ -86,16 +87,11 @@ const STREAM_IDLE_TIMEOUT_MS = (() => {
   return Math.max(1_000, Math.min(600_000, raw));
 })();
 
-const DELIVERY_STEP_NAME_PATTERN = /\bdeliver(y|ed|ing)?\b/i;
-
 function shouldRequireGateResultContract(input: ProviderExecutionInput): boolean {
   if (input.outputMode !== "json") {
     return false;
   }
-  if (input.step.role === "review" || input.step.role === "tester") {
-    return true;
-  }
-  return DELIVERY_STEP_NAME_PATTERN.test(input.step.name);
+  return isGateResultContractStep(input.step);
 }
 
 function buildGateResultJsonSchema(): Record<string, unknown> {
@@ -218,12 +214,21 @@ function isClaudeOauthCredential(credential: string): boolean {
   return normalized.startsWith("sk-ant-oat01-") && normalized.length >= 80;
 }
 
+function shouldEnableClaudePromptCaching(input: ProviderExecutionInput): boolean {
+  if (input.provider.id !== "claude" || input.provider.authMode !== "api_key") {
+    return false;
+  }
+
+  const raw = (process.env.FYREFLOW_ENABLE_CLAUDE_PROMPT_CACHING ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
 async function readWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   idleTimeoutMs: number,
   streamLabel: string
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  return await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  return await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
     const timer = setTimeout(() => {
       void reader.cancel(`${streamLabel} stalled`).catch(() => {
         // ignore cancellation failures
@@ -929,6 +934,10 @@ export async function executeOpenAIWithApi(input: ProviderExecutionInput, creden
     },
     stream: true
   };
+  if (input.step.fastMode) {
+    requestBody.service_tier = "priority";
+    input.log?.("OpenAI fast mode enabled via priority processing.");
+  }
   const responseFormat = buildOpenAiResponseFormat(input);
   if (responseFormat) {
     requestBody.response_format = responseFormat;
@@ -1004,17 +1013,30 @@ export async function executeClaudeWithApi(
   if (options?.disableEffort !== true) {
     betas.add("effort-2025-11-24");
   }
-  if (input.step.use1MContext && options?.disable1MContext !== true) {
+  if (input.step.use1MContext && isOauthCredential) {
+    input.log?.("Claude 1M context skipped on OAuth/API path; unsupported on this auth mode.");
+  }
+  if (input.step.use1MContext && options?.disable1MContext !== true && !isOauthCredential) {
     betas.add("context-1m-2025-08-07");
   }
   if (betas.size > 0) {
     baseHeaders["anthropic-beta"] = Array.from(betas).join(",");
   }
 
+  const stableSystemPrompt = buildClaudeSystemPrompt(input.step, input.outputMode);
+  const enablePromptCaching = shouldEnableClaudePromptCaching(input);
   const requestBody: Record<string, unknown> = {
     model: input.step.model || input.provider.defaultModel,
     max_tokens: Math.max(1200, Math.min(6400, Math.floor(input.step.contextWindowTokens * 0.02))),
-    system: buildClaudeSystemPrompt(input.step, input.outputMode),
+    system: enablePromptCaching
+      ? [
+          {
+            type: "text",
+            text: stableSystemPrompt,
+            cache_control: { type: "ephemeral" }
+          }
+        ]
+      : stableSystemPrompt,
     messages: [{ role: "user", content: input.context }],
     stream: true
   };

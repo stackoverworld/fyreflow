@@ -108,7 +108,7 @@ export function markRunStart(store: LocalStore, runId: string): void {
 export function markRunCompleted(store: LocalStore, runId: string): void {
   const finishedAt = nowIso();
   store.updateRun(runId, (run) => {
-    if (run.status === "cancelled") {
+    if (run.status === "cancelled" || run.status === "failed") {
       return run;
     }
 
@@ -133,6 +133,21 @@ export function markRunFailed(store: LocalStore, runId: string, reason: string):
       status: "failed",
       finishedAt: failedAt,
       logs: [...run.logs, `Run failed: ${reason}`]
+    };
+  });
+}
+
+export function markRunPausedForInput(store: LocalStore, runId: string, reason: string): void {
+  store.updateRun(runId, (run) => {
+    if (run.status === "completed" || run.status === "cancelled") {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "paused",
+      finishedAt: undefined,
+      logs: [...run.logs, `Run paused: ${reason}`]
     };
   });
 }
@@ -259,6 +274,36 @@ export function markStepFailed(
       status: "failed",
       finishedAt: nowIso(),
       logs: [...nextRun.logs, `${stepLabel} failed: ${error}`]
+    };
+  });
+}
+
+export function markStepNeedsInput(
+  store: LocalStore,
+  runId: string,
+  step: PipelineStep,
+  message: string,
+  attempt: number,
+  output?: string
+): void {
+  store.updateRun(runId, (run) => {
+    const stepLabel = normalizeStepLabel(step.name, step.id);
+    const nextRun = updateRunStep(run, step, (current) => ({
+      ...current,
+      status: "failed",
+      attempts: attempt,
+      workflowOutcome: "fail",
+      error: message,
+      output: typeof output === "string" && output.trim().length > 0 ? output : current.output,
+      qualityGateResults: [],
+      finishedAt: nowIso()
+    }));
+
+    return {
+      ...nextRun,
+      status: "paused",
+      finishedAt: undefined,
+      logs: [...nextRun.logs, `${stepLabel} requested additional input: ${message}`]
     };
   });
 }

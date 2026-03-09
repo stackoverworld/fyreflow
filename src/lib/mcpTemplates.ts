@@ -11,6 +11,7 @@ export interface McpServerTemplateDraft {
   env: string;
   headers: string;
   toolAllowlist: string;
+  hostAllowlist: string;
 }
 
 export interface McpServerTemplate {
@@ -40,7 +41,8 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplate[] = [
       url: "",
       env: "",
       headers: "",
-      toolAllowlist: ""
+      toolAllowlist: "",
+      hostAllowlist: ""
     }
   },
   {
@@ -59,7 +61,8 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplate[] = [
       url: "https://api.githubcopilot.com/mcp/",
       env: "",
       headers: "Authorization: Bearer YOUR_GITHUB_PAT",
-      toolAllowlist: ""
+      toolAllowlist: "search_repositories,get_file_contents,create_or_update_file",
+      hostAllowlist: "api.githubcopilot.com"
     }
   }
 ];

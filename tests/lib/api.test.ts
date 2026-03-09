@@ -39,8 +39,8 @@ const originalWindow = globalWithWindow.window;
 
 const flowBuilderRequest: FlowBuilderRequest = {
   prompt: "Draft a simple QA workflow.",
-  providerId: "claude",
-  model: "claude-sonnet-4-6"
+  providerId: "openai",
+  model: "gpt-5.4"
 };
 
 function buildPairingSummary(status: PairingSessionSummary["status"]): PairingSessionSummary {
@@ -267,7 +267,7 @@ describe("generateFlowDraftStream", () => {
             );
             controller.enqueue(
               encoder.encode(
-                'event: status\ndata: {"at":"2026-03-03T12:00:01.000Z","message":"Using OpenAI (oauth) with gpt-5.3-codex."}\n\n'
+                'event: status\ndata: {"at":"2026-03-03T12:00:01.000Z","message":"Using OpenAI (oauth) with gpt-5.4."}\n\n'
               )
             );
             controller.enqueue(
@@ -298,7 +298,7 @@ describe("generateFlowDraftStream", () => {
     expect(onTextDelta).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
     expect(onStatus).toHaveBeenNthCalledWith(1, "Request accepted; model started processing.");
-    expect(onStatus).toHaveBeenNthCalledWith(2, "Using OpenAI (oauth) with gpt-5.3-codex.");
+    expect(onStatus).toHaveBeenNthCalledWith(2, "Using OpenAI (oauth) with gpt-5.4.");
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith(responsePayload);
   });

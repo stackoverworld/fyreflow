@@ -34,6 +34,7 @@ export function buildChatRepairContext(rawOutput: string): string {
     "- Keep schedule fields valid and preserve schedule controls where present.",
     "- Preserve schedule.inputs and runMode for scheduling behavior.",
     "- Preserve step.scenarios and step.skipIfArtifacts when present.",
+    "- Preserve step.sandboxMode when present.",
     "- Preserve enableSharedStorage/enableIsolatedStorage and do not disable storage unless user intent requests it.",
     "- Preserve storage placeholders in requiredOutputFiles, skipIfArtifacts, and artifactPath fields.",
     "- If a field is unknown, omit it instead of inventing unsupported fields.",

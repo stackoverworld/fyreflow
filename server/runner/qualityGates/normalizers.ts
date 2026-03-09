@@ -1,10 +1,24 @@
 import type { WorkflowOutcome } from "../../types.js";
 
-const STATUS_WITH_MARKUP_PATTERN =
-  /(WORKFLOW_STATUS|HTML_REVIEW_STATUS|PDF_REVIEW_STATUS)\s*:\s*[*_`~\s]*?(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)[*_`~\s]*/gi;
-const WORKFLOW_STATUS_PATTERN = /WORKFLOW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
-const HTML_REVIEW_STATUS_PATTERN = /HTML_REVIEW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
-const PDF_REVIEW_STATUS_PATTERN = /PDF_REVIEW_STATUS\s*:\s*(PASS|FAIL|NEUTRAL|COMPLETE|NEEDS[_\s-]?INPUT)/i;
+const STATUS_TOKEN_PATTERN_SOURCE =
+  "(PASS|FAIL(?:ED)?|ERROR|NEUTRAL|COMPLETE(?:D)?|SUCCESS|SUCCEEDED|DONE|NEEDS[_\\s-]?INPUT|INPUT[_\\s-]?REQUIRED|REQUIRES[_\\s-]?INPUT)";
+const STATUS_WITH_MARKUP_PATTERN = new RegExp(
+  "(WORKFLOW_STATUS|HTML_REVIEW_STATUS|PDF_REVIEW_STATUS)\\s*:\\s*[*_`~\\s]*?" +
+    STATUS_TOKEN_PATTERN_SOURCE +
+    "[*_`~\\s]*",
+  "gi"
+);
+const WORKFLOW_STATUS_PATTERN = new RegExp(`WORKFLOW_STATUS\\s*:\\s*${STATUS_TOKEN_PATTERN_SOURCE}`, "i");
+const HTML_REVIEW_STATUS_PATTERN = new RegExp(`HTML_REVIEW_STATUS\\s*:\\s*${STATUS_TOKEN_PATTERN_SOURCE}`, "i");
+const PDF_REVIEW_STATUS_PATTERN = new RegExp(`PDF_REVIEW_STATUS\\s*:\\s*${STATUS_TOKEN_PATTERN_SOURCE}`, "i");
+const HARD_TRANSPORT_FAILURE_PATTERN =
+  /\b(curl:\s*\(\d+\)|could not resolve host|enotfound|eai_again|getaddrinfo|connection\s+(?:refused|reset|failed)|timed?\s*out|network\s+error|status\s*[:=]\s*[`"'*_~\s]*0{3}[`"'*_~\s]*|http\s+status\s*[:=]\s*[`"'*_~\s]*0{3}[`"'*_~\s]*)\b/i;
+const HARD_AUTH_FAILURE_PATTERN =
+  /\b(token[_\s-]?expired|code\s*[:=]\s*token_expired|invalid[_\s-]*(token|api[_\s-]?key|credential)|unauthorized|forbidden)\b/i;
+const PUBLISH_ZERO_SUCCESS_PATTERN =
+  /\bsuccessfully\s+committed\s+files\s*:\s*[`"'*_~\s]*0(?:\.0+)?(?:[`"'*_~\s]|$)/i;
+const PUBLISH_ALL_FAILED_PATTERN =
+  /\b(all\s+commits\s+failed|failed\s+files\b|commit\s+shas?\s*:\s*[`"'*_~\s]*\[\s*\][`"'*_~\s]*)\b/i;
 
 export type GateResultStatus = "PASS" | "FAIL" | "NEUTRAL" | "COMPLETE" | "NEEDS_INPUT";
 export type GateNextAction = "continue" | "retry_step" | "retry_stage" | "escalate" | "stop";
@@ -31,6 +45,15 @@ function normalizeGateStatus(value: unknown): GateResultStatus | null {
   }
 
   const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (normalized === "COMPLETED" || normalized === "SUCCESS" || normalized === "SUCCEEDED" || normalized === "DONE") {
+    return "COMPLETE";
+  }
+  if (normalized === "FAILED" || normalized === "ERROR" || normalized === "BLOCKED") {
+    return "FAIL";
+  }
+  if (normalized === "INPUT_REQUIRED" || normalized === "REQUIRES_INPUT" || normalized === "NEED_INPUT") {
+    return "NEEDS_INPUT";
+  }
   if (
     normalized === "PASS" ||
     normalized === "FAIL" ||
@@ -121,7 +144,7 @@ export function normalizeStatusMarkers(output: string): string {
   }
 
   return output.replace(STATUS_WITH_MARKUP_PATTERN, (_full, label: string, statusRaw: string) => {
-    const normalizedStatus = statusRaw.toUpperCase().replace(/[\s-]+/g, "_");
+    const normalizedStatus = normalizeGateStatus(statusRaw) ?? statusRaw.toUpperCase().replace(/[\s-]+/g, "_");
     return `${label}: ${normalizedStatus}`;
   });
 }
@@ -177,8 +200,31 @@ export function normalizeStepStatus(value: unknown): "pass" | "fail" | "neutral"
   }
 
   const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (normalized === "pass" || normalized === "fail" || normalized === "neutral" || normalized === "needs_input") {
-    return normalized;
+  if (
+    normalized === "pass" ||
+    normalized === "success" ||
+    normalized === "succeeded" ||
+    normalized === "complete" ||
+    normalized === "completed" ||
+    normalized === "done" ||
+    normalized === "ok"
+  ) {
+    return "pass";
+  }
+  if (normalized === "fail" || normalized === "failed" || normalized === "error" || normalized === "blocked") {
+    return "fail";
+  }
+  if (
+    normalized === "needs_input" ||
+    normalized === "need_input" ||
+    normalized === "input_required" ||
+    normalized === "requires_input" ||
+    normalized === "missing_input"
+  ) {
+    return "needs_input";
+  }
+  if (normalized === "neutral" || normalized === "pending") {
+    return "neutral";
   }
 
   return null;
@@ -349,11 +395,15 @@ export function extractInputRequestSignal(
     const summary =
       typeof payload.summary === "string" && payload.summary.trim().length > 0 ? payload.summary.trim() : undefined;
     const requestsRaw = payload.input_requests ?? payload.requests;
+    const blockersRaw = payload.blockers;
     const hasInputRequests =
       Array.isArray(requestsRaw) &&
       requestsRaw.some((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry));
+    const hasBlockers =
+      Array.isArray(blockersRaw) &&
+      blockersRaw.some((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry));
 
-    if (status === "needs_input" || hasInputRequests) {
+    if (status === "needs_input" || hasInputRequests || hasBlockers) {
       return { needsInput: true, summary };
     }
   }
@@ -361,7 +411,43 @@ export function extractInputRequestSignal(
   return { needsInput: false };
 }
 
+function hasHardFailureSignals(output: string): boolean {
+  if (HARD_TRANSPORT_FAILURE_PATTERN.test(output)) {
+    return true;
+  }
+
+  if (PUBLISH_ALL_FAILED_PATTERN.test(output)) {
+    return true;
+  }
+
+  if (PUBLISH_ZERO_SUCCESS_PATTERN.test(output) && PUBLISH_ALL_FAILED_PATTERN.test(output)) {
+    return true;
+  }
+
+  return HARD_AUTH_FAILURE_PATTERN.test(output);
+}
+
+export function hasExplicitFailOutcomeSignal(
+  output: string,
+  parsedJson?: Record<string, unknown> | null
+): boolean {
+  if (hasHardFailureSignals(output)) {
+    return true;
+  }
+
+  const contract = parseGateResultContract(output, parsedJson).contract;
+  if (contract?.workflowStatus === "FAIL") {
+    return true;
+  }
+
+  return PUBLISH_ALL_FAILED_PATTERN.test(output);
+}
+
 export function inferWorkflowOutcome(output: string): WorkflowOutcome {
+  if (hasExplicitFailOutcomeSignal(output)) {
+    return "fail";
+  }
+
   const signals = extractStatusSignals(output);
   const explicit =
     signals.workflowStatus === "PASS" || signals.workflowStatus === "FAIL" || signals.workflowStatus === "NEUTRAL"
@@ -383,14 +469,12 @@ export function inferWorkflowOutcome(output: string): WorkflowOutcome {
 
     try {
       const parsed = JSON.parse(payload) as { status?: unknown };
-      if (typeof parsed.status === "string") {
-        const status = parsed.status.toLowerCase();
-        if (status === "pass" || status === "fail" || status === "neutral") {
-          return status;
-        }
-        if (status === "complete") {
-          return "pass";
-        }
+      const status = normalizeStepStatus(parsed.status);
+      if (status === "pass" || status === "fail" || status === "neutral") {
+        return status;
+      }
+      if (status === "needs_input") {
+        return "fail";
       }
     } catch {
       //

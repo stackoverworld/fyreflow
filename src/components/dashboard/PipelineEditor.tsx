@@ -72,6 +72,8 @@ export function PipelineEditor(props: PipelineEditorProps) {
   const {
     draft,
     readOnly = false,
+    openAiFastModeAvailable,
+    openAiFastModeUnavailableNote,
     claudeFastModeAvailable,
     claudeFastModeUnavailableNote,
     onAddStep,
@@ -283,6 +285,10 @@ export function PipelineEditor(props: PipelineEditorProps) {
                       mcpServers={props.mcpServers}
                       selectedStep={selectedStep}
                       selectedModelMeta={selectedModelMeta}
+                      providerConfig={props.providers[selectedStep.providerId]}
+                      providerOAuthStatus={props.oauthStatuses[selectedStep.providerId]}
+                      openAiFastModeAvailable={openAiFastModeAvailable}
+                      openAiFastModeUnavailableNote={openAiFastModeUnavailableNote}
                       claudeFastModeAvailable={claudeFastModeAvailable}
                       claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
                       onPatchSelectedStep={patchSelectedStep}

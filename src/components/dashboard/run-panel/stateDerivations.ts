@@ -41,6 +41,25 @@ export interface RunPanelDerivations {
   totalChecks: number;
 }
 
+export function hasBlockingSmartRunChecks(checks: SmartRunPlan["checks"] | null | undefined): boolean {
+  return (checks ?? []).some((check) => check.status === "fail" && !check.id.startsWith("input:"));
+}
+
+export function canStartSmartRun(input: {
+  selectedPipeline: Pipeline | undefined;
+  controlsLocked: boolean;
+  loadingSmartRunPlan: boolean;
+  smartRunPlan: SmartRunPlan | null;
+}): boolean {
+  return (
+    Boolean(input.selectedPipeline) &&
+    !input.controlsLocked &&
+    !input.loadingSmartRunPlan &&
+    Boolean(input.smartRunPlan) &&
+    !hasBlockingSmartRunChecks(input.smartRunPlan?.checks)
+  );
+}
+
 export function useRunPanelDerivations({
   activeRun,
   aiChatPending,
@@ -132,13 +151,12 @@ export function useRunPanelDerivations({
   const controlsLocked = aiChatPending || runActive || startingRun || stoppingRun || pausingRun || resumingRun;
   const canQuickRun =
     Boolean(selectedPipeline) && !controlsLocked && !loadingSmartRunPlan && Boolean(smartRunPlan) && !hasFailChecks;
-  const canSmartRun =
-    Boolean(selectedPipeline) &&
-    !controlsLocked &&
-    !loadingSmartRunPlan &&
-    Boolean(smartRunPlan) &&
-    missingRequiredInputs.length === 0 &&
-    !hasFailChecks;
+  const canSmartRun = canStartSmartRun({
+    selectedPipeline,
+    controlsLocked,
+    loadingSmartRunPlan,
+    smartRunPlan
+  });
 
   const passCount = (smartRunPlan?.checks ?? []).filter((c) => c.status === "pass").length;
   const totalChecks = (smartRunPlan?.checks ?? []).length;

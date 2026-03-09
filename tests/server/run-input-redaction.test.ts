@@ -4,7 +4,7 @@ import { extractInputKeysFromText, formatRunInputsSummary, replaceInputTokens } 
 import { redactContextForRunState } from "../../server/runner/scheduling/state.js";
 
 describe("run input redaction", () => {
-  it("redacts sensitive values in run input summary", () => {
+  it("redacts sensitive values in run input summary by default", () => {
     const summary = formatRunInputsSummary({
       source_links: "https://example.com/a,https://example.com/b",
       source_api_key: "sk-live-secret",
@@ -16,6 +16,22 @@ describe("run input redaction", () => {
     expect(summary).toContain("- access_token: [REDACTED]");
     expect(summary).not.toContain("sk-live-secret");
     expect(summary).not.toContain("token-123");
+  });
+
+  it("includes sensitive values when redactSecrets is false", () => {
+    const summary = formatRunInputsSummary(
+      {
+        source_links: "https://example.com/a",
+        source_api_key: "sk-live-secret",
+        access_token: "token-123"
+      },
+      { redactSecrets: false }
+    );
+
+    expect(summary).toContain("- source_links: https://example.com/a");
+    expect(summary).toContain("- source_api_key: sk-live-secret");
+    expect(summary).toContain("- access_token: token-123");
+    expect(summary).not.toContain("[REDACTED]");
   });
 
   it("redacts sensitive run input values from persisted context", () => {
@@ -51,6 +67,24 @@ describe("run input redaction", () => {
     expect(rendered).toContain("Repo: group/project");
     expect(rendered).toContain("Token: glpat-secret-token");
     expect(rendered).toContain("Missing: MISSING_INPUT:github_token");
+  });
+
+  it("keeps secret placeholders intact when model-facing rendering excludes secrets", () => {
+    const rendered = replaceInputTokens(
+      [
+        "Repo: {{input.gitlab_repo}}",
+        "Token: {{secret.gitlab_token}}"
+      ].join("\n"),
+      {
+        gitlab_repo: "group/project",
+        gitlab_token: "glpat-secret-token"
+      },
+      { includeSecrets: false }
+    );
+
+    expect(rendered).toContain("Repo: group/project");
+    expect(rendered).toContain("Token: {{secret.gitlab_token}}");
+    expect(rendered).not.toContain("glpat-secret-token");
   });
 
   it("extracts keys from both input and secret token placeholders", () => {

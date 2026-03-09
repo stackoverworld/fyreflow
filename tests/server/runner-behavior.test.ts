@@ -58,6 +58,9 @@ function createStep(id: string, name: string, role: PipelineStep["role"], extra?
     requiredOutputFiles: [],
     scenarios: [],
     skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: [],
     ...extra
   };
 }
@@ -270,6 +273,102 @@ describe("runner behavior", () => {
         await cleanup();
       }
     });
+
+    it("waits for all fan-in sources before starting a downstream diff step", async () => {
+      let githubFetcherRunning = false;
+      let gitlabFetcherRunning = false;
+      let githubFetcherFinished = false;
+      let gitlabFetcherFinished = false;
+      let diffStartedBeforeGithubFinished = false;
+      let diffStartedBeforeGitlabFinished = false;
+
+      mocks.executeStepForPipeline.mockImplementation(
+        async (input: { step: PipelineStep; outgoingLinks: PipelineLink[] }) => {
+          const { step } = input;
+
+          if (step.id === "step-sync-orchestrator") {
+            await delay(5);
+          } else if (step.id === "step-github-fetcher") {
+            githubFetcherRunning = true;
+            await delay(20);
+            githubFetcherRunning = false;
+            githubFetcherFinished = true;
+          } else if (step.id === "step-gitlab-fetcher") {
+            gitlabFetcherRunning = true;
+            await delay(80);
+            gitlabFetcherRunning = false;
+            gitlabFetcherFinished = true;
+          } else if (step.id === "step-diff-analyzer") {
+            if (!githubFetcherFinished || githubFetcherRunning) {
+              diffStartedBeforeGithubFinished = true;
+            }
+            if (!gitlabFetcherFinished || gitlabFetcherRunning) {
+              diffStartedBeforeGitlabFinished = true;
+            }
+            await delay(10);
+          } else {
+            await delay(5);
+          }
+
+          return {
+            status: "success" as const,
+            stepExecution: {
+              output: `${step.name} done`,
+              qualityGateResults: [],
+              hasBlockingGateFailure: false,
+              shouldStopForInput: false,
+              workflowOutcome: "pass" as const,
+              outgoingLinks: input.outgoingLinks,
+              routedLinks: input.outgoingLinks,
+              subagentNotes: []
+            }
+          };
+        }
+      );
+
+      const { store, cleanup } = await createTempStore();
+      try {
+        const basePipeline = store.listPipelines()[0];
+        const steps: PipelineStep[] = [
+          createStep("step-sync-orchestrator", "Sync Orchestrator", "orchestrator", {
+            enableDelegation: true,
+            delegationCount: 3
+          }),
+          createStep("step-github-fetcher", "GitHub Fetcher", "analysis"),
+          createStep("step-gitlab-fetcher", "GitLab Fetcher", "analysis"),
+          createStep("step-diff-analyzer", "Diff Analyzer", "analysis"),
+          createStep("step-site-updater", "Site Updater", "executor")
+        ];
+        const pipeline: Pipeline = {
+          ...basePipeline,
+          id: `${basePipeline.id}-fan-in-sync`,
+          steps,
+          links: [
+            { id: "link-1", sourceStepId: "step-sync-orchestrator", targetStepId: "step-github-fetcher", condition: "always" },
+            { id: "link-2", sourceStepId: "step-sync-orchestrator", targetStepId: "step-gitlab-fetcher", condition: "always" },
+            { id: "link-3", sourceStepId: "step-github-fetcher", targetStepId: "step-diff-analyzer", condition: "always" },
+            { id: "link-4", sourceStepId: "step-gitlab-fetcher", targetStepId: "step-diff-analyzer", condition: "always" },
+            { id: "link-5", sourceStepId: "step-diff-analyzer", targetStepId: "step-site-updater", condition: "always" }
+          ],
+          runtime: { ...basePipeline.runtime, maxLoops: 1, maxStepExecutions: 12 }
+        };
+
+        const run = store.createRun(pipeline, "Fan-in sync dependency test");
+        await runPipeline({ store, runId: run.id, pipeline, task: run.task });
+
+        const completedRun = store.getRun(run.id);
+        expect(completedRun?.status).toBe("completed");
+        expect(diffStartedBeforeGithubFinished).toBe(false);
+        expect(diffStartedBeforeGitlabFinished).toBe(false);
+        expect(
+          completedRun?.logs.some((line) =>
+            line.includes("Holding Diff Analyzer until all fan-in sources finish")
+          )
+        ).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 
   describe("pause and abort handling", () => {
@@ -416,6 +515,11 @@ describe("runner behavior", () => {
         "Task",
         420_000,
         new Map(),
+        {
+          sharedStoragePath: "/tmp/shared",
+          isolatedStoragePath: "DISABLED",
+          runStoragePath: "/tmp/run"
+        },
         {},
         (message) => logs.push(message)
       );
@@ -474,6 +578,189 @@ describe("runner behavior", () => {
 
         const completedRun = store.getRun(run.id);
         expect(["completed", "failed"]).toContain(completedRun?.status);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("fails the run when a step reports fail without any remediation route", async () => {
+      mocks.executeStepForPipeline.mockImplementation(
+        async (input: { step: PipelineStep; outgoingLinks: PipelineLink[] }) => ({
+          status: "success" as const,
+          stepExecution: {
+            output: "WORKFLOW_STATUS: FAIL\nPublish result: all commits failed",
+            qualityGateResults: [],
+            hasBlockingGateFailure: false,
+            shouldStopForInput: false,
+            workflowOutcome: "fail" as const,
+            outgoingLinks: input.outgoingLinks,
+            routedLinks: [],
+            subagentNotes: []
+          }
+        })
+      );
+
+      const { store, cleanup } = await createTempStore();
+      try {
+        const basePipeline = store.listPipelines()[0];
+        const steps = [createStep("step-publish", "Publisher", "executor")];
+        const pipeline: Pipeline = {
+          ...basePipeline,
+          id: `${basePipeline.id}-fail-without-route`,
+          steps,
+          links: [],
+          runtime: { ...basePipeline.runtime, maxLoops: 1, maxStepExecutions: 2 }
+        };
+
+        const run = store.createRun(pipeline, "Fail without remediation route");
+        await runPipeline({ store, runId: run.id, pipeline, task: run.task });
+
+        const completedRun = store.getRun(run.id);
+        expect(completedRun?.status).toBe("failed");
+        expect(
+          completedRun?.logs.some((line) => line.includes("reported fail outcome and has no remediation route"))
+        ).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("does not hard-fail when fail outcome lacks explicit failure signal and has no remediation route", async () => {
+      mocks.executeStepForPipeline.mockImplementation(
+        async (input: { step: PipelineStep; outgoingLinks: PipelineLink[] }) => ({
+          status: "success" as const,
+          stepExecution: {
+            output: "Validation summary: failed checks: 0; passed checks: 8",
+            qualityGateResults: [],
+            hasBlockingGateFailure: false,
+            shouldStopForInput: false,
+            workflowOutcome: "fail" as const,
+            outgoingLinks: input.outgoingLinks,
+            routedLinks: [],
+            subagentNotes: []
+          }
+        })
+      );
+
+      const { store, cleanup } = await createTempStore();
+      try {
+        const basePipeline = store.listPipelines()[0];
+        const steps = [createStep("step-review", "Reviewer", "review")];
+        const pipeline: Pipeline = {
+          ...basePipeline,
+          id: `${basePipeline.id}-heuristic-fail-without-route`,
+          steps,
+          links: [],
+          runtime: { ...basePipeline.runtime, maxLoops: 1, maxStepExecutions: 2 }
+        };
+
+        const run = store.createRun(pipeline, "Heuristic fail without remediation route");
+        await runPipeline({ store, runId: run.id, pipeline, task: run.task });
+
+        const completedRun = store.getRun(run.id);
+        expect(completedRun?.status).toBe("completed");
+        expect(
+          completedRun?.logs.some((line) => line.includes("reported fail outcome and has no remediation route"))
+        ).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("pauses the run instead of failing when a step explicitly requests runtime input", async () => {
+      mocks.executeStepForPipeline.mockImplementation(
+        async (input: { step: PipelineStep; outgoingLinks: PipelineLink[] }) => ({
+          status: "success" as const,
+          stepExecution: {
+            output: JSON.stringify({
+              status: "needs_input",
+              summary: "Provide GitHub token to continue.",
+              input_requests: [
+                {
+                  key: "github_token",
+                  label: "GitHub token",
+                  type: "secret",
+                  required: true,
+                  reason: "Token is required for repository access."
+                }
+              ]
+            }),
+            qualityGateResults: [],
+            hasBlockingGateFailure: false,
+            shouldStopForInput: true,
+            inputSummary: "Provide GitHub token to continue.",
+            workflowOutcome: "fail" as const,
+            outgoingLinks: input.outgoingLinks,
+            routedLinks: [],
+            subagentNotes: []
+          }
+        })
+      );
+
+      const { store, cleanup } = await createTempStore();
+      try {
+        const basePipeline = store.listPipelines()[0];
+        const steps = [createStep("step-github", "GitHub Fetcher", "executor")];
+        const pipeline: Pipeline = {
+          ...basePipeline,
+          id: `${basePipeline.id}-explicit-needs-input`,
+          steps,
+          links: [],
+          runtime: { ...basePipeline.runtime, maxLoops: 1, maxStepExecutions: 2 }
+        };
+
+        const run = store.createRun(pipeline, "Explicit needs_input path");
+        await runPipeline({ store, runId: run.id, pipeline, task: run.task });
+
+        const completedRun = store.getRun(run.id);
+        expect(completedRun?.status).toBe("paused");
+        expect(completedRun?.logs.some((line) => line.includes("requested additional input"))).toBe(true);
+        const stepState = completedRun?.steps.find((entry) => entry.stepId === "step-github");
+        expect(stepState?.status).toBe("completed");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("pauses the run when runtime failure is inferred as recoverable input issue", async () => {
+      mocks.executeStepForPipeline.mockImplementation(async () => ({
+        status: "failed" as const,
+        message: "OpenAI request failed (401): token_expired"
+      }));
+
+      const { store, cleanup } = await createTempStore();
+      try {
+        const basePipeline = store.listPipelines()[0];
+        const steps = [
+          createStep("step-github", "GitHub Fetcher", "executor", {
+            prompt: "Fetch {{input.github_repo}} with token {{input.github_token}}"
+          })
+        ];
+        const pipeline: Pipeline = {
+          ...basePipeline,
+          id: `${basePipeline.id}-inferred-needs-input`,
+          steps,
+          links: [],
+          runtime: { ...basePipeline.runtime, maxLoops: 1, maxStepExecutions: 2 }
+        };
+
+        const run = store.createRun(pipeline, "Inferred needs_input path");
+        await runPipeline({
+          store,
+          runId: run.id,
+          pipeline,
+          task: run.task,
+          runInputs: {
+            github_repo: "Lunarbase-Lab/Prop-AMM-RnD"
+          }
+        });
+
+        const completedRun = store.getRun(run.id);
+        expect(completedRun?.status).toBe("paused");
+        const stepState = completedRun?.steps.find((entry) => entry.stepId === "step-github");
+        expect(stepState?.status).toBe("failed");
+        expect(stepState?.output).toContain('"status": "needs_input"');
+        expect(stepState?.output).toContain('"key": "github_token"');
       } finally {
         await cleanup();
       }

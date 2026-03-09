@@ -57,14 +57,14 @@ describe("Claude CLI args", () => {
     expect(args).toContain("--settings");
   });
 
-  it("uses non-interactive permission skipping by default", () => {
+  it("uses explicit permission mode by default", () => {
     const args = buildClaudeCliArgs(createInput(), {
       selectedModel: "claude-sonnet-4-6",
       prompt: "hello"
     });
 
-    expect(args).toContain("--dangerously-skip-permissions");
-    expect(args).not.toContain("--permission-mode");
+    expect(args).not.toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--permission-mode");
   });
 
   it("keeps tools enabled for review/tester steps so they can inspect artifacts", () => {

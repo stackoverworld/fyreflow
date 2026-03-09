@@ -1,6 +1,6 @@
 # API Contracts
 
-- Last reviewed: 2026-03-01
+- Last reviewed: 2026-03-09
 
 ## Contract-First Policy
 - Define or update contracts before implementing integration behavior.
@@ -192,9 +192,31 @@
 - `PipelineStep` adds `policyProfileIds: string[]` for reusable backend runtime policies (artifact contracts, skip validation, cache strategy hints).
 - `PipelineStep` adds `cacheBypassInputKeys: string[]` for step-level skip-cache bypass inputs.
 - `PipelineStep` adds `cacheBypassOrchestratorPromptPatterns: string[]` for orchestrator-driven cache bypass matching.
+- `PipelineStep` adds optional `sandboxMode: "auto" | "secure" | "full"` for per-step execution safety policy.
 - `POST /api/pipelines/:pipelineId/runs` accepts optional `scenario` string in request body.
 - `PipelineRun` includes optional `scenario` in run metadata.
 - Scenario behavior is additive: when scenario is omitted, pipelines run with existing behavior.
+
+## Workflow Runtime Contract (2026-03-08)
+- `PipelineLink` adds optional `conditionExpression: string`.
+- `conditionExpression` is evaluated against the source step JSON payload after the base `condition` (`always | on_pass | on_fail`) matches.
+- Supported expression forms are:
+- `$.field`
+- `$.field == true|false|null|"string"|123`
+- `$.field != ...`
+- `$.field <number`, `<=`, `>`, `>=`
+- Example branches:
+- `$.has_changes == true`
+- `$.confidence < 0.8`
+- Review/tester steps with explicit JSON output contracts (`outputFormat="json"` plus required output fields/files) no longer implicitly require the strict GateResult contract.
+- Strict GateResult JSON remains required for review/tester/delivery-style steps only when they do not declare an explicit JSON contract.
+- Run-state persistence is implementation-batched for run/log updates; API semantics stay the same, but callers should not assume one disk write per log event.
+- Deterministic builtin step profiles are supported via `PipelineStep.policyProfileIds`:
+- `deterministic_fetch`
+- `deterministic_diff`
+- `deterministic_validate`
+- `deterministic_publish`
+- For those profiles, `PipelineStep.prompt` must be JSON config for the builtin handler instead of prose instructions.
 
 ## Scenario Profile Boundary (2026-02-22)
 - Scenario-specific behavior should be expressed in pipeline configuration (`steps[*].prompt`, `steps[*].scenarios`, `qualityGates`) and flow-builder outputs.
@@ -213,6 +235,24 @@
 - `POST /api/flow-builder/generate` accepts optional `requestId` (`string`, max 120 chars) for idempotent retries.
 - When `requestId` repeats with the same request payload, server returns or awaits the same generation result instead of re-running provider work.
 - Reusing the same `requestId` with a different payload is rejected with `409`.
+- AI Builder defaults now prefer OpenAI / Codex with `model="gpt-5.4"` and `reasoningEffort="medium"`.
+- `POST /api/flow-builder/generate` accepts optional `generatedStepPolicy`:
+- `{ strategy: "openai-first" | "anthropic-first" | "balanced", allowPremiumModes: boolean, openAiApiCapable?: boolean }`.
+- Top-level `providerId` / `model` / `reasoningEffort` / `fastMode` / `use1MContext` fields apply to the builder/planner request only.
+- Generated steps no longer inherit builder `fastMode` or Claude `use1MContext` flags by default; generated-step routing is controlled by `generatedStepPolicy`.
+- `/api/model-catalog` entries now include `runtimeAvailability: "api_and_cli" | "api_only"` and `lifecycle: "current" | "legacy"` so clients can hide API-only or legacy models in curated selectors.
+- Curated selectors now hide `lifecycle="legacy"` entries by default and only show `runtimeAvailability="api_only"` entries when the selected provider path is API-capable.
+- Curated Claude selectors include `claude-haiku-4-5` as the current low-cost utility model.
+- `fastMode` is provider-aware:
+- OpenAI API path maps `fastMode=true` to Responses API `service_tier="priority"`.
+- OpenAI Codex CLI fallback forwards `fastMode=true` via `codex exec --config 'service_tier="fast"'`.
+- Claude fast mode is treated as Opus 4.6-only and account/runtime-gated; clients should surface it as a premium best-effort capability instead of assuming it is always confirmed.
+- `contextWindowTokens` now accepts values up to `1_050_000`.
+- OpenAI `gpt-5.4` and `gpt-5.4-pro` default to a `1_050_000` token context window from model metadata instead of the legacy `272_000` fallback.
+- OpenAI Codex CLI fallback forwards large-window GPT-5.4 runs via `codex exec --config model_context_window=... --config model_auto_compact_token_limit=...`.
+- Claude 1M context remains beta-gated, should be treated as API-key-only in the Anthropic API path, and is skipped on OAuth-authenticated Claude API requests.
+- AI Builder clients must preserve `steps[*].policyProfileIds` and `links[*].conditionExpression` across generate, preview, apply, save, and restore flows.
+- Generated-draft previews should surface deterministic step counts and semantic-route counts so users can verify lean runtime architecture before applying a draft.
 
 ## AI Builder Streaming Contract (2026-03-03)
 - `POST /api/flow-builder/generate-stream` is SSE (`text/event-stream; charset=utf-8`) with `Cache-Control: no-cache, no-transform`.
@@ -237,6 +277,8 @@
 ## Runtime Guardrails (2026-02-22)
 - Blocking quality-gate failures now route only through `on_fail` links; `always` links are suppressed for that failed step.
 - If a step fails blocking gates and has no `on_fail` route, the run is failed immediately instead of continuing through disconnected fallback.
+- If a step reports `workflowOutcome=fail` and produces no routed continuation links, the run is failed immediately (prevents false `completed` runs after terminal publish/delivery failures).
+- Steps with multiple incoming `always` links now use fan-in barrier semantics: the downstream step is queued only after every incoming `always` route has arrived for the current attempt.
 - Shared structural artifacts are immutable for downstream non-owner steps: `ui-kit.json`, `dev-code.json`, `assets-manifest.json`, `frame-map.json`, `pdf-content.json`.
 
 ## Run Trace Additions (2026-02-22)
@@ -268,9 +310,20 @@
 - Flow-builder quality-gate mapping no longer silently retargets unresolved delivery completion gate targets; unresolved targets stay `any_step` and are rejected by runtime validation.
 - Relative artifact templates may still use `output_dir`, but resolution is now confined to the run storage root to prevent path escape outside pipeline storage.
 - Provider SSE readers now enforce idle timeout via `LLM_STREAM_IDLE_TIMEOUT_MS` (default 90s, min 1s, max 10m) and fail stalled streams deterministically.
-- Claude CLI dangerous permission bypass defaults to enabled (`CLAUDE_CLI_SKIP_PERMISSIONS` defaults to `1`); set it to `0` to force explicit permission mode.
-- Prompt/context token replacement now supports both `{{input.<key>}}` and `{{secret.<key>}}`; both resolve against merged runtime inputs.
+- Claude CLI now defaults to explicit permission mode; opt into dangerous bypass only when the broader access is intentional.
+- Prompt/context token replacement supports both `{{input.<key>}}` and `{{secret.<key>}}`, but secret placeholders are no longer resolved into model-facing prompt/context strings.
+- Secret placeholders continue to resolve only at runtime tool execution boundaries (for example MCP tool arguments and built-in shell commands).
 - Smart-run preflight now validates rendered URL composition in prompts/context and surfaces malformed nested URLs as deterministic checks.
 - Startup-check maps recoverable input-composition failures to `needs_input` requests (with suggested fields/defaults) so clients can remediate via modal instead of hard preflight block messaging.
 - Recovery input requests now include format-oriented guidance in `reason`/`placeholder` (for example `owner/repo` and relative-path hints) to reduce invalid retries.
 - Runtime step failures that match recoverable auth/network/malformed-endpoint patterns now emit structured `needs_input` payloads with inferred `input_requests`, enabling modal-based remediation/restart flow.
+- Workflow-outcome inference now treats transport/connectivity failure signatures (`curl (...)`, DNS/host resolution errors, `HTTP status 000`) as `fail`.
+- Hard runtime failure signatures now override optimistic explicit status markers (`WORKFLOW_STATUS: PASS`) to prevent false-success completion on publish/transport failures.
+- JSON-output steps blocked by contract failures can now emit inferred `needs_input` remediation payloads from recoverable auth/network/malformed signals, enabling modal restart instead of opaque hard failure.
+- Failed runs carrying structured `needs_input` output remain eligible for runtime input modal remediation on the client.
+- Codex CLI sandbox mode respects per-step `sandboxMode` (`auto|secure|full`) without auto-escalating secure/auto steps to `danger-full-access` on prompt inspection alone.
+- `sandboxMode=secure` maps to sandboxed execution (`read-only` for orchestrator, otherwise `workspace-write`), while `sandboxMode=full` maps to `danger-full-access`.
+- Global override remains available through `FYREFLOW_CODEX_SANDBOX_MODE=read-only|workspace-write|danger-full-access`.
+- MCP HTTP servers now require explicit `toolAllowlist` and `hostAllowlist` values.
+- MCP transport contract is `http | stdio`; `sse` is no longer accepted until a real SSE transport exists.
+- Provider `baseUrl` and MCP `url` updates reject localhost/private-network targets and validate the resolved address before persistence.

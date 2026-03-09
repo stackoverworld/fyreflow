@@ -8,6 +8,7 @@ import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "
 import { ProviderSettingsSection, type PendingConnectInfo } from "./provider-settings/sections";
 import {
   PROVIDER_ORDER,
+  getProviderSelectableModels,
   setProviderAuthMode,
   setProviderCredential,
   setProviderField
@@ -68,6 +69,38 @@ export function ProviderSettings({
   useEffect(() => {
     setDrafts(providers);
   }, [providers]);
+
+  useEffect(() => {
+    setDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const providerId of PROVIDER_ORDER) {
+        const provider = current[providerId];
+        const selectableModels = getProviderSelectableModels(
+          providerId,
+          provider,
+          oauthStatuses[providerId],
+          provider.defaultModel
+        );
+        if (selectableModels.length === 0) {
+          continue;
+        }
+
+        if (selectableModels.some((entry) => entry.id === provider.defaultModel)) {
+          continue;
+        }
+
+        changed = true;
+        next[providerId] = {
+          ...provider,
+          defaultModel: selectableModels[0].id
+        };
+      }
+
+      return changed ? next : current;
+    });
+  }, [drafts, oauthStatuses]);
 
   useEffect(() => {
     oauthStatusesRef.current = oauthStatuses;

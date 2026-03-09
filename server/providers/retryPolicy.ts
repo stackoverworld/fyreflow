@@ -60,7 +60,7 @@ export function buildClaudeTimeoutFallbackInput(input: ProviderExecutionInput): 
     step: {
       ...input.step,
       model: nextModel,
-      fastMode: canClaudeUseFastMode(input.provider),
+      fastMode: canClaudeUseFastMode(input.provider, nextModel),
       reasoningEffort: "low",
       use1MContext: false,
       contextWindowTokens: Math.min(input.step.contextWindowTokens, 220_000)

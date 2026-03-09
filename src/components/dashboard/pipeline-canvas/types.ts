@@ -16,6 +16,8 @@ export interface FlowNode {
   use1MContext?: boolean;
   enableIsolatedStorage?: boolean;
   enableSharedStorage?: boolean;
+  sandboxMode?: "auto" | "secure" | "full";
+  requiresFullAccess?: boolean;
 }
 
 export interface FlowLink {

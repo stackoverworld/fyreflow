@@ -52,6 +52,7 @@ export interface McpServerConfig {
   env: string;
   headers: string;
   toolAllowlist: string;
+  hostAllowlist: string;
   health: McpHealth;
   updatedAt: string;
 }
@@ -144,6 +145,13 @@ export interface UpdateServiceStatus {
 }
 
 export type FlowBuilderAction = "answer" | "update_current_flow" | "replace_flow";
+export type FlowBuilderGeneratedStepStrategy = "openai-first" | "anthropic-first" | "balanced";
+
+export interface FlowBuilderGeneratedStepPolicy {
+  strategy: FlowBuilderGeneratedStepStrategy;
+  allowPremiumModes: boolean;
+  openAiApiCapable?: boolean;
+}
 
 export interface FlowBuilderQuestionOption {
   label: string;
@@ -165,6 +173,7 @@ export interface FlowBuilderRequest {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   use1MContext?: boolean;
+  generatedStepPolicy?: FlowBuilderGeneratedStepPolicy;
   history?: Array<{
     role: "user" | "assistant";
     content: string;
@@ -214,6 +223,7 @@ export interface McpServerPayload {
   env?: string;
   headers?: string;
   toolAllowlist?: string;
+  hostAllowlist?: string;
   health?: McpHealth;
 }
 

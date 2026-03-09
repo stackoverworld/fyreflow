@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction, type Dispatch } from "react";
-import { MODEL_CATALOG, getDefaultModelForProvider } from "@/lib/modelCatalog";
+import {
+  MODEL_CATALOG,
+  getSelectableModelsForProvider,
+  getDefaultModelForProvider,
+  resolve1MContextEnabled,
+  resolveProviderRuntimeCapabilities
+} from "@/lib/modelCatalog";
 import { generateFlowDraft, generateFlowDraftStream } from "@/lib/api";
 import {
   clearAiChatPendingRequest,
+  clearAiChatSession,
   loadAiChatDraft,
   loadAiChatHistory,
   loadAiChatHistoryPage,
@@ -21,6 +28,11 @@ import { hasAssistantResultForRequest, hasErrorResultForRequest } from "@/compon
 import { executeFlowBuilderRequestOnce } from "@/components/dashboard/ai-builder/requestExecutionRegistry";
 import { clipFlowBuilderHistoryContent, toFlowBuilderHistoryMessage } from "@/components/dashboard/ai-builder/history";
 import {
+  resolveCommittedAssistantContent,
+  resolveCompletedAssistantMessage,
+  shouldRevealAssistantTextDuringGeneration
+} from "@/components/dashboard/ai-builder/resultVisibility";
+import {
   FLOW_BUILDER_PROMPT_MAX_CHARS,
   FLOW_BUILDER_PROMPT_MIN_CHARS,
   getFlowBuilderPromptLength,
@@ -38,11 +50,14 @@ import {
 import type {
   AiChatMessage,
   FlowBuilderAction,
+  FlowBuilderGeneratedStepStrategy,
   FlowBuilderRequest,
   FlowBuilderResponse,
   McpServerConfig,
   PipelinePayload,
+  ProviderConfig,
   ProviderId,
+  ProviderOAuthStatus,
   ReasoningEffort
 } from "@/lib/types";
 
@@ -57,39 +72,64 @@ interface AiBuilderSettings {
   reasoningEffort: ReasoningEffort;
   fastMode: boolean;
   use1MContext: boolean;
+  generatedStepStrategy: FlowBuilderGeneratedStepStrategy;
+  allowPremiumModes: boolean;
   mode: AiBuilderMode;
 }
 
-const defaultSettings: AiBuilderSettings = {
-  providerId: "claude",
-  model: "claude-opus-4-6",
-  reasoningEffort: "high",
+export const DEFAULT_AI_BUILDER_SETTINGS: AiBuilderSettings = {
+  providerId: "openai",
+  model: "gpt-5.4",
+  reasoningEffort: "medium",
   fastMode: false,
   use1MContext: false,
+  generatedStepStrategy: "openai-first",
+  allowPremiumModes: false,
   mode: DEFAULT_AI_BUILDER_MODE,
 };
+
+export function normalizeAiBuilderSettings(raw: unknown): AiBuilderSettings {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return DEFAULT_AI_BUILDER_SETTINGS;
+  }
+
+  const parsed = raw as Record<string, unknown>;
+  const normalized: AiBuilderSettings = {
+    providerId:
+      parsed.providerId === "openai" || parsed.providerId === "claude"
+        ? parsed.providerId
+        : DEFAULT_AI_BUILDER_SETTINGS.providerId,
+    model: typeof parsed.model === "string" ? parsed.model : DEFAULT_AI_BUILDER_SETTINGS.model,
+    reasoningEffort: ["minimal", "low", "medium", "high", "xhigh"].includes(parsed.reasoningEffort as string)
+      ? (parsed.reasoningEffort as ReasoningEffort)
+      : DEFAULT_AI_BUILDER_SETTINGS.reasoningEffort,
+    fastMode: typeof parsed.fastMode === "boolean" ? parsed.fastMode : DEFAULT_AI_BUILDER_SETTINGS.fastMode,
+    use1MContext:
+      typeof parsed.use1MContext === "boolean" ? parsed.use1MContext : DEFAULT_AI_BUILDER_SETTINGS.use1MContext,
+    generatedStepStrategy:
+      parsed.generatedStepStrategy === "anthropic-first" ||
+      parsed.generatedStepStrategy === "balanced" ||
+      parsed.generatedStepStrategy === "openai-first"
+        ? parsed.generatedStepStrategy
+        : DEFAULT_AI_BUILDER_SETTINGS.generatedStepStrategy,
+    allowPremiumModes:
+      typeof parsed.allowPremiumModes === "boolean"
+        ? parsed.allowPremiumModes
+        : DEFAULT_AI_BUILDER_SETTINGS.allowPremiumModes,
+    mode: parsed.mode === "agent" || parsed.mode === "ask" ? parsed.mode : DEFAULT_AI_BUILDER_SETTINGS.mode,
+  };
+
+  return normalized;
+}
 
 function loadAiBuilderSettings(): AiBuilderSettings {
   try {
     const raw = localStorage.getItem(AI_SETTINGS_KEY);
-    if (!raw) return defaultSettings;
+    if (!raw) return DEFAULT_AI_BUILDER_SETTINGS;
     const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return defaultSettings;
-    return {
-      providerId:
-        parsed.providerId === "openai" || parsed.providerId === "claude"
-          ? parsed.providerId
-          : defaultSettings.providerId,
-      model: typeof parsed.model === "string" ? parsed.model : defaultSettings.model,
-      reasoningEffort: ["minimal", "low", "medium", "high", "xhigh"].includes(parsed.reasoningEffort)
-        ? parsed.reasoningEffort
-        : defaultSettings.reasoningEffort,
-      fastMode: typeof parsed.fastMode === "boolean" ? parsed.fastMode : defaultSettings.fastMode,
-      use1MContext: typeof parsed.use1MContext === "boolean" ? parsed.use1MContext : defaultSettings.use1MContext,
-      mode: parsed.mode === "agent" || parsed.mode === "ask" ? parsed.mode : defaultSettings.mode,
-    };
+    return normalizeAiBuilderSettings(parsed);
   } catch {
-    return defaultSettings;
+    return DEFAULT_AI_BUILDER_SETTINGS;
   }
 }
 
@@ -114,8 +154,11 @@ interface UseAiBuilderSessionOptions {
   workflowKey: string;
   currentDraft: PipelinePayload;
   mcpServers: McpServerConfig[];
+  providers: Record<ProviderId, ProviderConfig>;
+  oauthStatuses: Record<ProviderId, ProviderOAuthStatus | null>;
+  openAiFastModeAvailable: boolean;
   claudeFastModeAvailable: boolean;
-  onApplyDraft: (draft: PipelinePayload) => void;
+  onApplyDraft: (draft: PipelinePayload) => Promise<{ workflowKey?: string } | void>;
   onNotice: (message: string) => void;
   mutationLocked?: boolean;
 }
@@ -126,6 +169,8 @@ interface UseAiBuilderSessionState {
   reasoningEffort: ReasoningEffort;
   fastMode: boolean;
   use1MContext: boolean;
+  generatedStepStrategy: FlowBuilderGeneratedStepStrategy;
+  allowPremiumModes: boolean;
   modelCatalog: typeof MODEL_CATALOG[ProviderId];
   selectedModelMeta: (typeof MODEL_CATALOG[ProviderId])[number] | undefined;
   reasoningOptions: ReasoningEffort[];
@@ -144,8 +189,11 @@ interface UseAiBuilderSessionState {
   setReasoningEffort: Dispatch<SetStateAction<ReasoningEffort>>;
   setFastMode: Dispatch<SetStateAction<boolean>>;
   setUse1MContext: Dispatch<SetStateAction<boolean>>;
+  setGeneratedStepStrategy: Dispatch<SetStateAction<FlowBuilderGeneratedStepStrategy>>;
+  setAllowPremiumModes: Dispatch<SetStateAction<boolean>>;
   handleSend: () => Promise<void>;
   handleQuickReply: (value: string) => Promise<void>;
+  handleClearChat: () => void;
   loadOlderMessages: () => boolean;
 }
 
@@ -161,6 +209,9 @@ export function useAiBuilderSession({
   workflowKey,
   currentDraft,
   mcpServers,
+  providers,
+  oauthStatuses,
+  openAiFastModeAvailable,
   claudeFastModeAvailable,
   onApplyDraft,
   onNotice,
@@ -172,6 +223,10 @@ export function useAiBuilderSession({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(savedSettings.reasoningEffort);
   const [fastMode, setFastMode] = useState(savedSettings.fastMode);
   const [use1MContext, setUse1MContext] = useState(savedSettings.use1MContext);
+  const [generatedStepStrategy, setGeneratedStepStrategy] = useState<FlowBuilderGeneratedStepStrategy>(
+    savedSettings.generatedStepStrategy
+  );
+  const [allowPremiumModes, setAllowPremiumModes] = useState(savedSettings.allowPremiumModes);
   const [mode, setMode] = useState<AiBuilderMode>(savedSettings.mode);
 
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -183,9 +238,18 @@ export function useAiBuilderSession({
   const visibleMessageCountRef = useRef(0);
   const loadingOlderMessagesRef = useRef(false);
   const activeRequestIdRef = useRef<string | null>(null);
+  const hydratedWorkflowKeyRef = useRef("");
+  const deferredWorkflowKeyRef = useRef<string | null>(null);
   const effectiveMode = resolveAiBuilderMode(mode, mutationLocked);
 
-  const modelCatalog = useMemo(() => MODEL_CATALOG[providerId] ?? [], [providerId]);
+  const modelCatalog = useMemo(
+    () =>
+      getSelectableModelsForProvider(providerId, {
+        provider: providers[providerId],
+        oauthStatus: oauthStatuses[providerId]
+      }),
+    [oauthStatuses, providerId, providers]
+  );
 
   const selectedModelMeta = useMemo(
     () => modelCatalog.find((entry) => entry.id === model),
@@ -239,6 +303,10 @@ export function useAiBuilderSession({
   }, [messages.length]);
 
   useEffect(() => {
+    hydratedWorkflowKeyRef.current = hydratedWorkflowKey;
+  }, [hydratedWorkflowKey]);
+
+  useEffect(() => {
     if (modelCatalog.some((entry) => entry.id === model)) return;
     const preferred = getDefaultModelForProvider(providerId);
     const fallback =
@@ -254,19 +322,22 @@ export function useAiBuilderSession({
   }, [reasoningEffort, reasoningOptions]);
 
   useEffect(() => {
-    if (providerId !== "claude") {
-      if (fastMode) setFastMode(false);
-      if (use1MContext) setUse1MContext(false);
-      return;
-    }
-    if (!claudeFastModeAvailable && fastMode) {
+    const providerFastModeAvailable = providerId === "openai" ? openAiFastModeAvailable : claudeFastModeAvailable;
+    if (!providerFastModeAvailable && fastMode) {
       setFastMode(false);
     }
-    if (selectedModelMeta?.supportsFastMode === false && fastMode) setFastMode(false);
-    if (selectedModelMeta?.supports1MContext === false && use1MContext) setUse1MContext(false);
+    if (selectedModelMeta?.supportsFastMode === false && fastMode) {
+      setFastMode(false);
+    }
+    const effectiveUse1MContext = resolve1MContextEnabled(providerId, model, use1MContext);
+    if (!effectiveUse1MContext && use1MContext) {
+      setUse1MContext(false);
+    }
   }, [
+    openAiFastModeAvailable,
     claudeFastModeAvailable,
     fastMode,
+    model,
     providerId,
     selectedModelMeta?.supports1MContext,
     selectedModelMeta?.supportsFastMode,
@@ -274,11 +345,20 @@ export function useAiBuilderSession({
   ]);
 
   useEffect(() => {
-    saveAiBuilderSettings({ providerId, model, reasoningEffort, fastMode, use1MContext, mode });
-  }, [providerId, model, reasoningEffort, fastMode, use1MContext, mode]);
+    saveAiBuilderSettings({
+      providerId,
+      model,
+      reasoningEffort,
+      fastMode,
+      use1MContext,
+      generatedStepStrategy,
+      allowPremiumModes,
+      mode
+    });
+  }, [providerId, model, reasoningEffort, fastMode, use1MContext, generatedStepStrategy, allowPremiumModes, mode]);
 
-  useEffect(() => {
-    const initialPage = loadAiChatHistoryPage(workflowKey, {
+  const hydrateWorkflowSession = useCallback((nextWorkflowKey: string) => {
+    const initialPage = loadAiChatHistoryPage(nextWorkflowKey, {
       limit: AI_BUILDER_MESSAGES_PAGE_SIZE,
       offset: 0
     });
@@ -286,34 +366,48 @@ export function useAiBuilderSession({
     setHasOlderMessages(initialPage.hasMore);
     loadingOlderMessagesRef.current = false;
     setLoadingOlderMessages(false);
-    setHydratedWorkflowKey(workflowKey);
-    setPrompt(loadAiChatDraft(workflowKey));
+    setHydratedWorkflowKey(nextWorkflowKey);
+    setPrompt(loadAiChatDraft(nextWorkflowKey));
     activeRequestIdRef.current = null;
-    setGenerating(loadAiChatPending(workflowKey));
-  }, [workflowKey]);
+    setGenerating(loadAiChatPending(nextWorkflowKey));
+  }, []);
 
   useEffect(() => {
-    if (hydratedWorkflowKey !== workflowKey) {
+    if (workflowKey.trim().length === 0 || hydratedWorkflowKey === workflowKey) {
       return;
     }
 
-    return subscribeAiChatLifecycle(workflowKey, () => {
-      const refreshedPage = loadAiChatHistoryPage(workflowKey, {
+    if (activeRequestIdRef.current) {
+      deferredWorkflowKeyRef.current = workflowKey;
+      return;
+    }
+
+    deferredWorkflowKeyRef.current = null;
+    hydrateWorkflowSession(workflowKey);
+  }, [hydrateWorkflowSession, hydratedWorkflowKey, workflowKey]);
+
+  useEffect(() => {
+    if (hydratedWorkflowKey.trim().length === 0) {
+      return;
+    }
+
+    return subscribeAiChatLifecycle(hydratedWorkflowKey, () => {
+      const refreshedPage = loadAiChatHistoryPage(hydratedWorkflowKey, {
         limit: Math.max(AI_BUILDER_MESSAGES_PAGE_SIZE, visibleMessageCountRef.current),
         offset: 0
       });
       setMessages(refreshedPage.messages);
       setHasOlderMessages(refreshedPage.hasMore);
-      setGenerating(loadAiChatPending(workflowKey));
+      setGenerating(loadAiChatPending(hydratedWorkflowKey));
     });
-  }, [hydratedWorkflowKey, workflowKey]);
+  }, [hydratedWorkflowKey]);
 
   useEffect(() => {
-    if (hydratedWorkflowKey !== workflowKey) {
+    if (hydratedWorkflowKey.trim().length === 0) {
       return;
     }
-    saveAiChatDraft(workflowKey, prompt);
-  }, [hydratedWorkflowKey, workflowKey, prompt]);
+    saveAiChatDraft(hydratedWorkflowKey, prompt);
+  }, [hydratedWorkflowKey, prompt]);
 
   const loadOlderMessages = useCallback((): boolean => {
     if (hydratedWorkflowKey !== workflowKey || loadingOlderMessagesRef.current || !hasOlderMessages) {
@@ -438,10 +532,12 @@ export function useAiBuilderSession({
       resumed: boolean,
       insertMode: "update_existing" | "append_new"
     ) => {
+      const sessionWorkflowKey = hydratedWorkflowKeyRef.current || workflowKey;
       const mutationAction = result.action === "update_current_flow" || result.action === "replace_flow";
       const mutationSuppressedByAskMode = requestMode === "ask" && mutationAction;
       const responseAction: FlowBuilderAction = mutationSuppressedByAskMode ? "answer" : result.action;
       const shouldApplyDraft = mutationAction && !mutationSuppressedByAskMode;
+      const intendedDraftSnapshot = mutationAction && result.draft ? clonePipelinePayload(result.draft) : undefined;
       const nextDraft =
         shouldApplyDraft && result.draft
           ? result.action === "replace_flow"
@@ -457,13 +553,71 @@ export function useAiBuilderSession({
           : result.source === "model"
             ? `Prepared ${nextDraft?.steps.length ?? 0} step(s) and ${nextDraft?.links.length ?? 0} link(s).`
             : `Generated deterministic template: ${result.notes.join(" ")}`;
-      const assistantContent = mutationSuppressedByAskMode
-        ? `${baseAssistantContent}\n\nAsk mode kept this response read-only; no flow changes were applied.`
-        : baseAssistantContent;
+      const assistantContent = resolveCompletedAssistantMessage(
+        result.action,
+        responseAction,
+        baseAssistantContent,
+        {
+          appliedDraft: generatedDraftSnapshot,
+          intendedDraft: intendedDraftSnapshot,
+          mutationSuppressedByAskMode
+        }
+      );
 
       const resolvedNotes = mutationSuppressedByAskMode
         ? [...result.notes, "Ask mode kept the response read-only; flow mutation output was ignored."]
         : result.notes;
+
+      if (generatedDraftSnapshot) {
+        try {
+          const applyResult = await onApplyDraft(clonePipelinePayload(generatedDraftSnapshot));
+          void applyResult;
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message.trim()
+              : "Failed to save AI-generated flow.";
+          const latestMessages = loadAiChatHistory(sessionWorkflowKey);
+          if (
+            hasAssistantResultForRequest(latestMessages, requestId) ||
+            hasErrorResultForRequest(latestMessages, requestId)
+          ) {
+            appendAiChatDebugEvent(sessionWorkflowKey, {
+              level: "info",
+              event: "request_duplicate_ignored",
+              message: "Ignored duplicate AI Builder persistence failure for request",
+              meta: { requestId, mode: requestMode, resumed, reason: "terminal_result_already_recorded" }
+            });
+            return;
+          }
+
+          appendAiChatDebugEvent(sessionWorkflowKey, {
+            level: "error",
+            event: "request_error",
+            message: "AI Builder flow save failed",
+            meta: { requestId, resumed, mode: requestMode, action: result.action },
+            details: errorMessage
+          });
+
+          const errorMessageEntry: AiChatMessage = {
+            id: crypto.randomUUID(),
+            requestId,
+            role: "error",
+            content: errorMessage,
+            action: "answer",
+            timestamp: Date.now(),
+          };
+
+          if (insertMode === "update_existing") {
+            setMessages((current) => current.filter((msg) => msg.id !== messageId));
+          }
+
+          appendVisibleMessages([errorMessageEntry]);
+          saveAiChatHistory(sessionWorkflowKey, [...latestMessages, errorMessageEntry]);
+          onNotice(errorMessage);
+          return;
+        }
+      }
 
       const aiMsg: AiChatMessage = {
         id: messageId,
@@ -479,29 +633,37 @@ export function useAiBuilderSession({
       };
 
       if (insertMode === "update_existing") {
-        setMessages((current) =>
-          current.map((msg) => {
+        setMessages((current) => {
+          let matched = false;
+          const next = current.map((msg) => {
             if (msg.id !== messageId) return msg;
+            matched = true;
             return {
               ...msg,
               streaming: false,
               nativeStreamed: msg.nativeStreamed || msg.content.length > 0,
-              content: msg.content.length > 0 ? msg.content : assistantContent,
+              content: resolveCommittedAssistantContent(msg.content, assistantContent),
               generatedDraft: generatedDraftSnapshot,
               action: responseAction,
               questions: result.questions,
               source: result.source,
               notes: resolvedNotes,
             };
-          })
-        );
+          });
+
+          if (matched) {
+            return next;
+          }
+
+          return [...current, aiMsg];
+        });
       } else {
         appendVisibleMessages([aiMsg]);
       }
 
-      const latestMessages = loadAiChatHistory(workflowKey);
+      const latestMessages = loadAiChatHistory(sessionWorkflowKey);
       if (hasAssistantResultForRequest(latestMessages, requestId)) {
-        appendAiChatDebugEvent(workflowKey, {
+        appendAiChatDebugEvent(sessionWorkflowKey, {
           level: "info",
           event: "request_duplicate_ignored",
           message: "Ignored duplicate AI Builder completion for request",
@@ -511,17 +673,16 @@ export function useAiBuilderSession({
       }
 
       const durationMs = Date.now() - startedAt;
-      appendAiChatDebugEvent(workflowKey, {
+      appendAiChatDebugEvent(sessionWorkflowKey, {
         level: "info",
         event: "request_success",
         message: "AI Builder chat request completed",
         meta: { requestId, durationMs, mode: requestMode, resumed, action: result.action, source: result.source, hasDraft: Boolean(result.draft), questions: result.questions?.length ?? 0 }
       });
 
-      saveAiChatHistory(workflowKey, [...latestMessages, aiMsg]);
+      saveAiChatHistory(sessionWorkflowKey, [...latestMessages, aiMsg]);
 
       if (generatedDraftSnapshot) {
-        onApplyDraft(clonePipelinePayload(generatedDraftSnapshot));
         onNotice(result.action === "replace_flow" ? "AI rebuilt the flow from chat." : "AI updated the current flow from chat.");
       } else if (mutationSuppressedByAskMode) {
         onNotice("Ask mode replied without changing the flow.");
@@ -536,6 +697,8 @@ export function useAiBuilderSession({
 
   const runFlowBuilderRequest = useCallback(
     async ({ requestId, payload, startedAt, mode: requestMode, resumed }: ExecuteFlowBuilderRequestOptions) => {
+      const requestWorkflowKey = hydratedWorkflowKeyRef.current || workflowKey;
+      const revealAssistantTextDuringGeneration = shouldRevealAssistantTextDuringGeneration(requestMode);
       const execution = executeFlowBuilderRequestOnce(requestId, async () => {
         const streamingMsgId = crypto.randomUUID();
         streamingBufferRef.current = "";
@@ -562,6 +725,9 @@ export function useAiBuilderSession({
               payload,
               {
                 onTextDelta: (delta) => {
+                  if (!revealAssistantTextDuringGeneration) {
+                    return;
+                  }
                   if (!streamingHasModelTextRef.current) {
                     streamingHasModelTextRef.current = true;
                     streamingBufferRef.current = "";
@@ -614,9 +780,11 @@ export function useAiBuilderSession({
             "[ai-chat] streaming failed, falling back to non-streaming:",
             streamError instanceof Error ? streamError.message : streamError
           );
-          setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
+          if (revealAssistantTextDuringGeneration) {
+            setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
+          }
 
-          appendAiChatDebugEvent(workflowKey, {
+          appendAiChatDebugEvent(requestWorkflowKey, {
             level: "info",
             event: "stream_fallback",
             message: "Streaming failed; falling back to non-streaming request",
@@ -625,14 +793,16 @@ export function useAiBuilderSession({
 
           try {
             const result = await generateFlowDraft(payload);
-            const fallbackMsgId = crypto.randomUUID();
-            await processCompletedResult(result, fallbackMsgId, requestId, requestMode, startedAt, resumed, "append_new");
+            const fallbackMsgId = revealAssistantTextDuringGeneration ? crypto.randomUUID() : streamingMsgId;
+            const fallbackInsertMode = revealAssistantTextDuringGeneration ? "append_new" : "update_existing";
+            await processCompletedResult(result, fallbackMsgId, requestId, requestMode, startedAt, resumed, fallbackInsertMode);
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Failed to process AI chat message";
             const durationMs = Date.now() - startedAt;
-            const latestMessages = loadAiChatHistory(workflowKey);
+            const latestMessages = loadAiChatHistory(requestWorkflowKey);
+            setMessages((current) => current.filter((msg) => msg.id !== streamingMsgId));
             if (hasAssistantResultForRequest(latestMessages, requestId) || hasErrorResultForRequest(latestMessages, requestId)) {
-              appendAiChatDebugEvent(workflowKey, {
+              appendAiChatDebugEvent(requestWorkflowKey, {
                 level: "info",
                 event: "request_duplicate_ignored",
                 message: "Ignored duplicate AI Builder failure for request",
@@ -641,7 +811,7 @@ export function useAiBuilderSession({
               return;
             }
 
-            appendAiChatDebugEvent(workflowKey, {
+            appendAiChatDebugEvent(requestWorkflowKey, {
               level: "error",
               event: "request_error",
               message: "AI Builder chat request failed",
@@ -658,7 +828,7 @@ export function useAiBuilderSession({
             };
             const messagesWithError = [...latestMessages, errorMessageEntry];
             appendVisibleMessages([errorMessageEntry]);
-            saveAiChatHistory(workflowKey, messagesWithError);
+            saveAiChatHistory(requestWorkflowKey, messagesWithError);
             onNotice(errorMessage);
           }
         } finally {
@@ -666,19 +836,25 @@ export function useAiBuilderSession({
             activeRequestIdRef.current = null;
           }
           setGenerating(false);
-          saveAiChatPending(workflowKey, false);
-          clearAiChatPendingRequest(workflowKey);
-          appendAiChatDebugEvent(workflowKey, {
+          saveAiChatPending(requestWorkflowKey, false);
+          clearAiChatPendingRequest(requestWorkflowKey);
+          appendAiChatDebugEvent(requestWorkflowKey, {
             level: "info",
             event: "request_end",
             message: "AI Builder chat request lifecycle finished",
             meta: { requestId, mode: requestMode, resumed, pending: false, elapsedMs: Date.now() - startedAt }
           });
+
+          const deferredWorkflowKey = deferredWorkflowKeyRef.current;
+          if (deferredWorkflowKey && deferredWorkflowKey !== hydratedWorkflowKeyRef.current) {
+            deferredWorkflowKeyRef.current = null;
+            hydrateWorkflowSession(deferredWorkflowKey);
+          }
         }
       });
 
       if (execution.joinedExisting) {
-        appendAiChatDebugEvent(workflowKey, {
+        appendAiChatDebugEvent(requestWorkflowKey, {
           level: "info",
           event: "request_duplicate_ignored",
           message: "Joined in-flight AI Builder request",
@@ -693,24 +869,24 @@ export function useAiBuilderSession({
 
       await execution.promise;
     },
-    [appendVisibleMessages, onApplyDraft, onNotice, processCompletedResult, scheduleStreamingFlush, workflowKey]
+    [appendVisibleMessages, hydrateWorkflowSession, onNotice, processCompletedResult, scheduleStreamingFlush, workflowKey]
   );
 
   useEffect(() => {
-    if (hydratedWorkflowKey !== workflowKey || activeRequestIdRef.current) {
+    if (hydratedWorkflowKey.trim().length === 0 || activeRequestIdRef.current) {
       return;
     }
 
-    if (!loadAiChatPending(workflowKey)) {
+    if (!loadAiChatPending(hydratedWorkflowKey)) {
       return;
     }
 
-    const pendingRequest = loadAiChatPendingRequest(workflowKey);
+    const pendingRequest = loadAiChatPendingRequest(hydratedWorkflowKey);
     if (!pendingRequest) {
-      saveAiChatPending(workflowKey, false);
-      clearAiChatPendingRequest(workflowKey);
+      saveAiChatPending(hydratedWorkflowKey, false);
+      clearAiChatPendingRequest(hydratedWorkflowKey);
       setGenerating(false);
-      appendAiChatDebugEvent(workflowKey, {
+      appendAiChatDebugEvent(hydratedWorkflowKey, {
         level: "info",
         event: "request_resume_missing",
         message: "Pending AI Builder request was missing its payload",
@@ -724,7 +900,7 @@ export function useAiBuilderSession({
     const requestMode = pendingRequest.mode ?? effectiveMode;
     activeRequestIdRef.current = pendingRequest.requestId;
     setGenerating(true);
-    appendAiChatDebugEvent(workflowKey, {
+    appendAiChatDebugEvent(hydratedWorkflowKey, {
       level: "info",
       event: "request_resume",
       message: "Resuming pending AI Builder chat request",
@@ -742,9 +918,10 @@ export function useAiBuilderSession({
       mode: requestMode,
       resumed: true
     });
-  }, [effectiveMode, hydratedWorkflowKey, runFlowBuilderRequest, workflowKey]);
+  }, [effectiveMode, hydratedWorkflowKey, runFlowBuilderRequest]);
 
   const sendPrompt = async (nextPrompt: string, options?: { clearComposer?: boolean }) => {
+    const sessionWorkflowKey = hydratedWorkflowKey || workflowKey;
     const trimmed = normalizeFlowBuilderPrompt(nextPrompt);
     if (trimmed.length < MIN_PROMPT_LENGTH || generating || activeRequestIdRef.current) return;
 
@@ -752,7 +929,7 @@ export function useAiBuilderSession({
       const requestId = createRequestId();
       const promptLength = getFlowBuilderPromptLength(trimmed);
       const message = `Prompt is too long (${promptLength}/${MAX_PROMPT_LENGTH}). Shorten it and try again.`;
-      appendAiChatDebugEvent(workflowKey, {
+      appendAiChatDebugEvent(sessionWorkflowKey, {
         level: "info",
         event: "request_blocked",
         message: "AI Builder prompt exceeded max length",
@@ -764,7 +941,7 @@ export function useAiBuilderSession({
         }
       });
 
-      const latestMessages = loadAiChatHistory(workflowKey);
+      const latestMessages = loadAiChatHistory(sessionWorkflowKey);
       const errorMessageEntry: AiChatMessage = {
         id: crypto.randomUUID(),
         requestId,
@@ -774,16 +951,22 @@ export function useAiBuilderSession({
         timestamp: Date.now(),
       };
       appendVisibleMessages([errorMessageEntry]);
-      saveAiChatHistory(workflowKey, [...latestMessages, errorMessageEntry]);
+      saveAiChatHistory(sessionWorkflowKey, [...latestMessages, errorMessageEntry]);
       onNotice(message);
       return;
     }
 
-    const effectiveFastMode = providerId === "claude" && claudeFastModeAvailable && fastMode;
+    const providerFastModeAvailable = providerId === "openai" ? openAiFastModeAvailable : claudeFastModeAvailable;
+    const effectiveFastMode =
+      providerFastModeAvailable && selectedModelMeta?.supportsFastMode !== false && fastMode;
+    const openAiApiCapable = resolveProviderRuntimeCapabilities(
+      providers.openai,
+      oauthStatuses.openai
+    ).hasActiveApiCredential;
     const requestId = createRequestId();
     const startedAt = Date.now();
 
-    const persistedMessages = loadAiChatHistory(workflowKey);
+    const persistedMessages = loadAiChatHistory(sessionWorkflowKey);
     const userMsg: AiChatMessage = {
       id: crypto.randomUUID(),
       requestId,
@@ -825,12 +1008,12 @@ export function useAiBuilderSession({
       };
       const blockedMessages = [...messagesWithUser, blockedMessage];
       appendVisibleMessages([userMsg, blockedMessage]);
-      saveAiChatHistory(workflowKey, blockedMessages);
+      saveAiChatHistory(sessionWorkflowKey, blockedMessages);
       if (options?.clearComposer ?? false) {
         setPrompt("");
-        saveAiChatDraft(workflowKey, "");
+        saveAiChatDraft(sessionWorkflowKey, "");
       }
-      appendAiChatDebugEvent(workflowKey, {
+      appendAiChatDebugEvent(sessionWorkflowKey, {
         level: "info",
         event: "request_blocked",
         message: "AI Builder prompt blocked in Ask mode",
@@ -844,7 +1027,7 @@ export function useAiBuilderSession({
       return;
     }
 
-    appendAiChatDebugEvent(workflowKey, {
+    appendAiChatDebugEvent(sessionWorkflowKey, {
       level: "info",
       event: "request_start",
       message: "AI Builder chat request started",
@@ -856,16 +1039,18 @@ export function useAiBuilderSession({
         mode: effectiveMode,
         fastMode: effectiveFastMode,
         use1MContext,
+        generatedStepStrategy,
+        allowPremiumModes,
         promptChars: trimmed.length,
         historyCount: history.length
       }
     });
 
     appendVisibleMessages([userMsg]);
-    saveAiChatHistory(workflowKey, messagesWithUser);
+    saveAiChatHistory(sessionWorkflowKey, messagesWithUser);
     if (options?.clearComposer ?? false) {
       setPrompt("");
-      saveAiChatDraft(workflowKey, "");
+      saveAiChatDraft(sessionWorkflowKey, "");
     }
 
     const payload: FlowBuilderRequest = {
@@ -876,6 +1061,11 @@ export function useAiBuilderSession({
       reasoningEffort,
       fastMode: effectiveFastMode,
       use1MContext,
+      generatedStepPolicy: {
+        strategy: generatedStepStrategy,
+        allowPremiumModes,
+        openAiApiCapable
+      },
       history,
       currentDraft,
       availableMcpServers: mcpServers.slice(0, MAX_FLOW_BUILDER_MCP_SERVERS).map((server) => ({
@@ -888,14 +1078,14 @@ export function useAiBuilderSession({
     };
 
     activeRequestIdRef.current = requestId;
-    saveAiChatPendingRequest(workflowKey, {
+    saveAiChatPendingRequest(sessionWorkflowKey, {
       requestId,
       payload,
       startedAt,
       mode: effectiveMode
     });
     setGenerating(true);
-    saveAiChatPending(workflowKey, true);
+    saveAiChatPending(sessionWorkflowKey, true);
 
     await runFlowBuilderRequest({
       requestId,
@@ -914,12 +1104,26 @@ export function useAiBuilderSession({
     await sendPrompt(value, { clearComposer: false });
   };
 
+  const handleClearChat = useCallback(() => {
+    if (generating || activeRequestIdRef.current) return;
+    const sessionWorkflowKey = hydratedWorkflowKey || workflowKey;
+    if (sessionWorkflowKey.trim().length === 0) return;
+
+    clearAiChatSession(sessionWorkflowKey);
+    setMessages([]);
+    setHasOlderMessages(false);
+    setPrompt("");
+    visibleMessageCountRef.current = 0;
+  }, [generating, hydratedWorkflowKey, workflowKey]);
+
   return {
     providerId,
     model,
     reasoningEffort,
     fastMode,
     use1MContext,
+    generatedStepStrategy,
+    allowPremiumModes,
     modelCatalog,
     selectedModelMeta,
     reasoningOptions,
@@ -938,8 +1142,11 @@ export function useAiBuilderSession({
     setReasoningEffort,
     setFastMode,
     setUse1MContext,
+    setGeneratedStepStrategy,
+    setAllowPremiumModes,
     handleSend,
     handleQuickReply,
+    handleClearChat,
     loadOlderMessages,
   };
 }

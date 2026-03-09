@@ -1,4 +1,11 @@
-import type { AgentRole, PipelineInput, PipelineStep, ProviderId, ReasoningEffort } from "../../types.js";
+import type {
+  AgentRole,
+  PipelineInput,
+  PipelineStep,
+  ProviderId,
+  ReasoningEffort
+} from "../../types.js";
+import type { FlowBuilderGeneratedStepPolicy } from "../contracts.js";
 import type { GeneratedFlowSpec } from "../schema.js";
 
 export interface DraftBuildRequest {
@@ -8,6 +15,7 @@ export interface DraftBuildRequest {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   use1MContext?: boolean;
+  generatedStepPolicy?: FlowBuilderGeneratedStepPolicy;
 }
 
 export type DraftLinkCondition = "always" | "on_pass" | "on_fail";
@@ -19,6 +27,7 @@ export interface DraftLink {
   source: string;
   target: string;
   condition?: DraftLinkCondition;
+  conditionExpression?: string;
 }
 
 export interface DraftQualityGateSpec {
@@ -47,6 +56,7 @@ export type DraftFlow = Omit<GeneratedFlowSpec, "qualityGates" | "links"> & {
           | "enableIsolatedStorage"
           | "enableSharedStorage"
           | "enabledMcpServerIds"
+          | "sandboxMode"
           | "outputFormat"
           | "requiredOutputFields"
           | "requiredOutputFiles"

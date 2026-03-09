@@ -13,7 +13,7 @@ function createOpenAiInput(): ProviderExecutionInput {
       apiKey: "sk-test",
       oauthToken: "",
       baseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-5.3-codex",
+      defaultModel: "gpt-5.4",
       updatedAt: new Date().toISOString()
     },
     step: {
@@ -22,7 +22,7 @@ function createOpenAiInput(): ProviderExecutionInput {
       role: "review",
       prompt: "Review output",
       providerId: "openai",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       reasoningEffort: "medium",
       fastMode: false,
       use1MContext: false,

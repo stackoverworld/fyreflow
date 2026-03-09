@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createAbortError } from "../abort.js";
+import { buildRestrictedSubprocessEnv } from "../runtime/subprocessEnv.js";
 
 export interface CommandResult {
   stdout: string;
@@ -17,10 +18,7 @@ export function runCommand(
   return new Promise<CommandResult>((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        ...(extraEnv ?? {})
-      }
+      env: buildRestrictedSubprocessEnv(extraEnv)
     });
 
     let stdout = "";

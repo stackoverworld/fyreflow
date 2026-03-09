@@ -3,6 +3,7 @@ import {
   buildPotentialDispatchRouteId,
   parsePotentialDispatchRouteId
 } from "@/components/dashboard/pipeline-canvas/potentialDispatchRouteId";
+import { analyzeStepSandboxRequirement, normalizeStepSandboxMode } from "@/lib/stepSandboxMode";
 import type { PipelinePayload, PipelineRun, ReasoningEffort } from "@/lib/types";
 import type { PipelineEditorCanvasLink, PipelineEditorCanvasNode } from "../types";
 import { getModelMeta, makeStepName, parseIsoTimestamp, resolveCanvasLinkId, routeConditionMatchesOutcome } from "./editorActions";
@@ -20,20 +21,25 @@ export function getSelectedStep(
 }
 
 export function getCanvasNodes(draft: PipelinePayload): PipelineEditorCanvasNode[] {
-  return draft.steps.map((step, index) => ({
-    id: step.id,
-    name: step.name || makeStepName(step.role, index),
-    role: step.role,
-    providerId: step.providerId,
-    model: step.model,
-    position: step.position ?? defaultStepPosition(index),
-    enableDelegation: step.enableDelegation,
-    delegationCount: step.delegationCount,
-    fastMode: step.fastMode,
-    use1MContext: step.use1MContext,
-    enableIsolatedStorage: step.enableIsolatedStorage,
-    enableSharedStorage: step.enableSharedStorage
-  }));
+  return draft.steps.map((step, index) => {
+    const requirement = analyzeStepSandboxRequirement(step);
+    return {
+      id: step.id,
+      name: step.name || makeStepName(step.role, index),
+      role: step.role,
+      providerId: step.providerId,
+      model: step.model,
+      position: step.position ?? defaultStepPosition(index),
+      enableDelegation: step.enableDelegation,
+      delegationCount: step.delegationCount,
+      fastMode: step.fastMode,
+      use1MContext: step.use1MContext,
+      enableIsolatedStorage: step.enableIsolatedStorage,
+      enableSharedStorage: step.enableSharedStorage,
+      sandboxMode: normalizeStepSandboxMode(step.sandboxMode),
+      requiresFullAccess: requirement.requiresFullAccess
+    };
+  });
 }
 
 export function getCanvasLinks(draft: PipelinePayload): PipelineEditorCanvasLink[] {

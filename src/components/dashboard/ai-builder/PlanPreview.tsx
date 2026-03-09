@@ -13,7 +13,7 @@ interface PlanPreviewProps {
   loadingOlderMessages: boolean;
   readOnly: boolean;
   messagesEndRef: RefObject<HTMLDivElement>;
-  onApplyDraft: (draft: PipelinePayload) => void;
+  onApplyDraft: (draft: PipelinePayload) => Promise<{ workflowKey?: string } | void>;
   onQuickReply: (value: string) => Promise<void>;
   onLoadOlderMessages: () => boolean;
 }
@@ -111,8 +111,10 @@ export function PlanPreview({
     if (!container) return;
 
     const interval = setInterval(() => {
-      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (distanceFromBottom < 150) {
+      const maxScroll = container.scrollHeight - container.clientHeight;
+      const distanceFromBottom = maxScroll - container.scrollTop;
+      const threshold = Math.min(150, maxScroll * 0.8);
+      if (distanceFromBottom < threshold) {
         container.scrollTop = container.scrollHeight;
       }
     }, 150);
@@ -232,18 +234,20 @@ export function PlanPreview({
 
         {messages.length === 0 && !generating ? <PlanPreviewHeader /> : null}
 
-        {messages.map((msg) => {
+        {messages.map((msg, msgIndex) => {
           const generatedDraft = msg.generatedDraft;
+          const isLatest = msgIndex === messages.length - 1;
           return (
             <ChatBubble
               key={msg.id}
               message={msg}
               readOnly={readOnly || generating}
+              questionsExpired={!isLatest}
               onQuickReply={onQuickReply}
               onApply={
                 generatedDraft
                   ? () => {
-                      onApplyDraft(clonePipelinePayload(generatedDraft));
+                      return onApplyDraft(clonePipelinePayload(generatedDraft));
                     }
                   : undefined
               }

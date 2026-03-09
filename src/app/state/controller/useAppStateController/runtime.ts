@@ -16,7 +16,7 @@ import {
 import { clearTimeoutRef } from "../utils";
 import { buildRunCompletionModalContext, buildRunInputFallbackSummary, buildRunInputModalSignature } from "./stateSelectors";
 import { inspectRuntimeInputPrompts, loadInitialState, syncRunStatusNotifications } from "./effects";
-import type { AppStateSetState } from "../types";
+import type { AppStateSetState, PipelineSaveResult } from "../types";
 
 type AppStateSetRuns = AppStateSetState<DashboardState["runs"]>;
 
@@ -77,7 +77,7 @@ export interface AppStateControllerRuntimeArgs {
     options?: { force?: boolean }
   ) => Promise<void>;
   handleLoadSmartRunPlan: (inputs?: Record<string, string>, options?: { force?: boolean }) => Promise<void>;
-  handleSavePipeline: (args?: { draftSnapshot?: PipelinePayload; silent?: boolean }) => Promise<boolean>;
+  handleSavePipeline: (args?: { draftSnapshot?: PipelinePayload; silent?: boolean }) => Promise<PipelineSaveResult>;
   resetDraftHistory: (draft: PipelinePayload) => void;
 }
 
@@ -305,13 +305,14 @@ export function useAppStateControllerRuntime(args: AppStateControllerRuntimeArgs
   useEffect(() => {
     inspectRuntimeInputPrompts({
       runs,
+      selectedPipelineId,
       processingRunInputModal,
       runInputModal,
       runtimeInputPromptSeenRef,
       setRunInputModal,
       setNotice
     });
-  }, [processingRunInputModal, runInputModal, runtimeInputPromptSeenRef, runs, setNotice, setRunInputModal]);
+  }, [processingRunInputModal, runInputModal, runtimeInputPromptSeenRef, runs, selectedPipelineId, setNotice, setRunInputModal]);
 
   useEffect(() => {
     if (!selectedPipelineId) {

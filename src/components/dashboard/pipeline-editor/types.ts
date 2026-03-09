@@ -1,6 +1,14 @@
 import type { Dispatch, SetStateAction } from "react";
 import { type ModelCatalogEntry } from "@/lib/modelCatalog";
-import type { LinkCondition, PipelinePayload, PipelineRun, ProviderId, ReasoningEffort } from "@/lib/types";
+import type {
+  LinkCondition,
+  PipelinePayload,
+  PipelineRun,
+  ProviderConfig,
+  ProviderId,
+  ProviderOAuthStatus,
+  ReasoningEffort
+} from "@/lib/types";
 
 export interface PipelineEditorMcpServer {
   id: string;
@@ -15,7 +23,11 @@ export interface PipelineEditorProps {
   debugPreviewDispatchRouteId?: string | null;
   readOnly?: boolean;
   modelCatalog: Record<ProviderId, ModelCatalogEntry[]>;
+  providers: Record<ProviderId, ProviderConfig>;
+  oauthStatuses: Record<ProviderId, ProviderOAuthStatus | null>;
   mcpServers: PipelineEditorMcpServer[];
+  openAiFastModeAvailable: boolean;
+  openAiFastModeUnavailableNote?: string;
   claudeFastModeAvailable: boolean;
   claudeFastModeUnavailableNote?: string;
   onChange: (next: PipelinePayload) => void;
@@ -51,6 +63,8 @@ export interface PipelineEditorCanvasNode {
   use1MContext?: boolean;
   enableIsolatedStorage?: boolean;
   enableSharedStorage?: boolean;
+  sandboxMode?: PipelinePayload["steps"][number]["sandboxMode"];
+  requiresFullAccess?: boolean;
 }
 
 export interface PipelineEditorCanvasLink {
@@ -98,7 +112,11 @@ export interface GeneralSectionProps {
   draft: PipelinePayload;
   readOnly: boolean;
   modelCatalog: Record<ProviderId, ModelCatalogEntry[]>;
+  providers: Record<ProviderId, ProviderConfig>;
+  oauthStatuses: Record<ProviderId, ProviderOAuthStatus | null>;
   mcpServers: PipelineEditorMcpServer[];
+  openAiFastModeAvailable: boolean;
+  openAiFastModeUnavailableNote?: string;
   claudeFastModeAvailable: boolean;
   claudeFastModeUnavailableNote?: string;
   selectedStep: PipelinePayload["steps"][number];

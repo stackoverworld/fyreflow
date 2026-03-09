@@ -7,7 +7,7 @@ interface McpAuthSectionProps {
 }
 
 export function McpAuthSection({ draft, onChange }: McpAuthSectionProps) {
-  const isNetwork = draft.transport === "http" || draft.transport === "sse";
+  const isNetwork = draft.transport === "http";
 
   return (
     <section className="space-y-3">

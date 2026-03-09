@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { isValidTimeZone, parseCronExpression } from "../../../cron.js";
+import { MAX_CONTEXT_WINDOW_TOKENS } from "../../../modelCatalog.js";
+import { assertPublicHttpUrl } from "../../../security/networkTargets.js";
 
 const schedulerDefaultTimezone = "UTC";
 
@@ -9,11 +11,11 @@ const stepSchema = z.object({
   role: z.enum(["analysis", "planner", "orchestrator", "executor", "tester", "review"]),
   prompt: z.string().min(1),
   providerId: z.enum(["openai", "claude"]).default("openai"),
-  model: z.string().min(1).default("gpt-5.3-codex"),
+  model: z.string().min(1).default("gpt-5.4"),
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("medium"),
   fastMode: z.boolean().default(false),
   use1MContext: z.boolean().default(false),
-  contextWindowTokens: z.number().int().min(64000).max(1000000).default(272000),
+  contextWindowTokens: z.number().int().min(64000).max(MAX_CONTEXT_WINDOW_TOKENS).optional(),
   position: z
     .object({
       x: z.number().finite(),
@@ -26,6 +28,7 @@ const stepSchema = z.object({
   enableIsolatedStorage: z.boolean().default(false),
   enableSharedStorage: z.boolean().default(false),
   enabledMcpServerIds: z.array(z.string().min(1)).max(16).default([]),
+  sandboxMode: z.enum(["auto", "secure", "full"]).default("auto"),
   outputFormat: z.enum(["markdown", "json"]).default("markdown"),
   requiredOutputFields: z.array(z.string().min(1)).max(40).default([]),
   requiredOutputFiles: z.array(z.string().min(1)).max(40).default([]),
@@ -119,7 +122,8 @@ export const pipelineSchema = z.object({
         id: z.string().min(1).optional(),
         sourceStepId: z.string().min(1),
         targetStepId: z.string().min(1),
-        condition: z.enum(["always", "on_pass", "on_fail"]).optional()
+        condition: z.enum(["always", "on_pass", "on_fail"]).optional(),
+        conditionExpression: z.string().max(240).optional()
       })
     )
     .default([]),
@@ -139,8 +143,23 @@ export const providerUpdateSchema = z.object({
   authMode: z.enum(["api_key", "oauth"]).optional(),
   apiKey: z.string().optional(),
   oauthToken: z.string().optional(),
-  baseUrl: z.string().optional(),
-  defaultModel: z.string().optional()
+  baseUrl: z
+    .string()
+    .optional()
+    .superRefine((value, context) => {
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return;
+      }
+      try {
+        assertPublicHttpUrl(value, "Provider baseUrl");
+      } catch (error) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: error instanceof Error ? error.message : "Provider baseUrl is invalid."
+        });
+      }
+    }),
+  defaultModel: z.string().min(1).max(200).optional()
 });
 
 export const providerIdSchema = z.enum(["openai", "claude"]);
@@ -148,20 +167,59 @@ export const providerOAuthCodeSubmitSchema = z.object({
   code: z.string().min(1).max(4096)
 });
 
-export const mcpServerSchema = z.object({
+const mcpServerBaseSchema = z.object({
   name: z.string().min(2).max(120),
   enabled: z.boolean().optional(),
-  transport: z.enum(["stdio", "http", "sse"]).optional(),
+  transport: z.enum(["stdio", "http"]).optional(),
   command: z.string().max(4000).optional(),
   args: z.string().max(4000).optional(),
-  url: z.string().max(4000).optional(),
+  url: z
+    .string()
+    .max(4000)
+    .optional()
+    .superRefine((value, context) => {
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return;
+      }
+      try {
+        assertPublicHttpUrl(value, "MCP URL");
+      } catch (error) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: error instanceof Error ? error.message : "MCP URL is invalid."
+        });
+      }
+    }),
   env: z.string().max(8000).optional(),
   headers: z.string().max(8000).optional(),
   toolAllowlist: z.string().max(8000).optional(),
+  hostAllowlist: z.string().max(8000).optional(),
   health: z.enum(["unknown", "healthy", "degraded", "down"]).optional()
 });
 
-export const mcpServerPatchSchema = mcpServerSchema.partial();
+export const mcpServerSchema = mcpServerBaseSchema.superRefine((value, context) => {
+  if (value.transport === "stdio") {
+    return;
+  }
+
+  if (!value.toolAllowlist || value.toolAllowlist.trim().length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["toolAllowlist"],
+      message: "HTTP MCP servers require an explicit tool allowlist."
+    });
+  }
+
+  if (!value.hostAllowlist || value.hostAllowlist.trim().length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["hostAllowlist"],
+      message: "HTTP MCP servers require an explicit outbound host allowlist."
+    });
+  }
+});
+
+export const mcpServerPatchSchema = mcpServerBaseSchema.partial();
 
 export const storageUpdateSchema = z.object({
   enabled: z.boolean().optional(),
@@ -323,7 +381,8 @@ const flowBuilderDraftSchema = z.object({
         id: z.string().min(1).optional(),
         sourceStepId: z.string().min(1),
         targetStepId: z.string().min(1),
-        condition: z.enum(["always", "on_pass", "on_fail"]).optional()
+        condition: z.enum(["always", "on_pass", "on_fail"]).optional(),
+        conditionExpression: z.string().max(240).optional()
       })
     )
     .default([]),
@@ -347,6 +406,13 @@ export const flowBuilderRequestSchema = z.object({
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
   fastMode: z.boolean().optional(),
   use1MContext: z.boolean().optional(),
+  generatedStepPolicy: z
+    .object({
+      strategy: z.enum(["openai-first", "anthropic-first", "balanced"]).default("openai-first"),
+      allowPremiumModes: z.boolean().default(false),
+      openAiApiCapable: z.boolean().optional()
+    })
+    .optional(),
   history: z.array(flowBuilderMessageSchema).max(240).optional(),
   currentDraft: flowBuilderDraftSchema.optional(),
   availableMcpServers: z
@@ -355,7 +421,7 @@ export const flowBuilderRequestSchema = z.object({
         id: z.string().min(1).max(120),
         name: z.string().min(1).max(160),
         enabled: z.boolean().optional(),
-        transport: z.enum(["stdio", "http", "sse"]).optional(),
+        transport: z.enum(["stdio", "http"]).optional(),
         summary: z.string().max(320).optional()
       })
     )

@@ -1,4 +1,4 @@
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ARG FYREFLOW_BUILD_VERSION=dev
 ARG FYREFLOW_INSTALL_PROVIDER_CLIS=1

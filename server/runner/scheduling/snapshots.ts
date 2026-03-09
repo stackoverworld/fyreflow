@@ -20,6 +20,7 @@ export async function persistPipelineSnapshot(runRootPath: string, pipeline: Pip
 }
 
 export async function persistRunStateSnapshot(store: LocalStore, runId: string, runRootPath: string): Promise<void> {
+  await store.flush();
   const run = store.getRun(runId);
   if (!run) {
     return;

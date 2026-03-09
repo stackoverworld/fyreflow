@@ -6,6 +6,7 @@ import type {
 import {
   getCachedCodexAccessToken as getCachedCodexAccessTokenImpl,
   getOpenAiOAuthStatus,
+  probeOpenAiApiCredential as probeOpenAiApiCredentialImpl,
   startOpenAiOAuthLogin,
   submitOpenAiOAuthCode,
   syncOpenAiOAuthToken
@@ -21,6 +22,10 @@ export type ProviderOAuthStatus = ProviderOAuthStatusContract;
 
 export function getCachedCodexAccessToken(): string | undefined {
   return getCachedCodexAccessTokenImpl();
+}
+
+export async function probeOpenAiApiCredential(baseUrl: string, accessToken: string) {
+  return probeOpenAiApiCredentialImpl(baseUrl, accessToken);
 }
 
 export async function startProviderOAuthLogin(providerId: ProviderId): Promise<{

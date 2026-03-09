@@ -1,5 +1,10 @@
 import { nanoid } from "nanoid";
-import { resolveDefaultContextWindow, resolveReasoning } from "../modelCatalog.js";
+import {
+  getModelEntry,
+  resolve1MContextEnabled,
+  resolveMinimumContextWindow,
+  resolveReasoning
+} from "../modelCatalog.js";
 import {
   defaultContextTemplate,
   defaultRolePrompts,
@@ -12,6 +17,10 @@ import {
   normalizeSchedule,
   normalizeStringArray
 } from "./normalizers.js";
+import {
+  analyzeStepSandboxRequirement,
+  normalizeStepSandboxMode
+} from "../sandboxMode.js";
 import type { GeneratedFlowSpec } from "./schema.js";
 import type { DraftBuildRequest } from "./draftMapping/contracts.js";
 import {
@@ -48,33 +57,92 @@ type StepExecutionDefaults = {
   contextWindowTokens: number;
 };
 
-const codexCodeRoute = {
-  providerId: "openai",
-  model: "gpt-5.3-codex",
-  reasoningEffort: "xhigh"
-} as const satisfies Pick<StepExecutionDefaults, "providerId" | "model" | "reasoningEffort">;
+type StepSandboxResolutionInput = {
+  explicit?: PipelineStep["sandboxMode"];
+  existing?: PipelineStep["sandboxMode"];
+  role: PipelineStep["role"];
+  name: string;
+  prompt: string;
+  contextTemplate: string;
+  requiredOutputFiles: string[];
+  skipIfArtifacts: string[];
+};
 
-const claudeStrategicRoute = {
+type StepExecutionRoute = Pick<StepExecutionDefaults, "providerId" | "model" | "reasoningEffort">;
+type GeneratedStepPolicy = NonNullable<DraftBuildRequest["generatedStepPolicy"]>;
+
+const openAiDefaultRoute = {
+  providerId: "openai",
+  model: "gpt-5.4",
+  reasoningEffort: "medium"
+} as const satisfies StepExecutionRoute;
+
+const openAiPremiumReviewRoute = {
+  providerId: "openai",
+  model: "gpt-5.4-pro",
+  reasoningEffort: "high"
+} as const satisfies StepExecutionRoute;
+
+const claudeDefaultRoute = {
+  providerId: "claude",
+  model: "claude-sonnet-4-6",
+  reasoningEffort: "medium"
+} as const satisfies StepExecutionRoute;
+
+const claudeHardRoute = {
   providerId: "claude",
   model: "claude-opus-4-6",
   reasoningEffort: "high"
-} as const satisfies Pick<StepExecutionDefaults, "providerId" | "model" | "reasoningEffort">;
+} as const satisfies StepExecutionRoute;
 
-const uiTaskPattern =
-  /\b(ui|ux|landing\s*page|frontend|front-end|figma|wireframe|mockup|design\s*system|visual\s*design|html|css|tailwind|responsive\s*layout|website|web\s*page)\b/i;
-const planningTaskPattern =
-  /\b(plan(?:ning)?|roadmap|strategy|milestones?|spec(?:ification)?s?|requirements?|acceptance\s+criteria|work\s*breakdown)\b/i;
-const researchTaskPattern =
-  /\b(web\s*research|web\s*search|research|investigat(?:e|ion|ing)|gather\s+sources?|benchmark(?:ing)?|competitive\s+analysis|fact[-\s]?check|citations?)\b/i;
-const orchestrationTaskPattern = /\borchestrat(?:e|or|ion)|coordinat(?:e|ion|or)|dispatch|route\s+work\b/i;
-const hardCodeTaskPattern =
-  /\b(code|coding|implement(?:ation)?|refactor|debug|fix(?:ing)?|bugs?|unit\s*tests?|integration\s*tests?|typescript|javascript|node(?:\.js)?|python|go|rust|sql|database|schema|endpoint|api|backend|server|cli|algorithm)\b/i;
+const claudeUtilityRoute = {
+  providerId: "claude",
+  model: "claude-haiku-4-5",
+  reasoningEffort: "low"
+} as const satisfies StepExecutionRoute;
 
-function shouldUseClaudeStrategicRoute(input: StepRoutingInput): boolean {
-  if (input.role === "planner" || input.role === "orchestrator") {
-    return true;
+const DEFAULT_GENERATED_STEP_POLICY: GeneratedStepPolicy = {
+  strategy: "openai-first",
+  allowPremiumModes: false
+};
+
+const explicitModelRoutes: Array<{
+  pattern: RegExp;
+  route: StepExecutionRoute;
+}> = [
+  { pattern: /\bgpt(?:[-\s]?5(?:\.\d+)?)?[-\s]?pro\b|\bgpt-5\.4-pro\b/i, route: openAiPremiumReviewRoute },
+  { pattern: /\bgpt-5\.4\b|\bopenai\b|\bcodex\b/i, route: openAiDefaultRoute },
+  { pattern: /\bclaude[-\s]?opus[-\s]?4(?:\.\d+)?\b|\bopus(?:\s*4(?:\.\d+)?)?\b/i, route: claudeHardRoute },
+  { pattern: /\bclaude[-\s]?sonnet[-\s]?4(?:\.\d+)?\b|\bsonnet(?:\s*4(?:\.\d+)?)?\b/i, route: claudeDefaultRoute },
+  { pattern: /\bclaude[-\s]?haiku[-\s]?4(?:\.\d+)?\b|\bhaiku(?:\s*4(?:\.\d+)?)?\b/i, route: claudeUtilityRoute }
+] as const;
+
+const cheapUtilityPattern =
+  /\b(classif(?:y|ier)|categori(?:ze|sation|zer)|label(?:er|ing)?|triage|moderation|dedupe|deduplication|tag(?:ger|ging)?)\b/i;
+
+function resolveGeneratedStepPolicy(request: DraftBuildRequest): GeneratedStepPolicy {
+  return {
+    ...DEFAULT_GENERATED_STEP_POLICY,
+    ...(request.generatedStepPolicy ?? {})
+  };
+}
+
+function resolveExplicitRouteFromText(text: string): StepExecutionRoute | null {
+  const normalized = text.trim();
+  if (normalized.length === 0) {
+    return null;
   }
 
+  for (const matcher of explicitModelRoutes) {
+    if (matcher.pattern.test(normalized)) {
+      return matcher.route;
+    }
+  }
+
+  return null;
+}
+
+function resolveExplicitRoute(input: StepRoutingInput): StepExecutionRoute | null {
   const localTaskText = [
     input.name,
     input.prompt,
@@ -82,28 +150,48 @@ function shouldUseClaudeStrategicRoute(input: StepRoutingInput): boolean {
     ...input.requiredOutputFields
   ].join("\n");
 
-  if (
-    uiTaskPattern.test(localTaskText) ||
-    planningTaskPattern.test(localTaskText) ||
-    researchTaskPattern.test(localTaskText) ||
-    orchestrationTaskPattern.test(localTaskText)
-  ) {
-    return true;
+  return resolveExplicitRouteFromText(localTaskText) ?? resolveExplicitRouteFromText(input.requestPrompt);
+}
+
+function isCheapUtilityStep(input: StepRoutingInput): boolean {
+  const localTaskText = [input.name, input.prompt, ...input.requiredOutputFields].join("\n");
+  return cheapUtilityPattern.test(localTaskText);
+}
+
+function resolvePolicyRoute(input: StepRoutingInput, policy: GeneratedStepPolicy): StepExecutionRoute {
+  if (isCheapUtilityStep(input)) {
+    return claudeUtilityRoute;
   }
 
-  if (hardCodeTaskPattern.test(localTaskText)) {
-    return false;
+  if (input.role === "review" && policy.allowPremiumModes && policy.openAiApiCapable === true) {
+    return openAiPremiumReviewRoute;
   }
 
-  return uiTaskPattern.test(input.requestPrompt) || researchTaskPattern.test(input.requestPrompt);
+  switch (policy.strategy) {
+    case "anthropic-first":
+      return input.role === "planner" || input.role === "review" ? claudeHardRoute : claudeDefaultRoute;
+    case "balanced":
+      return input.role === "analysis" || input.role === "tester" ? claudeDefaultRoute : openAiDefaultRoute;
+    case "openai-first":
+    default:
+      return openAiDefaultRoute;
+  }
+}
+
+function resolveStepRoute(input: StepRoutingInput, request: DraftBuildRequest): StepExecutionRoute {
+  const explicit = resolveExplicitRoute(input);
+  if (explicit) {
+    return explicit;
+  }
+
+  return resolvePolicyRoute(input, resolveGeneratedStepPolicy(request));
 }
 
 function resolveStepExecutionDefaults(input: StepRoutingInput, request: DraftBuildRequest): StepExecutionDefaults {
-  const preferred = shouldUseClaudeStrategicRoute(input) ? claudeStrategicRoute : codexCodeRoute;
-  const use1MContext = preferred.providerId === "claude" ? request.use1MContext === true : false;
-  const fastMode = preferred.providerId === "claude" ? request.fastMode === true : false;
-  const baseContextWindow = resolveDefaultContextWindow(preferred.providerId, preferred.model);
-  const contextWindowTokens = use1MContext ? Math.max(baseContextWindow, 1_000_000) : baseContextWindow;
+  const preferred = resolveStepRoute(input, request);
+  const use1MContext = resolve1MContextEnabled(preferred.providerId, preferred.model, false);
+  const fastMode = false;
+  const contextWindowTokens = resolveMinimumContextWindow(preferred.providerId, preferred.model, use1MContext);
 
   return {
     providerId: preferred.providerId,
@@ -144,7 +232,11 @@ function preserveLinksFromCurrentDraft(
     }
 
     const condition = link.condition ?? "always";
-    const dedupeKey = `${sourceStepId}->${targetStepId}:${condition}`;
+    const conditionExpression =
+      typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+        ? link.conditionExpression.trim()
+        : undefined;
+    const dedupeKey = `${sourceStepId}->${targetStepId}:${condition}:${conditionExpression ?? ""}`;
     if (dedupe.has(dedupeKey)) {
       continue;
     }
@@ -154,7 +246,8 @@ function preserveLinksFromCurrentDraft(
       id: typeof link.id === "string" && link.id.trim().length > 0 ? link.id : nanoid(),
       sourceStepId,
       targetStepId,
-      condition
+      condition,
+      ...(conditionExpression ? { conditionExpression } : {})
     });
   }
 
@@ -332,6 +425,37 @@ function shouldDisableSkipArtifactsForStrictRuns(prompt: string): boolean {
   );
 }
 
+function resolveDraftStepSandboxMode(input: StepSandboxResolutionInput): PipelineStep["sandboxMode"] {
+  const explicitMode = normalizeStepSandboxMode(input.explicit);
+  const existingMode = normalizeStepSandboxMode(input.existing);
+  const requirement = analyzeStepSandboxRequirement({
+    role: input.role,
+    name: input.name,
+    prompt: input.prompt,
+    contextTemplate: input.contextTemplate,
+    requiredOutputFiles: input.requiredOutputFiles,
+    skipIfArtifacts: input.skipIfArtifacts
+  });
+
+  if (explicitMode === "full" || existingMode === "full") {
+    return "full";
+  }
+
+  if (requirement.requiresFullAccess) {
+    return "secure";
+  }
+
+  if (explicitMode !== "auto") {
+    return explicitMode;
+  }
+
+  if (existingMode !== "auto") {
+    return existingMode;
+  }
+
+  return "secure";
+}
+
 function includesDeliveryToken(value: string): boolean {
   return /\bdeliver(y|ed|ing)?\b/i.test(value);
 }
@@ -430,6 +554,7 @@ function ensureDeliveryStageForCompletionGates(draft: PipelineInput): PipelineIn
       enableIsolatedStorage: true,
       enableSharedStorage: true,
       enabledMcpServerIds: [],
+      sandboxMode: "secure",
       outputFormat: "markdown",
       requiredOutputFields: [],
       requiredOutputFiles: [
@@ -525,6 +650,16 @@ export function buildFlowDraft(
       requiredOutputFiles,
       skipIfArtifacts
     });
+    const contextTemplate = step.contextTemplate?.trim() || defaultContextTemplate;
+    const sandboxMode = resolveDraftStepSandboxMode({
+      explicit: step.sandboxMode,
+      role,
+      name: step.name,
+      prompt,
+      contextTemplate,
+      requiredOutputFiles,
+      skipIfArtifacts
+    });
 
     return {
       id: nanoid(),
@@ -541,7 +676,7 @@ export function buildFlowDraft(
         x: 80 + col * 280,
         y: 120 + row * 180
       },
-      contextTemplate: step.contextTemplate?.trim() || defaultContextTemplate,
+      contextTemplate,
       enableDelegation:
         typeof step.enableDelegation === "boolean" ? step.enableDelegation : role === "executor" || role === "orchestrator",
       delegationCount:
@@ -556,6 +691,7 @@ export function buildFlowDraft(
             .map((entry) => entry.trim())
             .slice(0, 16)
         : [],
+      sandboxMode,
       outputFormat: step.outputFormat === "json" ? "json" : "markdown",
       requiredOutputFields,
       requiredOutputFiles,
@@ -642,15 +778,13 @@ export function buildFlowDraftFromExisting(
     const isClaudeOrchestrator = providerId === "claude" && role === "orchestrator";
     const existingMatchesRoute = existing?.providerId === providerId && existing?.model === model;
 
-    const resolvedUse1MContext =
-      providerId === "claude"
-        ? existingMatchesRoute && typeof existing?.use1MContext === "boolean"
-          ? existing.use1MContext
-          : stepDefaults.use1MContext
-        : false;
+    const routeModelMeta = getModelEntry(providerId, model);
+    const resolvedUse1MContext = existingMatchesRoute && typeof existing?.use1MContext === "boolean"
+      ? resolve1MContextEnabled(providerId, model, existing.use1MContext)
+      : stepDefaults.use1MContext;
 
     const resolvedFastMode =
-      providerId === "claude"
+      routeModelMeta?.supportsFastMode === true
         ? existingMatchesRoute && typeof existing?.fastMode === "boolean"
           ? existing.fastMode
           : stepDefaults.fastMode
@@ -664,9 +798,12 @@ export function buildFlowDraftFromExisting(
         : undefined;
     const resolvedContextWindowTokens =
       existingContextWindow && existingContextWindow > 0 ? existingContextWindow : stepDefaults.contextWindowTokens;
+    const minimumContextWindow = resolveMinimumContextWindow(providerId, model, use1MContext);
     const contextWindowTokens = isClaudeOrchestrator
-      ? Math.min(resolvedContextWindowTokens, orchestratorContextWindowCap)
-      : resolvedContextWindowTokens;
+      ? Math.min(Math.max(resolvedContextWindowTokens, minimumContextWindow), orchestratorContextWindowCap)
+      : use1MContext
+        ? Math.max(resolvedContextWindowTokens, minimumContextWindow)
+        : resolvedContextWindowTokens;
     const scenarios =
       normalizeStringArray(step.scenarios, 20) ??
       (Array.isArray(existing?.scenarios) ? existing.scenarios.slice(0, 20) : []);
@@ -700,6 +837,22 @@ export function buildFlowDraftFromExisting(
       requiredOutputFiles,
       skipIfArtifacts
     });
+    const contextTemplate =
+      typeof step.contextTemplate === "string" && step.contextTemplate.trim().length > 0
+        ? step.contextTemplate.trim()
+        : typeof existing?.contextTemplate === "string" && existing.contextTemplate.trim().length > 0
+          ? existing.contextTemplate
+          : defaultContextTemplate;
+    const sandboxMode = resolveDraftStepSandboxMode({
+      explicit: step.sandboxMode,
+      existing: existing?.sandboxMode,
+      role,
+      name: step.name,
+      prompt,
+      contextTemplate,
+      requiredOutputFiles,
+      skipIfArtifacts
+    });
 
     return {
       id: typeof existing?.id === "string" && existing.id.trim().length > 0 ? existing.id : nanoid(),
@@ -713,12 +866,7 @@ export function buildFlowDraftFromExisting(
       use1MContext,
       contextWindowTokens,
       position,
-      contextTemplate:
-        typeof step.contextTemplate === "string" && step.contextTemplate.trim().length > 0
-          ? step.contextTemplate.trim()
-          : typeof existing?.contextTemplate === "string" && existing.contextTemplate.trim().length > 0
-            ? existing.contextTemplate
-            : defaultContextTemplate,
+      contextTemplate,
       enableDelegation:
         typeof step.enableDelegation === "boolean"
           ? step.enableDelegation
@@ -739,6 +887,7 @@ export function buildFlowDraftFromExisting(
               .map((entry) => entry.trim())
               .slice(0, 16)
           : [],
+      sandboxMode,
       outputFormat:
         step.outputFormat === "json"
           ? "json"

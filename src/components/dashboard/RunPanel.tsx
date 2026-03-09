@@ -404,6 +404,7 @@ export function RunPanel({
               canPauseActiveRun={canPauseActiveRun}
               canResumeActiveRun={canResumeActiveRun}
               canSmartRun={canSmartRun}
+              missingRequiredInputCount={missingRequiredInputs.length}
               canQuickRun={canQuickRun}
               loadingSmartRunPlan={loadingSmartRunPlan}
               smartRunPlan={smartRunPlan}

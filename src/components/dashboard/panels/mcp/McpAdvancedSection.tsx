@@ -7,6 +7,8 @@ interface McpAdvancedSectionProps {
 }
 
 export function McpAdvancedSection({ draft, onChange }: McpAdvancedSectionProps) {
+  const isNetwork = draft.transport === "http";
+
   return (
     <section className="space-y-3">
       <label className="block space-y-1.5">
@@ -14,9 +16,20 @@ export function McpAdvancedSection({ draft, onChange }: McpAdvancedSectionProps)
         <Input
           value={draft.toolAllowlist}
           onChange={(event) => onChange({ ...draft, toolAllowlist: event.target.value })}
-          placeholder="Leave empty to allow all tools"
+          placeholder={isNetwork ? "tools/callable_tool,another_tool" : "optional for stdio"}
         />
       </label>
+
+      {isNetwork && (
+        <label className="block space-y-1.5">
+          <span className="text-xs text-ink-400">Outbound host allowlist</span>
+          <Input
+            value={draft.hostAllowlist}
+            onChange={(event) => onChange({ ...draft, hostAllowlist: event.target.value })}
+            placeholder="api.githubcopilot.com"
+          />
+        </label>
+      )}
     </section>
   );
 }

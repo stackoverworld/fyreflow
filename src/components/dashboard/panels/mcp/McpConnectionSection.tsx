@@ -9,7 +9,7 @@ interface McpConnectionSectionProps {
 }
 
 export function McpConnectionSection({ draft, onChange }: McpConnectionSectionProps) {
-  const isNetwork = draft.transport === "http" || draft.transport === "sse";
+  const isNetwork = draft.transport === "http";
   const isStdio = draft.transport === "stdio";
 
   return (
@@ -38,7 +38,7 @@ export function McpConnectionSection({ draft, onChange }: McpConnectionSectionPr
           <Input
             value={draft.url}
             onChange={(event) => onChange({ ...draft, url: event.target.value })}
-            placeholder={draft.transport === "sse" ? "http://localhost:3010/sse" : "http://localhost:3010"}
+            placeholder="https://api.githubcopilot.com/mcp/"
           />
         </label>
       )}

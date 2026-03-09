@@ -10,11 +10,13 @@ import type { PipelineStep, RunInputRequest, RunInputRequestType } from "../type
 type RecoverableFailureKind = "auth" | "network" | "malformed";
 
 const AUTH_FAILURE_REGEX =
-  /\b(token[_-]?expired|expired token|invalid[_\s-]*(token|api[_\s-]?key|credential)|unauthorized|forbidden|auth(?:entication|orization)?\b|status[^0-9]*40[13]\b|http[^0-9]*40[13]\b|401\b|403\b)\b/i;
+  /\b(token[_-]?expired|expired token|invalid[_\s-]*(token|api[_\s-]?key|credential)|unauthorized|forbidden|not logged in|login required|session expired|reauth(?:entication|enticate)?|oauth(?:\s+is)?\s+not\s+ready|provider oauth|auth(?:entication|orization)?\b|status[^0-9]*40[13]\b|http[^0-9]*40[13]\b|401\b|403\b)\b/i;
 const NETWORK_FAILURE_REGEX =
   /\b(network|enotfound|eai_again|getaddrinfo|dns|timed?\s*out|timeout|connection\s+(?:refused|reset|failed)|host unreachable|sandbox)\b/i;
 const MALFORMED_FAILURE_REGEX =
   /\b(invalid url|malformed|bad request|invalid request|cannot parse|nested url|wrong endpoint)\b|https?:\/\/\S*https?:\/\//i;
+const PROVIDER_AUTH_BLOCKER_REGEX =
+  /\b(provider oauth|open provider auth|reconnect provider auth|cli-managed mode|claude cli runtime preflight|claude cli is not logged in|please run\s+\/login|setup-token)\b/i;
 const INPUT_HINT_KEY_REGEX = /(url|uri|link|endpoint|repo|repository|host|domain|path|file|dir|project|base)/i;
 const REPO_KEY_HINT_REGEX = /(repo|repository)/i;
 const PATH_KEY_HINT_REGEX = /(path|file|dir|folder|workspace)/i;
@@ -140,7 +142,7 @@ function buildRequestGuidance(
   if (type === "path") {
     return {
       reasonSuffix: "Provide a relative path value.",
-      placeholder: "/path/to/value"
+      placeholder: "path/to/value"
     };
   }
 
@@ -159,11 +161,53 @@ function buildSummary(kind: RecoverableFailureKind, stepName: string): string {
   return `${stepName} could not reach a required service with current runtime inputs.`;
 }
 
+function truncateForDetails(value: string, maxChars = 600): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function buildProviderAuthBlockerOutput(input: {
+  step: PipelineStep;
+  errorMessage: string;
+}): string {
+  const providerLabel =
+    input.step.providerId === "claude" ? "Claude" : input.step.providerId === "openai" ? "OpenAI" : "Provider";
+  const details = truncateForDetails(input.errorMessage);
+  return JSON.stringify(
+    {
+      status: "blocked",
+      summary: `${input.step.name} is blocked by ${providerLabel} provider authentication.`,
+      input_requests: [],
+      blockers: [
+        {
+          id: `${input.step.providerId}-provider-auth`,
+          title: `${providerLabel} provider auth required`,
+          message: "Open Provider Settings, reconnect provider auth, then restart this run.",
+          details
+        }
+      ],
+      notes: [
+        "This blocker cannot be resolved via run inputs.",
+        "Reconnect provider auth in Settings and retry."
+      ]
+    },
+    null,
+    2
+  );
+}
+
 export function buildRuntimeInputRequestOutputFromFailure(input: {
   step: PipelineStep;
   errorMessage: string;
   runInputs: RunInputs;
 }): string | null {
+  if (PROVIDER_AUTH_BLOCKER_REGEX.test(input.errorMessage)) {
+    return buildProviderAuthBlockerOutput(input);
+  }
+
   const kind = classifyFailure(input.errorMessage);
   if (!kind) {
     return null;

@@ -25,6 +25,7 @@ interface RunPanelActionsProps {
   canPauseActiveRun: boolean;
   canResumeActiveRun: boolean;
   canSmartRun: boolean;
+  missingRequiredInputCount?: number;
   canQuickRun: boolean;
   loadingSmartRunPlan: boolean;
   smartRunPlan: SmartRunPlan | null;
@@ -58,6 +59,7 @@ export function RunPanelActions({
   canPauseActiveRun,
   canResumeActiveRun,
   canSmartRun,
+  missingRequiredInputCount = 0,
   canQuickRun,
   loadingSmartRunPlan,
   smartRunPlan,
@@ -158,6 +160,15 @@ export function RunPanelActions({
               <p>{`${firstBlockingCheck.title}: ${firstBlockingCheck.message}`}</p>
               {firstBlockingCheck.details ? <p className="mt-0.5 text-[11px] text-red-300">{firstBlockingCheck.details}</p> : null}
             </div>
+          </div>
+        ) : null}
+
+        {!runActive && mode === "smart" && missingRequiredInputCount > 0 && canSmartRun ? (
+          <div className="flex items-start gap-2 rounded-lg bg-[var(--surface-raised)] px-3 py-2 text-xs text-ink-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            {missingRequiredInputCount === 1
+              ? "Starting the run will prompt for the missing required input."
+              : `Starting the run will prompt for ${missingRequiredInputCount} missing required inputs.`}
           </div>
         ) : null}
 

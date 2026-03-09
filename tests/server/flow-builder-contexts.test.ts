@@ -84,7 +84,7 @@ describe("flow builder contexts", () => {
         providerRuntime: {
           providerId: "claude",
           authMode: "oauth",
-          claudeFastModeAvailable: false,
+          providerFastModeAvailable: false,
           fastModeRequested: true,
           fastModeEffective: false,
           fastModeNote: "Fast mode disabled because API key auth is not active."
@@ -92,7 +92,7 @@ describe("flow builder contexts", () => {
       });
 
       expect(context).toContain("Provider runtime profile:");
-      expect(context).toContain("claude_fast_mode_available: no");
+      expect(context).toContain("provider_fast_mode_available: no");
       expect(context).toContain("fast_mode_requested: on");
       expect(context).toContain("fast_mode_effective: off");
       expect(context).toContain("Fast mode disabled because API key auth is not active.");
@@ -105,7 +105,7 @@ describe("flow builder contexts", () => {
         providerRuntime: {
           providerId: "claude",
           authMode: "api_key",
-          claudeFastModeAvailable: true,
+          providerFastModeAvailable: true,
           fastModeRequested: true,
           fastModeEffective: true,
           fastModeNote: "Fast mode enabled."
@@ -114,7 +114,7 @@ describe("flow builder contexts", () => {
 
       expect(context).toContain("Provider runtime profile:");
       expect(context).toContain("auth_mode: api_key");
-      expect(context).toContain("claude_fast_mode_available: yes");
+      expect(context).toContain("provider_fast_mode_available: yes");
       expect(context).toContain("fast_mode_effective: on");
     });
   });
@@ -177,7 +177,7 @@ describe("flow builder contexts", () => {
         providerRuntime: {
           providerId: "openai",
           authMode: "api_key",
-          claudeFastModeAvailable: false,
+          providerFastModeAvailable: false,
           fastModeRequested: false,
           fastModeEffective: false
         }

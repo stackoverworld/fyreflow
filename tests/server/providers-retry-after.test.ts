@@ -44,7 +44,7 @@ function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
     role: "orchestrator",
     prompt: "prompt",
     providerId: "openai",
-    model: "gpt-5.3-codex",
+    model: "gpt-5.4",
     reasoningEffort: "medium",
     fastMode: false,
     use1MContext: false,
@@ -73,7 +73,7 @@ function createProvider(partial: Partial<ProviderConfig> = {}): ProviderConfig {
     apiKey: "sk-test",
     oauthToken: "",
     baseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-5.3-codex",
+    defaultModel: "gpt-5.4",
     updatedAt: new Date().toISOString(),
     ...partial
   };

@@ -99,10 +99,13 @@ describe("deriveStepLiveActivityEvents", () => {
     expect(readActionEvent?.detail).toContain("not terminal");
     const summaryEvent = events.find((event) => event.kind === "summary");
     expect(summaryEvent?.detail).toContain("Slide count preserved");
-    expect(events.some((event) => event.kind === "command_progress")).toBe(false);
+    const runningEvent = events.find((event) => event.kind === "command_progress");
+    expect(runningEvent).toBeDefined();
+    expect(runningEvent?.detail).toContain("elapsed=30s");
 
     expect(lines.some((line) => line.includes("Started attempt 1"))).toBe(true);
     expect(lines.some((line) => line.includes("Command started"))).toBe(true);
+    expect(lines.some((line) => line.includes("Command running (claude)"))).toBe(true);
     expect(lines.some((line) => line.includes("Model summary: Slide count preserved"))).toBe(true);
     expect(lines.some((line) => line.includes("Model stream: HTML_REVIEW_STATUS: PASS WORKFLOW_STATUS: PASS"))).toBe(
       true

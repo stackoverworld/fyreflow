@@ -12,6 +12,7 @@ export function toServerDraft(server: McpServerConfig): McpDraft {
     env: server.env,
     headers: server.headers,
     toolAllowlist: server.toolAllowlist,
+    hostAllowlist: server.hostAllowlist,
     health: server.health
   };
 }
@@ -27,6 +28,7 @@ export function toMcpServerPayload(draft: McpDraft): McpServerPayload {
     env: draft.env,
     headers: draft.headers,
     toolAllowlist: draft.toolAllowlist,
+    hostAllowlist: draft.hostAllowlist,
     health: draft.health
   };
 }

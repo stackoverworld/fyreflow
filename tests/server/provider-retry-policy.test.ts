@@ -121,8 +121,8 @@ describe("Provider Retry Policy", () => {
     expect(shouldFallback).toBe(true);
   });
 
-  it("enables fast mode in timeout fallback when Claude OAuth auth is active", () => {
-    const step = createStep({ fastMode: true, reasoningEffort: "high", use1MContext: true });
+  it("drops fast mode in timeout fallback when the fallback model is not Opus 4.6", () => {
+    const step = createStep({ model: "claude-opus-4-6", fastMode: true, reasoningEffort: "high", use1MContext: true });
     const input: ProviderExecutionInput = {
       provider: {
         id: "claude",
@@ -140,13 +140,14 @@ describe("Provider Retry Policy", () => {
     };
 
     const fallbackInput = buildClaudeTimeoutFallbackInput(input);
-    expect(fallbackInput.step.fastMode).toBe(true);
+    expect(fallbackInput.step.model).toBe("claude-sonnet-4-6");
+    expect(fallbackInput.step.fastMode).toBe(false);
     expect(fallbackInput.step.reasoningEffort).toBe("low");
     expect(fallbackInput.step.use1MContext).toBe(false);
   });
 
-  it("keeps fast mode enabled in timeout fallback when Claude API key auth is active", () => {
-    const step = createStep({ fastMode: false });
+  it("keeps fast mode off in timeout fallback for Sonnet paths even with API key auth", () => {
+    const step = createStep({ fastMode: false, model: "claude-sonnet-4-6" });
     const input: ProviderExecutionInput = {
       provider: {
         id: "claude",
@@ -164,6 +165,6 @@ describe("Provider Retry Policy", () => {
     };
 
     const fallbackInput = buildClaudeTimeoutFallbackInput(input);
-    expect(fallbackInput.step.fastMode).toBe(true);
+    expect(fallbackInput.step.fastMode).toBe(false);
   });
 });

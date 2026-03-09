@@ -20,6 +20,7 @@ import {
   markRunFailed,
   markRunStart,
   markStepFailed,
+  markStepNeedsInput,
   markStepPaused,
   markStepRunning,
   normalizeRuntime,
@@ -39,7 +40,6 @@ import {
   createStepRetryState,
   dequeueNextStep,
   enqueueStepForExecution,
-  findNextUnvisitedStep,
   getStepAttempt,
   markStepExecutionSettled,
   type StepEnqueueReason
@@ -271,10 +271,83 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
   const latestOutputByStepId = new Map<string, string>();
   const timeline: { stepId: string; stepName: string; output: string }[] = [];
   const stepsWithFreshArtifacts = new Set<string>();
+  const routedAttemptByLinkKey = new Map<string, number>();
+  const fanInWaitSignatureByStepId = new Map<string, string>();
   const stopIfAborted = () => checkRunAbort(abortSignal, store, runId, runRootPath);
   const isRunPaused = () => store.getRun(runId)?.status === "paused";
   const isStepOutputSkipped = (output: string | undefined): boolean =>
     typeof output === "string" && /(^|\n)STEP_STATUS:\s*SKIPPED\b/i.test(output);
+  const linkKey = (sourceStepId: string, targetStepId: string, condition: string | undefined): string =>
+    `${sourceStepId}->${targetStepId}:${condition ?? "always"}`;
+  const getFanInIncomingLinks = (stepId: string) => {
+    const incomingLinks = incomingById.get(stepId) ?? [];
+    if (
+      incomingLinks.length <= 1 ||
+      incomingLinks.some((link) => (link.condition ?? "always") !== "always")
+    ) {
+      return [];
+    }
+    return incomingLinks;
+  };
+  const getPendingFanInLinks = (stepId: string) => {
+    const fanInLinks = getFanInIncomingLinks(stepId);
+    if (fanInLinks.length === 0) {
+      return [];
+    }
+    const targetAttempts = retryState.attemptsByStep.get(stepId) ?? 0;
+    return fanInLinks.filter(
+      (link) =>
+        (routedAttemptByLinkKey.get(linkKey(link.sourceStepId, link.targetStepId, link.condition)) ?? 0) <=
+        targetAttempts
+    );
+  };
+  const logFanInWait = (stepId: string, pendingLinks: ReturnType<typeof getPendingFanInLinks>) => {
+    if (pendingLinks.length === 0) {
+      fanInWaitSignatureByStepId.delete(stepId);
+      return;
+    }
+
+    const pendingNames = pendingLinks
+      .map((link) => normalizeStepLabel(stepById.get(link.sourceStepId)?.name, link.sourceStepId))
+      .sort();
+    const targetLabel = normalizeStepLabel(stepById.get(stepId)?.name, stepId);
+    const targetAttempts = retryState.attemptsByStep.get(stepId) ?? 0;
+    const signature = `${targetAttempts}:${pendingNames.join("|")}`;
+    if (fanInWaitSignatureByStepId.get(stepId) === signature) {
+      return;
+    }
+    fanInWaitSignatureByStepId.set(stepId, signature);
+    appendRunLog(
+      store,
+      runId,
+      `Holding ${targetLabel} until all fan-in sources finish: ${pendingNames.join(", ")}`
+    );
+  };
+  const canQueueStep = (stepId: string, queuedByReason: StepEnqueueReason, logBlocked = true): boolean => {
+    if (
+      queuedByReason !== "route" &&
+      queuedByReason !== "skip_if_artifacts" &&
+      queuedByReason !== "disconnected_fallback"
+    ) {
+      return true;
+    }
+
+    const pendingLinks = getPendingFanInLinks(stepId);
+    if (pendingLinks.length === 0) {
+      fanInWaitSignatureByStepId.delete(stepId);
+      return true;
+    }
+
+    if (logBlocked) {
+      logFanInWait(stepId, pendingLinks);
+    }
+    return false;
+  };
+  const recordRoutedLinks = (sourceStepId: string, attempt: number, routedLinks: readonly { targetStepId: string; condition?: string }[]) => {
+    for (const link of routedLinks) {
+      routedAttemptByLinkKey.set(linkKey(sourceStepId, link.targetStepId, link.condition), attempt);
+    }
+  };
   const parseIsoTimestamp = (value: string | undefined): number | null => {
     if (!value || value.trim().length === 0) {
       return null;
@@ -318,6 +391,13 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
     }
     return undefined;
   };
+  const isEligibleForDisconnectedFallback = (stepId: string): boolean => {
+    const incomingLinks = incomingById.get(stepId) ?? [];
+    if (incomingLinks.some((link) => typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0)) {
+      return false;
+    }
+    return true;
+  };
 
   if (await stopIfAborted()) {
     return;
@@ -328,8 +408,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
     reason?: string,
     queuedByStepId?: string,
     queuedByReason: StepEnqueueReason = "route"
-  ) =>
-    enqueueStepForExecution(
+  ) => {
+    if (!canQueueStep(stepId, queuedByReason)) {
+      return false;
+    }
+    return enqueueStepForExecution(
       retryState,
       stepById,
       (message) => appendRunLog(store, runId, message),
@@ -338,6 +421,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
       queuedByStepId,
       queuedByReason
     );
+  };
 
   const entrySteps = orderedSteps.filter((step) => (incomingById.get(step.id)?.length ?? 0) === 0);
   if (entrySteps.length > 0) {
@@ -391,7 +475,14 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
       return undefined;
     }
 
-    const nextUnvisited = findNextUnvisitedStep(orderedSteps, retryState);
+    const nextUnvisited = orderedSteps.find(
+      (step) =>
+        (retryState.attemptsByStep.get(step.id) ?? 0) === 0 &&
+        !retryState.queued.has(step.id) &&
+        !retryState.inFlight.has(step.id) &&
+        isEligibleForDisconnectedFallback(step.id) &&
+        canQueueStep(step.id, "disconnected_fallback", false)
+    );
     if (!nextUnvisited) {
       return undefined;
     }
@@ -479,7 +570,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
           ];
           const skipOutput = outputLines.join("\n");
           const routedLinks = (outgoingById.get(stepId) ?? []).filter((link) =>
-            routeMatchesCondition(link.condition, "pass")
+            routeMatchesCondition(link, "pass")
           );
 
           mapStepExecutionResult({
@@ -503,6 +594,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
             triggeredByStepId: queuedByStepId,
             triggeredByReason: queuedByReason
           });
+          recordRoutedLinks(step.id, attempt, routedLinks);
 
           for (const link of routedLinks) {
             enqueue(link.targetStepId, `${stepLabel} skipped (artifacts already exist)`, step.id, "skip_if_artifacts");
@@ -560,6 +652,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
           triggeredByStepId: queuedByStepId,
           triggeredByReason: queuedByReason
         });
+        recordRoutedLinks(step.id, attempt, executionResult.stepExecution.routedLinks);
         const writesArtifacts = step.requiredOutputFiles.length > 0 || step.skipIfArtifacts.length > 0;
         if (writesArtifacts) {
           stepsWithFreshArtifacts.add(step.id);
@@ -602,13 +695,15 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
             errorMessage: failureMessage,
             runInputs
           });
-          markStepFailed(store, runId, step, failureMessage, attempt, remediationOutput ?? undefined);
           if (remediationOutput) {
+            markStepNeedsInput(store, runId, step, failureMessage, attempt, remediationOutput);
             appendRunLog(
               store,
               runId,
               `${stepLabel} inferred recoverable input issue from runtime failure; prompting for updated inputs.`
             );
+          } else {
+            markStepFailed(store, runId, step, failureMessage, attempt, remediationOutput ?? undefined);
           }
         }
         await persistRunStateSnapshot(store, runId, runRootPath);
@@ -633,13 +728,15 @@ export async function runPipeline(input: RunPipelineInput): Promise<void> {
           errorMessage: message,
           runInputs
         });
-        markStepFailed(store, runId, step, message, attempt, remediationOutput ?? undefined);
         if (remediationOutput) {
+          markStepNeedsInput(store, runId, step, message, attempt, remediationOutput);
           appendRunLog(
             store,
             runId,
             `${normalizeStepLabel(step.name, step.id)} inferred recoverable input issue from runtime failure; prompting for updated inputs.`
           );
+        } else {
+          markStepFailed(store, runId, step, message, attempt, remediationOutput ?? undefined);
         }
       } else {
         appendRunLog(store, runId, `Failed ${stepId}: ${message}`);

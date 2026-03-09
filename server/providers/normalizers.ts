@@ -17,6 +17,23 @@ function isDeckHtmlSynthesisStep(input: ProviderExecutionInput): boolean {
   return deckSignals.every((signal) => corpus.includes(signal));
 }
 
+function isRepositoryPublishStep(input: ProviderExecutionInput): boolean {
+  const corpus = `${input.step.name}\n${input.step.prompt}\n${input.task}\n${input.context}`.toLowerCase();
+  const repositorySignal =
+    corpus.includes("gitlab") ||
+    corpus.includes("github") ||
+    corpus.includes("/repository/files") ||
+    corpus.includes("/repository/commits") ||
+    corpus.includes("api.github.com/repos");
+  const publishSignal =
+    corpus.includes("publish") ||
+    corpus.includes("commit") ||
+    corpus.includes("push") ||
+    corpus.includes("repository/files") ||
+    corpus.includes("repository/commits");
+  return repositorySignal && publishSignal;
+}
+
 export function composeCliPrompt(input: ProviderExecutionInput): string {
   const outputInstruction =
     input.outputMode === "json"
@@ -82,6 +99,17 @@ export function composeCliPrompt(input: ProviderExecutionInput): string {
       ].join("\n")
     );
   }
+  if (isRepositoryPublishStep(input)) {
+    sections.push(
+      "",
+      [
+        "Repository publish contract:",
+        "- For multi-file updates, perform one atomic commit operation (for GitLab prefer /repository/commits with actions[]).",
+        "- Do not report success when any publish call fails (including HTTP 4xx/5xx or transport status 000).",
+        "- Final output must include committed file count and resulting commit SHA(s)."
+      ].join("\n")
+    );
+  }
 
   sections.push("", `Task:\n${input.task}`, "", `Context:\n${input.context}`, "", outputInstruction);
   return sections.join("\n");
@@ -98,7 +126,7 @@ export function buildClaudeSystemPrompt(
   }
 
   if (step.use1MContext) {
-    notes.push("1M context mode requested for compatible Sonnet/Opus models.");
+    notes.push("1M context mode requested for the selected model.");
   }
 
   if (outputMode === "json") {
@@ -121,10 +149,6 @@ export function mapClaudeEffort(value: ReasoningEffort): ClaudeEffort {
 }
 
 export function mapOpenAIReasoningEffort(value: ReasoningEffort): OpenAIReasoningEffort {
-  if (value === "xhigh") {
-    return "high";
-  }
-
   return value;
 }
 

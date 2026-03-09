@@ -91,4 +91,23 @@ describe("buildPotentialOrchestratorDispatchRoutes", () => {
     expect(sourceIds).toEqual(["orchestrator-b"]);
     expect(targetIds).toEqual(["worker-1", "worker-2"]);
   });
+
+  it("keeps routes deterministic when node input order changes", () => {
+    const nodes: FlowNode[] = [
+      createNode("orchestrator", "orchestrator", 20, 220),
+      createNode("worker-a", "executor", 360, 120),
+      createNode("worker-b", "executor", 360, 260),
+      createNode("worker-c", "executor", 360, 420)
+    ];
+    const links: FlowLink[] = [];
+
+    const original = buildPotentialOrchestratorDispatchRoutes(nodes, links);
+    const reordered = buildPotentialOrchestratorDispatchRoutes([nodes[2], nodes[0], nodes[3], nodes[1]], links);
+    const routeKey = (route: PotentialDispatchRoute): string =>
+      route.route.map((point) => `${point.x},${point.y}`).join("|");
+    const originalById = new Map(original.map((route) => [route.id, routeKey(route)]));
+    const reorderedById = new Map(reordered.map((route) => [route.id, routeKey(route)]));
+
+    expect(reorderedById).toEqual(originalById);
+  });
 });

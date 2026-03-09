@@ -10,6 +10,12 @@ const EDGE_OPACITY_TRANSITION = "opacity 240ms cubic-bezier(0.16, 1, 0.3, 1)";
 const DASH_CORNER_BOUNDARY_GUARD = 1.25;
 const DASH_TERMINAL_MIN_VISIBLE = 3;
 const DASH_CORNER_IN_DASH_PENALTY = 18;
+const DASH_OFFSET_SEED_BIAS = 0.65;
+const DASH_OFFSET_NUDGE_MIN = 0.08;
+const DASH_OFFSET_NUDGE_MAX = 0.42;
+const DASH_OFFSET_NUDGE_SCORE_BUDGET = 90;
+const EDGE_SEPARATOR_WIDTH = 2.4;
+const EDGE_SEPARATOR_OPACITY = 0.88;
 
 interface DashPhaseInfo {
   inDash: boolean;
@@ -86,6 +92,26 @@ function cornerDistances(route: Array<{ x: number; y: number }>): number[] {
   return result;
 }
 
+function stableHash(input: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function circularDistance(value: number, target: number, cycle: number): number {
+  const raw = Math.abs(value - target);
+  return Math.min(raw, cycle - raw);
+}
+
+function seededSubpixelNudge(linkId: string): number {
+  const seed = stableHash(`dash:${linkId}`);
+  const unit = (seed % 10_000) / 9_999;
+  return DASH_OFFSET_NUDGE_MIN + unit * (DASH_OFFSET_NUDGE_MAX - DASH_OFFSET_NUDGE_MIN);
+}
+
 function scoreDashOffsetCandidate(
   offset: number,
   pathDistance: number,
@@ -133,6 +159,7 @@ function scoreDashOffsetCandidate(
 }
 
 function dashOffsetForEndpoint(
+  linkId: string,
   pathDistance: number,
   dasharray: string | null,
   route: Array<{ x: number; y: number }>
@@ -147,16 +174,25 @@ function dashOffsetForEndpoint(
     return undefined;
   }
   const cornerAt = cornerDistances(route);
+  const seededOffset = stableHash(linkId) % cycle;
 
   let bestOffset = 0;
   let bestScore = Number.POSITIVE_INFINITY;
 
   for (let offset = 0; offset < cycle; offset += 1) {
-    const score = scoreDashOffsetCandidate(offset, pathDistance, cycle, pattern, cornerAt);
+    const score =
+      scoreDashOffsetCandidate(offset, pathDistance, cycle, pattern, cornerAt) +
+      circularDistance(offset, seededOffset, cycle) * DASH_OFFSET_SEED_BIAS;
     if (score < bestScore) {
       bestScore = score;
       bestOffset = offset;
     }
+  }
+
+  const nudgedOffset = (bestOffset + seededSubpixelNudge(linkId)) % cycle;
+  const nudgedScore = scoreDashOffsetCandidate(nudgedOffset, pathDistance, cycle, pattern, cornerAt);
+  if (nudgedScore <= bestScore + DASH_OFFSET_NUDGE_SCORE_BUDGET) {
+    return nudgedOffset;
   }
 
   return bestOffset;
@@ -174,12 +210,25 @@ export function EdgePathGroup({ data, opacityMultiplier = 1 }: EdgePathGroupProp
   } = data;
   const strokeWidth = isSelected ? selectedStrokeWidth : baseStrokeWidth;
   const effectiveOpacityMultiplier = Math.max(0, Math.min(1, opacityMultiplier));
-  const dashOffset = dashOffsetForEndpoint(link.pathDistance, link.dasharray, link.route);
+  const dashOffset = dashOffsetForEndpoint(link.id, link.pathDistance, link.dasharray, link.route);
   const lineCap = "round";
   const lineJoin = "round";
 
   return (
     <g>
+      <path
+        d={link.path}
+        fill="none"
+        stroke="rgb(var(--canvas-bg))"
+        strokeWidth={strokeWidth + EDGE_SEPARATOR_WIDTH}
+        strokeLinecap={lineCap}
+        strokeLinejoin={lineJoin}
+        vectorEffect="non-scaling-stroke"
+        strokeDasharray={link.dasharray ?? undefined}
+        strokeDashoffset={dashOffset}
+        opacity={EDGE_SEPARATOR_OPACITY * effectiveOpacityMultiplier}
+        style={{ transition: EDGE_OPACITY_TRANSITION }}
+      />
       {isSelected ? (
         <path
           d={link.path}

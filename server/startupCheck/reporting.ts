@@ -11,6 +11,7 @@ export function summarizePipelineForVerifier(pipeline: Pipeline): Record<string,
       role: step.role,
       prompt: step.prompt.slice(0, 1200),
       contextTemplate: step.contextTemplate.slice(0, 1000),
+      sandboxMode: step.sandboxMode ?? "auto",
       requiredOutputFields: step.requiredOutputFields,
       requiredOutputFiles: step.requiredOutputFiles,
       scenarios: step.scenarios,
@@ -62,6 +63,9 @@ export function buildVerifierPrompt(): string {
     "- Do not request values already present in run_inputs.",
     "- Use type=secret for tokens/keys/passwords.",
     "- Secret requests are stored securely per pipeline and reused in future runs.",
+    "- When guidance references GitHub token permissions, clarify token type: classic PAT uses repo/public_repo scopes and does NOT expose Contents: Read; fine-grained PAT uses repository permissions (Contents: Read, Metadata: Read).",
+    "- When guidance references GitLab token permissions, use read_repository for fetch/read and write_repository for publish/update.",
+    "- Never invent provider scope/permission names; if uncertain, ask for clarification instead of guessing.",
     "- Use type=select only when there is a finite option set.",
     "- If no requests and no blockers, set status=pass."
   ].join("\n");

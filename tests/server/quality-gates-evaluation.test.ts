@@ -30,7 +30,10 @@ function createReviewStep(): PipelineStep {
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
   };
 }
 
@@ -50,7 +53,7 @@ function createAnalysisStep(): PipelineStep {
     role: "analysis",
     prompt: "Extract assets.",
     providerId: "openai",
-    model: "gpt-5.3-codex",
+    model: "gpt-5.4",
     reasoningEffort: "high",
     fastMode: false,
     use1MContext: false,
@@ -66,7 +69,19 @@ function createAnalysisStep(): PipelineStep {
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
+  };
+}
+
+function createSiteGeneratorStep(): PipelineStep {
+  return {
+    ...createAnalysisStep(),
+    id: "step-site-generator",
+    name: "Site Content Generator",
+    requiredOutputFiles: ["{{shared_storage_path}}/site-updated.json"]
   };
 }
 
@@ -142,6 +157,25 @@ describe("quality gates — evaluation", () => {
       const gate = contract.gateResults.find((result) => result.gateName === "Step emits GateResult contract");
       expect(gate?.status).toBe("fail");
       expect(gate?.details).toContain("source=legacy_text");
+    });
+
+    it("allows explicit JSON reviewer contracts without forcing GateResult fields", async () => {
+      const step = {
+        ...createReviewStep(),
+        outputFormat: "json" as const,
+        requiredOutputFields: ["review_result", "issues_found", "status"]
+      };
+      const output = JSON.stringify({
+        review_result: "pass",
+        issues_found: [],
+        status: "completed"
+      });
+
+      const contract = await evaluateStepContracts(step, output, tmpStoragePaths, {});
+      const strictGate = contract.gateResults.find((result) => result.gateName === "Step emits GateResult contract");
+
+      expect(strictGate).toBeUndefined();
+      expect(contract.gateResults.filter((result) => result.status === "fail")).toHaveLength(0);
     });
 
     it("enforces strict GateResult JSON contract for delivery-style steps", async () => {
@@ -333,6 +367,141 @@ describe("quality gates — evaluation", () => {
 
       const contract = await evaluateStepContracts(step, output, tmpStoragePaths, {});
       const gate = contract.gateResults.find((result) => result.gateName === "Step emits GateResult contract");
+      expect(gate?.status).toBe("pass");
+    });
+
+    it("classifies transport failures as fail outcome", () => {
+      const output = [
+        "Successfully committed files: 0",
+        "HTTP status: 000",
+        "Error: curl: (6) Could not resolve host: gitlab.com"
+      ].join("\n");
+
+      expect(inferWorkflowOutcome(output)).toBe("fail");
+    });
+
+    it("keeps hard transport failure as fail even when workflow marker says PASS", () => {
+      const output = [
+        "WORKFLOW_STATUS: PASS",
+        "Successfully committed files: 0",
+        "All commits failed with HTTP status: 000",
+        "Error: curl: (6) Could not resolve host: gitlab.com"
+      ].join("\n");
+
+      expect(inferWorkflowOutcome(output)).toBe("fail");
+    });
+
+    it("treats markdown-formatted transport failures as fail outcome", () => {
+      const output = [
+        "WORKFLOW_STATUS: COMPLETE",
+        "Successfully committed files: `0`",
+        "All commits failed with:",
+        "- HTTP status: `000`",
+        "- Error: `curl: (6) Could not resolve host: gitlab.com`"
+      ].join("\n");
+
+      expect(inferWorkflowOutcome(output)).toBe("fail");
+    });
+
+    it("maps JSON status=completed to pass outcome", () => {
+      const output = JSON.stringify({
+        status: "completed",
+        summary: "finished"
+      });
+
+      expect(inferWorkflowOutcome(output)).toBe("pass");
+    });
+  });
+
+  describe("site artifact import integrity contract", () => {
+    let tempDir = "";
+
+    afterEach(async () => {
+      if (tempDir.length > 0) {
+        await rm(tempDir, { recursive: true, force: true });
+        tempDir = "";
+      }
+    });
+
+    it("fails when site-updated.json introduces unresolved local imports", async () => {
+      tempDir = await mkdtemp(path.join(os.tmpdir(), "fyreflow-site-import-contract-"));
+
+      await writeFile(
+        path.join(tempDir, "site-updated.json"),
+        JSON.stringify(
+          {
+            files: {
+              "src/app/whitepaper/page.tsx": {
+                content: "import { WhitepaperLayout } from '@/features/whitepaper/WhitepaperLayout';\nexport default function Page(){return <WhitepaperLayout />;}"
+              }
+            }
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      await writeFile(
+        path.join(tempDir, "site-current.json"),
+        JSON.stringify(
+          {
+            repositoryTree: ["src/app/whitepaper/page.tsx", "src/features/whitepaper/WhitepaperPage.tsx"]
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const contract = await evaluateStepContracts(
+        createSiteGeneratorStep(),
+        "WORKFLOW_STATUS: PASS",
+        { sharedStoragePath: tempDir, isolatedStoragePath: tempDir, runStoragePath: tempDir },
+        {}
+      );
+      const gate = contract.gateResults.find((result) => result.gateName === "Site bundle import integrity");
+      expect(gate?.status).toBe("fail");
+      expect(gate?.message).toContain("unresolved local imports");
+      expect(gate?.details).toContain("WhitepaperLayout");
+    });
+
+    it("passes when imports resolve using site-updated/site-current file inventories", async () => {
+      tempDir = await mkdtemp(path.join(os.tmpdir(), "fyreflow-site-import-contract-"));
+
+      await writeFile(
+        path.join(tempDir, "site-updated.json"),
+        JSON.stringify(
+          {
+            files: {
+              "src/app/whitepaper/page.tsx": {
+                content: "import { WhitepaperPage } from '@/features/whitepaper/WhitepaperPage';\nexport default function Page(){return <WhitepaperPage />;}"
+              }
+            }
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      await writeFile(
+        path.join(tempDir, "site-current.json"),
+        JSON.stringify(
+          {
+            repositoryTree: ["src/features/whitepaper/WhitepaperPage.tsx"]
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const contract = await evaluateStepContracts(
+        createSiteGeneratorStep(),
+        "WORKFLOW_STATUS: PASS",
+        { sharedStoragePath: tempDir, isolatedStoragePath: tempDir, runStoragePath: tempDir },
+        {}
+      );
+      const gate = contract.gateResults.find((result) => result.gateName === "Site bundle import integrity");
       expect(gate?.status).toBe("pass");
     });
   });

@@ -2,6 +2,7 @@ import { OpenAIIcon, AnthropicIcon } from "@/components/optics/icons";
 import { Input } from "@/components/optics/input";
 import { SegmentedControl } from "@/components/optics/segmented-control";
 import { Select } from "@/components/optics/select";
+import { MAX_CONTEXT_WINDOW_TOKENS } from "@/lib/modelCatalog";
 import type { GeneralSectionProps } from "../../../types";
 import {
   buildContextWindowPatch,
@@ -85,7 +86,7 @@ export function ExecutionModeField({
               })
             );
           }}
-          placeholder={selectedStep.providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6"}
+          placeholder={selectedStep.providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6"}
         />
         <p className="text-[11px] text-ink-600">
           {selectedModelMeta?.notes || `Enter any model ID. Default: ${providerDefaultModel}`}
@@ -111,7 +112,7 @@ export function ExecutionModeField({
           <Input
             type="number"
             min={64000}
-            max={1000000}
+            max={MAX_CONTEXT_WINDOW_TOKENS}
             value={selectedStep.contextWindowTokens}
             onChange={(event) =>
               onPatchSelectedStep(

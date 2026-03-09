@@ -3,8 +3,13 @@ import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Loader2, Pause, Play, Plus, Redo2, Settings2, Square, Sparkles, Undo2, Wand2, Workflow, Cable, Clock3, Layers, ListChecks, Bug, Zap, FolderOpen } from "lucide-react";
 
 import { cn } from "@/lib/cn";
-import { MODEL_CATALOG } from "@/lib/modelCatalog";
-import { canUseClaudeFastMode, getClaudeFastModeUnavailableNote } from "@/lib/providerCapabilities";
+import { getSelectableModelCatalog } from "@/lib/modelCatalog";
+import {
+  canUseClaudeFastMode,
+  canUseOpenAiFastMode,
+  getClaudeFastModeUnavailableNote,
+  getOpenAiFastModeUnavailableNote
+} from "@/lib/providerCapabilities";
 import { loadRunDraft } from "@/lib/runDraftStorage";
 import { PipelineEditor } from "@/components/dashboard/PipelineEditor";
 import { ToolButton } from "@/components/dashboard/ToolButton";
@@ -72,7 +77,16 @@ export function AppShellLayout({
     handleStopRun
   } = actions;
 
+  const openAiProvider = state.providers?.openai;
   const claudeProvider = state.providers?.claude;
+  const selectableModelCatalog = getSelectableModelCatalog({
+    providers: state.providers ?? undefined,
+    oauthStatuses: state.providerOauthStatuses
+  });
+  const openAiFastModeAvailable = canUseOpenAiFastMode(openAiProvider);
+  const openAiFastModeUnavailableNote = openAiFastModeAvailable
+    ? undefined
+    : getOpenAiFastModeUnavailableNote(openAiProvider);
   const claudeFastModeAvailable = canUseClaudeFastMode(claudeProvider);
   const claudeFastModeUnavailableNote = claudeFastModeAvailable
     ? undefined
@@ -222,8 +236,12 @@ export function AppShellLayout({
         draft={draft}
         activeRun={state.activePipelineRun}
         readOnly={selectedPipelineEditLocked}
-        modelCatalog={MODEL_CATALOG}
+        modelCatalog={selectableModelCatalog}
+        providers={state.providers}
+        oauthStatuses={state.providerOauthStatuses}
         mcpServers={mcpServers.map((server) => ({ id: server.id, name: server.name, enabled: server.enabled }))}
+        openAiFastModeAvailable={openAiFastModeAvailable}
+        openAiFastModeUnavailableNote={openAiFastModeUnavailableNote}
         claudeFastModeAvailable={claudeFastModeAvailable}
         claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
         startingRun={startingRun}

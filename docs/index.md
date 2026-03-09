@@ -2,7 +2,7 @@
 
 This folder is the source of truth for architecture and delivery guidance.
 
-- Last reviewed: 2026-02-25
+- Last reviewed: 2026-03-08
 
 ## Core Documents
 - `architecture.md`: architectural boundaries, module ownership, and dependency rules.
@@ -23,6 +23,7 @@ This folder is the source of truth for architecture and delivery guidance.
 - `skills.md`
 - `decisions/0001-initial-architecture.md`
 - `decisions/0002-runtime-kernel-and-managed-release-updates.md`
+- `decisions/0003-lean-runtime-orchestration.md`
 - `runbooks/local-dev.md`
 - `runbooks/remote-engine-deploy.md`
 <!-- primer-ai:docs-index:end -->

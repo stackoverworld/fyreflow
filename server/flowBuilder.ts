@@ -1,13 +1,14 @@
 import { nanoid } from "nanoid";
 import { executeProviderStep } from "./providers.js";
 import {
-  canClaudeUseFastMode,
-  getClaudeFastModeAvailabilityNote,
-  isClaudeFastModeEnabledForInput
+  canProviderUseFastMode,
+  getProviderFastModeAvailabilityNote,
+  isProviderFastModeEnabledForInput
 } from "./providerCapabilities.js";
 import {
   parseFlowDecision,
-  parseGeneratedFlow
+  parseGeneratedFlow,
+  recoverFlowDecisionEnvelope
 } from "./flowBuilder/schema.js";
 import {
   buildChatPlannerContext,
@@ -26,6 +27,7 @@ import {
 } from "./flowBuilder/intents.js";
 import {
   defaultMessageForAction,
+  resolveFlowBuilderMessage,
   mergeRawOutputs
 } from "./flowBuilder/responses.js";
 import {
@@ -156,35 +158,27 @@ function prepareFlowBuilderRequest(
   request: FlowBuilderRequest,
   provider: ProviderConfig
 ): PreparedFlowBuilderRequest {
-  const fastModeRequested = request.providerId === "claude" && request.fastMode === true;
-  const fastModeEffective =
-    request.providerId === "claude"
-      ? isClaudeFastModeEnabledForInput(provider, request.fastMode)
-      : false;
+  const fastModeRequested = request.fastMode === true;
+  const fastModeEffective = isProviderFastModeEnabledForInput(provider, request.model, null, request.fastMode);
+  const fastModeNote = getProviderFastModeAvailabilityNote(provider, request.model, null, request.fastMode);
   const providerRuntime: FlowBuilderProviderRuntimeContext = {
     providerId: request.providerId,
     authMode: provider.authMode,
-    claudeFastModeAvailable: canClaudeUseFastMode(provider),
+    providerFastModeAvailable: canProviderUseFastMode(provider, request.model, null),
     fastModeRequested,
     fastModeEffective,
-    fastModeNote: getClaudeFastModeAvailabilityNote(provider, request.fastMode)
+    fastModeNote
   };
 
   return {
-    request:
-      request.providerId === "claude"
-        ? {
-            ...request,
-            fastMode: fastModeEffective
-          }
-        : {
-            ...request,
-            fastMode: false
-          },
+    request: {
+      ...request,
+      fastMode: fastModeEffective
+    },
     providerRuntime,
     capabilityNotes:
       fastModeRequested && !fastModeEffective
-        ? ["Fast mode was requested but disabled because Claude API key auth is not active in Provider Auth."]
+        ? [fastModeNote]
         : []
   };
 }
@@ -366,7 +360,7 @@ async function generateConversationResponse(
     const flowSpec = parsedDecision.flow;
     if (parsedDecision.action === "answer" || flowSpec) {
       const next = buildDraftForAction(parsedDecision.action, flowSpec ?? fallbackSpec(request.prompt), request);
-      const message = parsedDecision.message.trim() || defaultMessageForAction(next.action, next.draft);
+      const message = resolveFlowBuilderMessage(next.action, parsedDecision.message, next.draft);
 
       return {
         action: next.action,
@@ -406,7 +400,7 @@ async function generateConversationResponse(
     if (repairedDecision) {
       if (repairedDecision.action === "answer" || repairedDecision.flow) {
         const next = buildDraftForAction(repairedDecision.action, repairedDecision.flow ?? fallbackSpec(request.prompt), request);
-        const message = repairedDecision.message.trim() || defaultMessageForAction(next.action, next.draft);
+        const message = resolveFlowBuilderMessage(next.action, repairedDecision.message, next.draft);
 
         return {
           action: next.action,
@@ -462,7 +456,7 @@ async function generateConversationResponse(
           regeneratedDecision.flow ?? fallbackSpec(request.prompt),
           request
         );
-        const message = regeneratedDecision.message.trim() || defaultMessageForAction(next.action, next.draft);
+        const message = resolveFlowBuilderMessage(next.action, regeneratedDecision.message, next.draft);
 
         return {
           action: next.action,
@@ -483,7 +477,33 @@ async function generateConversationResponse(
     // Continue to fallback logic.
   }
 
-  const rawFlow = parseGeneratedFlow(regeneratedOutput ?? repairedOutput ?? rawOutput);
+  const recoveredEnvelope = recoverFlowDecisionEnvelope(regeneratedOutput ?? repairedOutput ?? rawOutput);
+  if (recoveredEnvelope?.action && (recoveredEnvelope.action === "answer" || recoveredEnvelope.flow)) {
+    const next =
+      recoveredEnvelope.action === "answer"
+        ? { action: "answer" as const, draft: undefined, notes: [] }
+        : buildDraftForAction(recoveredEnvelope.action, recoveredEnvelope.flow ?? fallbackSpec(request.prompt), request);
+    const message = resolveFlowBuilderMessage(
+      next.action,
+      recoveredEnvelope.message ?? defaultMessageForAction(next.action, next.draft),
+      next.draft
+    );
+
+    return {
+      action: next.action,
+      message,
+      draft: next.draft,
+      source: "fallback",
+      notes: [
+        "Recovered action/flow from partially invalid copilot JSON.",
+        ...capabilityNotes,
+        ...next.notes
+      ],
+      rawOutput: mergeRawOutputs(rawOutput, repairedOutput, regeneratedOutput)
+    };
+  }
+
+  const rawFlow = recoveredEnvelope?.flow ?? parseGeneratedFlow(regeneratedOutput ?? repairedOutput ?? rawOutput);
   if (rawFlow) {
     const inferredAction: FlowBuilderAction =
       request.currentDraft && !isReplaceIntent(request.prompt) ? "update_current_flow" : "replace_flow";

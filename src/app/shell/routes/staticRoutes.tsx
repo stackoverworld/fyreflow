@@ -10,7 +10,13 @@ import { FilesPanel } from "@/components/dashboard/FilesPanel";
 import { PipelineList } from "@/components/dashboard/PipelineList";
 import { QualityGatesPanel } from "@/components/dashboard/QualityGatesPanel";
 import { cn } from "@/lib/cn";
-import { canUseClaudeFastMode, getClaudeFastModeUnavailableNote } from "@/lib/providerCapabilities";
+import {
+  canUseClaudeFastMode,
+  canUseOpenAiFastMode,
+  getClaudeFastModeUnavailableNote,
+  getOpenAiFastModeUnavailableNote
+} from "@/lib/providerCapabilities";
+import type { PipelinePayload } from "@/lib/types";
 import { Textarea } from "@/components/optics/textarea";
 import { type useAppState } from "@/app/useAppState";
 import type { AppShellActions } from "../useAppShellActions";
@@ -35,14 +41,97 @@ const staticPanelPath = (key: StaticPanelRouteKey): `/${string}` => {
   return route?.path ?? `/${key}`;
 };
 
+function buildAppliedFlowSignature(draft: PipelinePayload): string {
+  return JSON.stringify({
+    name: draft.name,
+    description: draft.description,
+    steps: draft.steps.map((step) => ({
+      id: step.id,
+      name: step.name,
+      role: step.role,
+      prompt: step.prompt,
+      providerId: step.providerId,
+      model: step.model,
+      reasoningEffort: step.reasoningEffort,
+      fastMode: step.fastMode,
+      use1MContext: step.use1MContext,
+      contextWindowTokens: step.contextWindowTokens,
+      position: step.position,
+      contextTemplate: step.contextTemplate,
+      enableDelegation: step.enableDelegation,
+      delegationCount: step.delegationCount,
+      enableIsolatedStorage: step.enableIsolatedStorage,
+      enableSharedStorage: step.enableSharedStorage,
+      enabledMcpServerIds: step.enabledMcpServerIds,
+      sandboxMode: step.sandboxMode ?? "auto",
+      outputFormat: step.outputFormat,
+      requiredOutputFields: step.requiredOutputFields,
+      requiredOutputFiles: step.requiredOutputFiles,
+      scenarios: step.scenarios,
+      skipIfArtifacts: step.skipIfArtifacts,
+      policyProfileIds: step.policyProfileIds,
+      cacheBypassInputKeys: step.cacheBypassInputKeys,
+      cacheBypassOrchestratorPromptPatterns: step.cacheBypassOrchestratorPromptPatterns
+    })),
+    links: draft.links.map((link) => ({
+      sourceStepId: link.sourceStepId,
+      targetStepId: link.targetStepId,
+      condition: link.condition ?? "always",
+      conditionExpression: link.conditionExpression ?? ""
+    })),
+    qualityGates: draft.qualityGates.map((gate) => ({
+      name: gate.name,
+      targetStepId: gate.targetStepId,
+      kind: gate.kind,
+      blocking: gate.blocking,
+      pattern: gate.pattern ?? "",
+      flags: gate.flags ?? "",
+      jsonPath: gate.jsonPath ?? "",
+      artifactPath: gate.artifactPath ?? "",
+      message: gate.message ?? ""
+    })),
+    runtime: draft.runtime ?? null,
+    schedule: draft.schedule ?? null
+  });
+}
+
+function resolveAppliedDraft(
+  generatedDraft: PipelinePayload,
+  savedDraft: PipelinePayload | undefined
+): PipelinePayload {
+  if (!savedDraft) {
+    return generatedDraft;
+  }
+
+  return buildAppliedFlowSignature(savedDraft) === buildAppliedFlowSignature(generatedDraft)
+    ? savedDraft
+    : generatedDraft;
+}
+
 export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
   {
     key: "ai",
     path: staticPanelPath("ai"),
     render: ({ state, actions }) => {
-      const { draft, mcpServers, providers, selectedPipelineEditLocked, aiWorkflowKey } = state;
+      const {
+        draft,
+        mcpServers,
+        providers,
+        providerOauthStatuses,
+        selectedPipelineEditLocked,
+        aiWorkflowKey,
+        handleSavePipeline
+      } = state;
       const { applyEditableDraftChange, setNotice } = actions;
+      if (!providers) {
+        return null;
+      }
+      const openAiProvider = providers?.openai;
       const claudeProvider = providers?.claude;
+      const openAiFastModeAvailable = canUseOpenAiFastMode(openAiProvider);
+      const openAiFastModeUnavailableNote = openAiFastModeAvailable
+        ? undefined
+        : getOpenAiFastModeUnavailableNote(openAiProvider);
       const claudeFastModeAvailable = canUseClaudeFastMode(claudeProvider);
       const claudeFastModeUnavailableNote = claudeFastModeAvailable
         ? undefined
@@ -53,11 +142,22 @@ export const staticPanelRoutes: readonly StaticPanelRouteDefinition[] = [
           workflowKey={aiWorkflowKey}
           currentDraft={draft}
           mcpServers={mcpServers}
+          providers={providers}
+          oauthStatuses={providerOauthStatuses}
+          openAiFastModeAvailable={openAiFastModeAvailable}
+          openAiFastModeUnavailableNote={openAiFastModeUnavailableNote}
           claudeFastModeAvailable={claudeFastModeAvailable}
           claudeFastModeUnavailableNote={claudeFastModeUnavailableNote}
           readOnly={selectedPipelineEditLocked}
-          onApplyDraft={(generatedDraft) => {
-            applyEditableDraftChange(generatedDraft);
+          onApplyDraft={async (generatedDraft) => {
+            const saveResult = await handleSavePipeline({ draftSnapshot: generatedDraft });
+            if (!saveResult.saved || !saveResult.pipelineId) {
+              throw new Error(saveResult.errorMessage ?? "Failed to save AI-generated flow.");
+            }
+            applyEditableDraftChange(resolveAppliedDraft(generatedDraft, saveResult.savedDraft));
+            return {
+              workflowKey: saveResult.pipelineId
+            };
           }}
           onNotice={setNotice}
         />

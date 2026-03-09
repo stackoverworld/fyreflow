@@ -86,18 +86,27 @@ export function connectNodes(
   links: PipelinePayload["links"],
   sourceStepId: string,
   targetStepId: string,
-  condition: LinkCondition = "always"
+  condition: LinkCondition = "always",
+  conditionExpression?: string
 ): PipelinePayload["links"] {
   if (sourceStepId === targetStepId) {
     return links;
   }
+
+  const normalizedConditionExpression =
+    typeof conditionExpression === "string" && conditionExpression.trim().length > 0
+      ? conditionExpression.trim()
+      : undefined;
 
   if (
     links.some(
       (link) =>
         link.sourceStepId === sourceStepId &&
         link.targetStepId === targetStepId &&
-        (link.condition ?? "always") === condition
+        (link.condition ?? "always") === condition &&
+        (typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+          ? link.conditionExpression.trim()
+          : undefined) === normalizedConditionExpression
     )
   ) {
     return links;
@@ -109,7 +118,8 @@ export function connectNodes(
       id: createLinkId(),
       sourceStepId,
       targetStepId,
-      condition
+      condition,
+      ...(normalizedConditionExpression ? { conditionExpression: normalizedConditionExpression } : {})
     }
   ];
 }
@@ -136,11 +146,15 @@ export function createStep(index: number, modelCatalog: EditorModelCatalog): Pip
     enableIsolatedStorage: false,
     enableSharedStorage: false,
     enabledMcpServerIds: [],
+    sandboxMode: "auto",
     outputFormat: "markdown",
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
-    skipIfArtifacts: []
+    skipIfArtifacts: [],
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: []
   };
 }
 
@@ -149,7 +163,7 @@ export function resolveCanvasLinkId(link: PipelinePayload["links"][number], inde
     return link.id;
   }
 
-  return `${link.sourceStepId}-${link.targetStepId}-${link.condition ?? "always"}-${index}`;
+  return `${link.sourceStepId}-${link.targetStepId}-${link.condition ?? "always"}-${link.conditionExpression ?? ""}-${index}`;
 }
 
 export function parseIsoTimestamp(value: string | undefined): number | null {

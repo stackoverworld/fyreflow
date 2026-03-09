@@ -1,4 +1,9 @@
-import { getDefaultContextWindowForModel } from "@/lib/modelCatalog";
+import {
+  MAX_CONTEXT_WINDOW_TOKENS,
+  ONE_MILLION_CONTEXT_TOKENS,
+  resolve1MContextEnabled,
+  resolveMinimumContextWindowForModel
+} from "@/lib/modelCatalog";
 import { toModelSelectOption } from "@/lib/modelLabel";
 import type { GeneralSectionProps } from "../../../types";
 import {
@@ -10,8 +15,6 @@ import {
 } from "../validation";
 
 const MIN_CONTEXT_WINDOW_TOKENS = 64000;
-const MAX_CONTEXT_WINDOW_TOKENS = 1000000;
-
 export { outputFormats, parseLineList };
 
 export function buildProviderPatch({
@@ -24,14 +27,16 @@ export function buildProviderPatch({
   providerId: GeneralSectionProps["selectedStep"]["providerId"];
 }) {
   const defaultModel = resolvePreferredModel(modelCatalog, providerId);
-  const contextWindowTokens = getDefaultContextWindowForModel(providerId, defaultModel);
+  const defaultModelMeta = (modelCatalog[providerId] ?? []).find((entry) => entry.id === defaultModel);
+  const use1MContext = resolve1MContextEnabled(providerId, defaultModel, selectedStep.use1MContext);
+  const contextWindowTokens = resolveMinimumContextWindowForModel(providerId, defaultModel, use1MContext);
 
   return {
     providerId,
     model: defaultModel,
     reasoningEffort: normalizeReasoning(modelCatalog, providerId, defaultModel, "medium"),
-    fastMode: providerId === "claude" ? selectedStep.fastMode : false,
-    use1MContext: providerId === "claude" ? selectedStep.use1MContext : false,
+    fastMode: selectedStep.fastMode && defaultModelMeta?.supportsFastMode === true,
+    use1MContext,
     contextWindowTokens
   };
 }
@@ -62,6 +67,7 @@ export function buildModelPresetPatch({
   }
 
   const modelMeta = getModelMeta(modelCatalog, providerId, selectedModelId);
+  const use1MContext = resolve1MContextEnabled(providerId, selectedModelId, selectedStep.use1MContext);
 
   return {
     model: selectedModelId,
@@ -71,11 +77,9 @@ export function buildModelPresetPatch({
       selectedModelId,
       selectedStep.reasoningEffort
     ),
-    contextWindowTokens: modelMeta?.contextWindowTokens ?? selectedStep.contextWindowTokens,
-    use1MContext:
-      providerId === "claude" && selectedStep.use1MContext
-        ? modelMeta?.supports1MContext === true
-        : false
+    fastMode: selectedStep.fastMode && modelMeta?.supportsFastMode === true,
+    contextWindowTokens: resolveMinimumContextWindowForModel(providerId, selectedModelId, use1MContext),
+    use1MContext
   };
 }
 
@@ -124,9 +128,12 @@ export function build1MContextPatch({
 }) {
   return {
     use1MContext: checked,
-    contextWindowTokens: checked
-      ? Math.max(selectedStepContextWindowTokens, MAX_CONTEXT_WINDOW_TOKENS)
-      : selectedModelMeta?.contextWindowTokens ?? selectedStepContextWindowTokens
+    contextWindowTokens:
+      (selectedModelMeta?.contextWindowTokens ?? 0) >= ONE_MILLION_CONTEXT_TOKENS
+        ? Math.max(selectedStepContextWindowTokens, selectedModelMeta?.contextWindowTokens ?? ONE_MILLION_CONTEXT_TOKENS)
+        : checked
+          ? Math.max(selectedStepContextWindowTokens, ONE_MILLION_CONTEXT_TOKENS)
+          : selectedModelMeta?.contextWindowTokens ?? selectedStepContextWindowTokens
   };
 }
 
@@ -146,6 +153,12 @@ export function buildEnableIsolatedStoragePatch(enableIsolatedStorage: boolean) 
 
 export function buildEnableSharedStoragePatch(enableSharedStorage: boolean) {
   return { enableSharedStorage };
+}
+
+export function buildSandboxModePatch(
+  sandboxMode: GeneralSectionProps["selectedStep"]["sandboxMode"]
+) {
+  return { sandboxMode };
 }
 
 export function buildMcpServerIdsPatch({

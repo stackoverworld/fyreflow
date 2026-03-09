@@ -130,6 +130,10 @@ function isPipelinePayload(value: unknown): value is PipelinePayload {
       return false;
     }
     return (
+      (typeof step.sandboxMode === "undefined" ||
+        step.sandboxMode === "auto" ||
+        step.sandboxMode === "secure" ||
+        step.sandboxMode === "full") &&
       (step.outputFormat === "markdown" || step.outputFormat === "json") &&
       Array.isArray(step.requiredOutputFields) &&
       Array.isArray(step.requiredOutputFiles) &&
@@ -187,8 +191,7 @@ function isValidFlowBuilderMcpServer(
   if (
     typeof value.transport !== "undefined" &&
     value.transport !== "stdio" &&
-    value.transport !== "http" &&
-    value.transport !== "sse"
+    value.transport !== "http"
   ) {
     return false;
   }
@@ -519,6 +522,22 @@ export function saveAiChatPendingRequest(workflowKey: string, request: AiChatPen
 
 export function clearAiChatPendingRequest(workflowKey: string): void {
   saveAiChatPendingRequest(workflowKey, null);
+}
+
+export function clearAiChatSession(workflowKey: string): void {
+  if (typeof window === "undefined" || workflowKey.trim().length === 0) {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(getStorageKey(workflowKey));
+    window.localStorage.removeItem(getDraftKey(workflowKey));
+    window.localStorage.removeItem(getPendingKey(workflowKey));
+    window.localStorage.removeItem(getPendingRequestKey(workflowKey));
+    notifyAiChatLifecycle(workflowKey);
+  } catch {
+    // Ignore write failures.
+  }
 }
 
 export function moveAiChatHistory(sourceWorkflowKey: string, targetWorkflowKey: string): void {

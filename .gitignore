@@ -1,13 +1,19 @@
 node_modules
 dist
+dist-server
 .vite
 .env
 .env.selfhost
 .DS_Store
-data/local-db.json
 /data
+data/
+output/
+tmp/
+playwright-report/
+test-results/
+__MACOSX/
+*.tsbuildinfo
 .primer-ai/
-output/playwright/
 
 # AI tools
 CLAUDE.md

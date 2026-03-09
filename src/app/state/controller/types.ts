@@ -41,4 +41,11 @@ export interface PipelineSaveOptions {
   silent?: boolean;
 }
 
+export interface PipelineSaveResult {
+  saved: boolean;
+  pipelineId: string | null;
+  savedDraft?: PipelinePayload;
+  errorMessage?: string;
+}
+
 export type { HandleStartRunOptions, UseAppStateOptions, RunInputModalContext };

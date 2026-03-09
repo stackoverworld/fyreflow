@@ -39,6 +39,7 @@ describe("Provider OAuth Routes", () => {
       registerProviderRoutes(app as never, {
         store,
         getProviderOAuthStatus,
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode,
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -76,6 +77,7 @@ describe("Provider OAuth Routes", () => {
       registerProviderRoutes(app as never, {
         store,
         getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode,
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -120,6 +122,7 @@ describe("Provider OAuth Routes", () => {
             checkedAt: "2026-02-26T03:00:01.000Z"
           }
         })),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode: vi.fn(),
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -164,6 +167,7 @@ describe("Provider OAuth Routes", () => {
       registerProviderRoutes(app as never, {
         store,
         getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode: vi.fn(),
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -203,6 +207,7 @@ describe("Provider OAuth Routes", () => {
       registerProviderRoutes(app as never, {
         store,
         getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode: vi.fn(),
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -246,6 +251,7 @@ describe("Provider OAuth Routes", () => {
           loggedIn: true,
           canUseCli: true
         })),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode: vi.fn(),
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -281,6 +287,7 @@ describe("Provider OAuth Routes", () => {
       registerProviderRoutes(app as never, {
         store,
         getProviderOAuthStatus: vi.fn(async () => buildStatus("claude")),
+        probeOpenAiApiCredential: vi.fn(),
         submitProviderOAuthCode: vi.fn(),
         startProviderOAuthLogin: vi.fn(),
         syncProviderOAuthToken: vi.fn()
@@ -301,6 +308,122 @@ describe("Provider OAuth Routes", () => {
         expect.objectContaining({
           error:
             "Anthropic OAuth token must be Claude setup-token (sk-ant-oat01-...). Browser Authentication Code cannot be saved here."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("marks stored OpenAI OAuth token as disconnected when runtime validation fails", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      store.upsertProvider("openai", {
+        authMode: "oauth",
+        oauthToken: "stored-openai-token"
+      });
+
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => ({
+          ...buildStatus("openai"),
+          loggedIn: true,
+          tokenAvailable: true,
+          canUseApi: true,
+          canUseCli: true,
+          message: "Logged in via ChatGPT. Cached access token is available for import."
+        })),
+        probeOpenAiApiCredential: vi.fn(async () => ({
+          status: "fail" as const,
+          message: "OpenAI API token expired. Refresh OpenAI OAuth or save a fresh API key.",
+          checkedAt: "2026-03-06T00:00:00.000Z"
+        })),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("GET", "/api/providers/:providerId/oauth/status");
+      const response = await invokeRoute(handler, {
+        method: "GET",
+        params: { providerId: "openai" },
+        query: { deep: "1" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.status).toEqual(
+        expect.objectContaining({
+          providerId: "openai",
+          tokenAvailable: false,
+          canUseApi: false,
+          message:
+            "Stored OpenAI OAuth token failed runtime validation. OpenAI API token expired. Refresh OpenAI OAuth or save a fresh API key."
+        })
+      );
+      expect(response.body.status.runtimeProbe).toEqual(
+        expect.objectContaining({
+          status: "fail",
+          message: "OpenAI API token expired. Refresh OpenAI OAuth or save a fresh API key."
+        })
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("marks stored OpenAI OAuth token as API-ready after runtime validation passes", async () => {
+    const { app, route } = createRouteHarness();
+    const { store, cleanup } = await createTempStore();
+
+    try {
+      store.upsertProvider("openai", {
+        authMode: "oauth",
+        oauthToken: "stored-openai-token"
+      });
+
+      registerProviderRoutes(app as never, {
+        store,
+        getProviderOAuthStatus: vi.fn(async () => ({
+          ...buildStatus("openai"),
+          loggedIn: true,
+          tokenAvailable: false,
+          canUseApi: false,
+          canUseCli: true,
+          message: "Logged in via ChatGPT. No cached access token found yet."
+        })),
+        probeOpenAiApiCredential: vi.fn(async () => ({
+          status: "pass" as const,
+          message: "OpenAI API credential verified.",
+          checkedAt: "2026-03-06T00:00:00.000Z",
+          latencyMs: 118
+        })),
+        submitProviderOAuthCode: vi.fn(),
+        startProviderOAuthLogin: vi.fn(),
+        syncProviderOAuthToken: vi.fn()
+      } as never);
+
+      const handler = route("GET", "/api/providers/:providerId/oauth/status");
+      const response = await invokeRoute(handler, {
+        method: "GET",
+        params: { providerId: "openai" },
+        query: { deep: "1" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.status).toEqual(
+        expect.objectContaining({
+          providerId: "openai",
+          tokenAvailable: true,
+          canUseApi: true,
+          message: "Stored OpenAI OAuth token is valid and ready for API use."
+        })
+      );
+      expect(response.body.status.runtimeProbe).toEqual(
+        expect.objectContaining({
+          status: "pass",
+          message: "OpenAI API credential verified."
         })
       );
     } finally {

@@ -1,6 +1,7 @@
 import type { LocalStore } from "../storage.js";
 import type { StepEnqueueReason } from "./retryPolicy.js";
-import { appendRunLog, markRunFailed } from "./scheduling.js";
+import { appendRunLog, markRunFailed, markRunPausedForInput } from "./scheduling.js";
+import { hasExplicitFailOutcomeSignal } from "./qualityGates.js";
 import {
   formatBlockingGateFailureLog,
   formatManualInputStopReason,
@@ -32,7 +33,7 @@ export function runRemediationLoop(input: RemediationLoopInput): RemediationLoop
   if (input.stepExecution.shouldStopForInput) {
     const reason = formatManualInputStopReason(input.stepName, input.stepExecution.inputSummary);
     appendRunLog(input.store, input.runId, `${input.stepName} requires user input; stopping run for remediation.`);
-    markRunFailed(input.store, input.runId, reason);
+    markRunPausedForInput(input.store, input.runId, reason);
     return { stoppedForInput: true, stoppedForFailure: false };
   }
 
@@ -43,6 +44,17 @@ export function runRemediationLoop(input: RemediationLoopInput): RemediationLoop
 
   if (input.stepExecution.hasBlockingGateFailure && input.stepExecution.routedLinks.length === 0) {
     const reason = `${input.stepName} failed blocking quality gates and has no on_fail remediation route.`;
+    appendRunLog(input.store, input.runId, reason);
+    markRunFailed(input.store, input.runId, reason);
+    return { stoppedForInput: false, stoppedForFailure: true };
+  }
+
+  if (
+    input.stepExecution.workflowOutcome === "fail" &&
+    input.stepExecution.routedLinks.length === 0 &&
+    hasExplicitFailOutcomeSignal(input.stepExecution.output)
+  ) {
+    const reason = `${input.stepName} reported fail outcome and has no remediation route.`;
     appendRunLog(input.store, input.runId, reason);
     markRunFailed(input.store, input.runId, reason);
     return { stoppedForInput: false, stoppedForFailure: true };

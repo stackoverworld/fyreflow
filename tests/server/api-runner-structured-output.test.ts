@@ -14,7 +14,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       apiKey: "sk-test",
       oauthToken: "",
       baseUrl: providerId === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1",
-      defaultModel: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      defaultModel: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       updatedAt: new Date().toISOString()
     },
     step: {
@@ -23,7 +23,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       role: "review",
       prompt: "Review output",
       providerId,
-      model: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      model: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       reasoningEffort: "medium",
       fastMode: false,
       use1MContext: false,
@@ -52,6 +52,46 @@ afterEach(() => {
 });
 
 describe("API runner provider-level structured output", () => {
+  it("sends OpenAI priority service tier when fast mode is enabled", async () => {
+    let payload: Record<string, unknown> | null = null;
+    global.fetch = vi.fn(async (_url, init) => {
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output_text: "ok" }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+    }) as typeof fetch;
+
+    const input = createInput("openai");
+    input.step.fastMode = true;
+
+    await executeOpenAIWithApi(input, "sk-test");
+
+    expect(payload?.service_tier).toBe("priority");
+  });
+
+  it("sends OpenAI xhigh reasoning effort without downgrading it", async () => {
+    let payload: Record<string, unknown> | null = null;
+    global.fetch = vi.fn(async (_url, init) => {
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output_text: "ok" }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+    }) as typeof fetch;
+
+    const input = createInput("openai");
+    input.step.reasoningEffort = "xhigh";
+
+    await executeOpenAIWithApi(input, "sk-test");
+
+    expect(payload?.reasoning).toEqual({ effort: "xhigh" });
+  });
+
   it("sends OpenAI strict json_schema response_format for GateResult JSON steps", async () => {
     let payload: Record<string, unknown> | null = null;
     global.fetch = vi.fn(async (_url, init) => {

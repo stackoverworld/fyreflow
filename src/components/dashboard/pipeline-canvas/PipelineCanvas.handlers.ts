@@ -13,8 +13,18 @@ import {
   routeMidpoint,
   routePath
 } from "./edgeRendering";
+import { sideDistributedPoint } from "./edgeRendering/geometry";
 import { expandRect, nodeRect, nodeSourceAnchorRect, nodeTargetAnchorRect } from "./useNodeLayout";
-import { type FlowLink, type FlowNode, type OrchestratorLaneMeta, type Point, type RenderedLink, type ReciprocalLaneMeta, type RouteAxis } from "./types";
+import {
+  type AnchorSide,
+  type FlowLink,
+  type FlowNode,
+  type OrchestratorLaneMeta,
+  type Point,
+  type RenderedLink,
+  type ReciprocalLaneMeta,
+  type RouteAxis
+} from "./types";
 
 const SMART_ROUTE_ENDPOINT_MAX_DISTANCE = 14;
 const SMART_ROUTE_OBSTACLE_PADDING = 18;
@@ -24,6 +34,7 @@ const SMART_ROUTE_BEND_PENALTY = 420;
 const SMART_ROUTE_DETOUR_PENALTY = 8;
 const SMART_ROUTE_OVERSHOOT_PENALTY = 220;
 const ROUTE_OVERLAP_PENALTY_PER_PIXEL = 180;
+const ROUTE_CROSSING_PENALTY = 2_400;
 const ROUTE_LANE_SEPARATION_STEP = 20;
 const ROUTE_LANE_SEPARATION_LEVELS = 6;
 const ROUTE_LANE_SEPARATION_TRIGGER = 12;
@@ -36,6 +47,36 @@ const ROUTE_MICRO_SEGMENT_HARD_MAX = 8;
 const ROUTE_MICRO_SEGMENT_SOFT_MAX = 14;
 const ROUTE_INTERIOR_SOFT_SEGMENT_MAX = 20;
 const ROUTE_EDGE_INDEX_VARIANTS = [0, 1, 2, 3, 4, 5] as const;
+const FEEDBACK_GUTTER_PADDING = 84;
+const FEEDBACK_GUTTER_EXIT_LEG = 34;
+const FEEDBACK_NON_GUTTER_ARTIFACT_PENALTY = 4_000;
+
+function linkConditionPriority(condition: FlowLink["condition"]): number {
+  if (condition === "on_fail") {
+    return 0;
+  }
+  if (condition === "always" || condition === undefined) {
+    return 1;
+  }
+  if (condition === "on_pass") {
+    return 2;
+  }
+  return 3;
+}
+
+function compareLinksForRoutingOrder(left: FlowLink, right: FlowLink): number {
+  if (left.sourceStepId !== right.sourceStepId) {
+    return left.sourceStepId.localeCompare(right.sourceStepId);
+  }
+  if (left.targetStepId !== right.targetStepId) {
+    return left.targetStepId.localeCompare(right.targetStepId);
+  }
+  const conditionDelta = linkConditionPriority(left.condition) - linkConditionPriority(right.condition);
+  if (conditionDelta !== 0) {
+    return conditionDelta;
+  }
+  return left.id.localeCompare(right.id);
+}
 
 function pointDistanceToNodePerimeter(point: Point, node: FlowNode, asSource: boolean): number {
   const rect = asSource ? nodeSourceAnchorRect(node) : nodeTargetAnchorRect(node);
@@ -167,6 +208,59 @@ function routeOverlapPenalty(route: Point[], existingRoutes: Point[][]): number 
   return shared * ROUTE_OVERLAP_PENALTY_PER_PIXEL;
 }
 
+function segmentCrosses(aStart: Point, aEnd: Point, bStart: Point, bEnd: Point): boolean {
+  const aVertical = aStart.x === aEnd.x;
+  const bVertical = bStart.x === bEnd.x;
+  const aHorizontal = aStart.y === aEnd.y;
+  const bHorizontal = bStart.y === bEnd.y;
+
+  if ((aVertical && bVertical) || (aHorizontal && bHorizontal)) {
+    return false;
+  }
+
+  const horizontalStart = aHorizontal ? aStart : bStart;
+  const horizontalEnd = aHorizontal ? aEnd : bEnd;
+  const verticalStart = aVertical ? aStart : bStart;
+  const verticalEnd = aVertical ? aEnd : bEnd;
+
+  if (horizontalStart.y !== horizontalEnd.y || verticalStart.x !== verticalEnd.x) {
+    return false;
+  }
+
+  const horizontalMinX = Math.min(horizontalStart.x, horizontalEnd.x);
+  const horizontalMaxX = Math.max(horizontalStart.x, horizontalEnd.x);
+  const verticalMinY = Math.min(verticalStart.y, verticalEnd.y);
+  const verticalMaxY = Math.max(verticalStart.y, verticalEnd.y);
+  const intersectionX = verticalStart.x;
+  const intersectionY = horizontalStart.y;
+
+  return (
+    intersectionX > horizontalMinX &&
+    intersectionX < horizontalMaxX &&
+    intersectionY > verticalMinY &&
+    intersectionY < verticalMaxY
+  );
+}
+
+function routeCrossingPenalty(route: Point[], existingRoutes: Point[][]): number {
+  let crossings = 0;
+  for (let routeIndex = 1; routeIndex < route.length; routeIndex += 1) {
+    const leftStart = route[routeIndex - 1];
+    const leftEnd = route[routeIndex];
+    for (const existingRoute of existingRoutes) {
+      for (let existingIndex = 1; existingIndex < existingRoute.length; existingIndex += 1) {
+        const rightStart = existingRoute[existingIndex - 1];
+        const rightEnd = existingRoute[existingIndex];
+        if (segmentCrosses(leftStart, leftEnd, rightStart, rightEnd)) {
+          crossings += 1;
+        }
+      }
+    }
+  }
+
+  return crossings * ROUTE_CROSSING_PENALTY;
+}
+
 function routeSharedLengthWithExisting(route: Point[], existingRoutes: Point[][]): number {
   let shared = 0;
   for (const existingRoute of existingRoutes) {
@@ -182,11 +276,284 @@ function routeScoreWithOverlap(
   allNodes: FlowNode[],
   existingRoutes: Point[][]
 ): number {
-  return routeQualityScore(route, sourceNode, targetNode, allNodes) + routeOverlapPenalty(route, existingRoutes);
+  return (
+    routeQualityScore(route, sourceNode, targetNode, allNodes) +
+    routeOverlapPenalty(route, existingRoutes) +
+    routeCrossingPenalty(route, existingRoutes)
+  );
 }
 
 function routeKey(route: Point[]): string {
   return route.map((point) => `${point.x},${point.y}`).join("|");
+}
+
+function anchorSideForPoint(
+  rect: { left: number; right: number; top: number; bottom: number },
+  point: Point
+): AnchorSide {
+  const tolerance = 1;
+  if (Math.abs(point.x - rect.left) <= tolerance) {
+    return "left";
+  }
+  if (Math.abs(point.x - rect.right) <= tolerance) {
+    return "right";
+  }
+  if (Math.abs(point.y - rect.top) <= tolerance) {
+    return "top";
+  }
+  if (Math.abs(point.y - rect.bottom) <= tolerance) {
+    return "bottom";
+  }
+
+  const leftDistance = Math.abs(point.x - rect.left);
+  const rightDistance = Math.abs(point.x - rect.right);
+  const topDistance = Math.abs(point.y - rect.top);
+  const bottomDistance = Math.abs(point.y - rect.bottom);
+  const minDistance = Math.min(leftDistance, rightDistance, topDistance, bottomDistance);
+
+  if (minDistance === leftDistance) {
+    return "left";
+  }
+  if (minDistance === rightDistance) {
+    return "right";
+  }
+  if (minDistance === topDistance) {
+    return "top";
+  }
+  return "bottom";
+}
+
+function feedbackEscapePoint(point: Point, side: AnchorSide, gutterY: number): Point {
+  if (side === "left") {
+    return { x: point.x - FEEDBACK_GUTTER_EXIT_LEG, y: point.y };
+  }
+  if (side === "right") {
+    return { x: point.x + FEEDBACK_GUTTER_EXIT_LEG, y: point.y };
+  }
+
+  const verticalDirection = Math.sign(gutterY - point.y);
+  if (verticalDirection === 0) {
+    return point;
+  }
+
+  return {
+    x: point.x,
+    y: point.y + verticalDirection * FEEDBACK_GUTTER_EXIT_LEG
+  };
+}
+
+function buildFeedbackGutterRoute(
+  sourceNode: FlowNode,
+  targetNode: FlowNode,
+  start: Point,
+  end: Point,
+  gutterY: number
+): Point[] {
+  const sourceRect = nodeSourceAnchorRect(sourceNode);
+  const targetRect = nodeTargetAnchorRect(targetNode);
+  const sourceSide = anchorSideForPoint(sourceRect, start);
+  const targetSide = anchorSideForPoint(targetRect, end);
+  const sourceEscape = feedbackEscapePoint(start, sourceSide, gutterY);
+  const targetEscape = feedbackEscapePoint(end, targetSide, gutterY);
+
+  return normalizeRoute([
+    start,
+    sourceEscape,
+    { x: sourceEscape.x, y: gutterY },
+    { x: targetEscape.x, y: gutterY },
+    targetEscape,
+    end
+  ]);
+}
+
+type EndpointKind = "source" | "target";
+type PortSlot = {
+  side: AnchorSide;
+  index: number;
+  count: number;
+};
+
+function portSlotKey(linkId: string, endpointKind: EndpointKind): string {
+  return `${linkId}:${endpointKind}`;
+}
+
+function rectMidpoint(rect: { left: number; right: number; top: number; bottom: number }): Point {
+  return {
+    x: (rect.left + rect.right) / 2,
+    y: (rect.top + rect.bottom) / 2
+  };
+}
+
+function sortKeyForSide(side: AnchorSide, otherCenter: Point): number {
+  return side === "left" || side === "right" ? otherCenter.y : otherCenter.x;
+}
+
+function retargetAdjacentPoint(anchor: Point, adjacent: Point, previousAnchor: Point): Point {
+  const horizontal = adjacent.y === previousAnchor.y && adjacent.x !== previousAnchor.x;
+  if (horizontal) {
+    return { x: adjacent.x, y: anchor.y };
+  }
+
+  const vertical = adjacent.x === previousAnchor.x && adjacent.y !== previousAnchor.y;
+  if (vertical) {
+    return { x: anchor.x, y: adjacent.y };
+  }
+
+  return adjacent;
+}
+
+function retargetRouteEndpoints(route: Point[], nextStart: Point, nextEnd: Point): Point[] {
+  if (route.length === 0) {
+    return [];
+  }
+
+  if (route.length === 1) {
+    return [nextStart, nextEnd];
+  }
+
+  if (route.length === 2) {
+    return normalizeRoute([nextStart, nextEnd]);
+  }
+
+  const nextRoute = route.map((point) => ({ ...point }));
+  const originalStart = nextRoute[0];
+  const originalEnd = nextRoute[nextRoute.length - 1];
+  nextRoute[0] = nextStart;
+  nextRoute[nextRoute.length - 1] = nextEnd;
+  nextRoute[1] = retargetAdjacentPoint(nextStart, nextRoute[1], originalStart);
+  const beforeEndIndex = nextRoute.length - 2;
+  nextRoute[beforeEndIndex] = retargetAdjacentPoint(nextEnd, nextRoute[beforeEndIndex], originalEnd);
+
+  return normalizeRoute(nextRoute);
+}
+
+function distributePortsOnRenderedLinks(
+  renderedLinks: RenderedLink[],
+  links: FlowLink[],
+  nodeById: Map<string, FlowNode>
+): RenderedLink[] {
+  if (renderedLinks.length <= 1) {
+    return renderedLinks;
+  }
+
+  const linkById = new Map(links.map((link) => [link.id, link]));
+  const groups = new Map<string, Array<{ slotKey: string; sortKey: number; tieKey: string }>>();
+
+  for (const renderedLink of renderedLinks) {
+    const flowLink = linkById.get(renderedLink.id);
+    if (!flowLink) {
+      continue;
+    }
+
+    const sourceNode = nodeById.get(flowLink.sourceStepId);
+    const targetNode = nodeById.get(flowLink.targetStepId);
+    const routeStart = renderedLink.route[0];
+    const routeEnd = renderedLink.route[renderedLink.route.length - 1];
+    if (!sourceNode || !targetNode || !routeStart || !routeEnd) {
+      continue;
+    }
+
+    const sourceRect = nodeSourceAnchorRect(sourceNode);
+    const targetRect = nodeTargetAnchorRect(targetNode);
+    const sourceSide = anchorSideForPoint(sourceRect, routeStart);
+    const targetSide = anchorSideForPoint(targetRect, routeEnd);
+    const sourceGroupKey = `${sourceNode.id}:source:${sourceSide}`;
+    const targetGroupKey = `${targetNode.id}:target:${targetSide}`;
+    const sourceSortKey = sortKeyForSide(sourceSide, rectMidpoint(targetRect));
+    const targetSortKey = sortKeyForSide(targetSide, rectMidpoint(sourceRect));
+    const sourceEntry = {
+      slotKey: portSlotKey(renderedLink.id, "source"),
+      sortKey: sourceSortKey,
+      tieKey: renderedLink.id
+    };
+    const targetEntry = {
+      slotKey: portSlotKey(renderedLink.id, "target"),
+      sortKey: targetSortKey,
+      tieKey: renderedLink.id
+    };
+
+    const sourceGroup = groups.get(sourceGroupKey) ?? [];
+    sourceGroup.push(sourceEntry);
+    groups.set(sourceGroupKey, sourceGroup);
+
+    const targetGroup = groups.get(targetGroupKey) ?? [];
+    targetGroup.push(targetEntry);
+    groups.set(targetGroupKey, targetGroup);
+  }
+
+  const slotByKey = new Map<string, PortSlot>();
+  for (const [groupKey, entries] of groups) {
+    const groupParts = groupKey.split(":");
+    const side = groupParts[groupParts.length - 1] as AnchorSide;
+
+    entries.sort((left, right) => {
+      if (left.sortKey !== right.sortKey) {
+        return left.sortKey - right.sortKey;
+      }
+      return left.tieKey.localeCompare(right.tieKey);
+    });
+
+    const count = entries.length;
+    entries.forEach((entry, index) => {
+      slotByKey.set(entry.slotKey, {
+        side,
+        index,
+        count
+      });
+    });
+  }
+
+  return renderedLinks.map((renderedLink) => {
+    const flowLink = linkById.get(renderedLink.id);
+    if (!flowLink) {
+      return renderedLink;
+    }
+
+    const sourceNode = nodeById.get(flowLink.sourceStepId);
+    const targetNode = nodeById.get(flowLink.targetStepId);
+    const routeStart = renderedLink.route[0];
+    const routeEnd = renderedLink.route[renderedLink.route.length - 1];
+    if (!sourceNode || !targetNode || !routeStart || !routeEnd) {
+      return renderedLink;
+    }
+
+    const sourceRect = nodeSourceAnchorRect(sourceNode);
+    const targetRect = nodeTargetAnchorRect(targetNode);
+    const sourceSlot = slotByKey.get(portSlotKey(renderedLink.id, "source"));
+    const targetSlot = slotByKey.get(portSlotKey(renderedLink.id, "target"));
+    const nextStart = sourceSlot
+      ? sideDistributedPoint(sourceRect, sourceSlot.side, sourceSlot.index, sourceSlot.count)
+      : routeStart;
+    const nextEnd = targetSlot
+      ? sideDistributedPoint(targetRect, targetSlot.side, targetSlot.index, targetSlot.count)
+      : routeEnd;
+
+    if (nextStart.x === routeStart.x && nextStart.y === routeStart.y && nextEnd.x === routeEnd.x && nextEnd.y === routeEnd.y) {
+      return renderedLink;
+    }
+
+    const nextRoute = retargetRouteEndpoints(renderedLink.route, nextStart, nextEnd);
+    if (nextRoute.length < 2) {
+      return renderedLink;
+    }
+
+    const cornerRadius = renderedLink.hasManualRoute ? MANUAL_CORNER_RADIUS : CORNER_RADIUS;
+    const nextPath = routePath(nextRoute, cornerRadius);
+    const nextEndPoint = nextRoute[nextRoute.length - 1];
+    if (!nextPath || !nextEndPoint) {
+      return renderedLink;
+    }
+
+    return {
+      ...renderedLink,
+      route: nextRoute,
+      path: nextPath,
+      endPoint: nextEndPoint,
+      axis: routeAxisFromEndpoints(nextRoute),
+      pathDistance: Math.max(routeLength(nextRoute), 1),
+      controlPoint: renderedLink.hasManualRoute ? renderedLink.controlPoint : routeMidpoint(nextRoute)
+    };
+  });
 }
 
 function segmentLength(a: Point, b: Point): number {
@@ -594,10 +961,23 @@ export function buildRenderedLinks({
   orchestratorLaneByLinkId,
   reciprocalLaneByLinkId
 }: RenderedLinksInput): RenderedLink[] {
-  const renderedLinks: RenderedLink[] = [];
+  const renderedById = new Map<string, RenderedLink>();
   const selectedRoutes: Point[][] = [];
+  const orderedLinks = [...links].sort(compareLinksForRoutingOrder);
+  let minNodeTop = Number.POSITIVE_INFINITY;
+  let maxNodeBottom = Number.NEGATIVE_INFINITY;
 
-  for (const [index, link] of links.entries()) {
+  for (const node of nodes) {
+    const rect = nodeRect(node);
+    minNodeTop = Math.min(minNodeTop, rect.top);
+    maxNodeBottom = Math.max(maxNodeBottom, rect.bottom);
+  }
+
+  const hasNodeBounds = Number.isFinite(minNodeTop) && Number.isFinite(maxNodeBottom);
+  const feedbackTopGutterY = hasNodeBounds ? Math.round(minNodeTop - FEEDBACK_GUTTER_PADDING) : 0;
+  const feedbackBottomGutterY = hasNodeBounds ? Math.round(maxNodeBottom + FEEDBACK_GUTTER_PADDING) : 0;
+
+  for (const [index, link] of orderedLinks.entries()) {
     const sourceNode = nodeById.get(link.sourceStepId);
     const targetNode = nodeById.get(link.targetStepId);
     if (!sourceNode || !targetNode) {
@@ -669,10 +1049,15 @@ export function buildRenderedLinks({
         : fallbackRouteResult;
     const dasharray = edgeStrokeDasharray(sourceNode.role, targetNode.role);
     const dashed = dasharray !== null;
+    const prefersFeedbackGutter = link.condition === "on_fail" && !manualWaypoint && hasNodeBounds;
     const seenCandidateKeys = new Set<string>();
-    const routeCandidates: Array<{ route: Point[]; axis: RouteAxis | null }> = [];
+    const routeCandidates: Array<{ route: Point[]; axis: RouteAxis | null; isFeedbackGutter: boolean }> = [];
 
-    const pushRouteCandidate = (candidateRoute: Point[], candidateAxis: RouteAxis | null): void => {
+    const pushRouteCandidate = (
+      candidateRoute: Point[],
+      candidateAxis: RouteAxis | null,
+      isFeedbackGutter: boolean = false
+    ): void => {
       if (candidateRoute.length < 2) {
         return;
       }
@@ -689,7 +1074,8 @@ export function buildRenderedLinks({
       seenCandidateKeys.add(key);
       routeCandidates.push({
         route: stabilizedRoute,
-        axis: candidateAxis ?? routeAxisFromEndpoints(stabilizedRoute)
+        axis: candidateAxis ?? routeAxisFromEndpoints(stabilizedRoute),
+        isFeedbackGutter
       });
     };
 
@@ -716,19 +1102,34 @@ export function buildRenderedLinks({
     if (useValidatedSmartRoute) {
       buildCandidateVariants(fallbackRouteResult.route, fallbackRouteResult.axis);
     }
+    if (prefersFeedbackGutter) {
+      const start = preferredRouteResult.route[0];
+      const end = preferredRouteResult.route[preferredRouteResult.route.length - 1];
+      if (start && end) {
+        const topRoute = buildFeedbackGutterRoute(sourceNode, targetNode, start, end, feedbackTopGutterY);
+        const bottomRoute = buildFeedbackGutterRoute(sourceNode, targetNode, start, end, feedbackBottomGutterY);
+        pushRouteCandidate(topRoute, routeAxisFromEndpoints(topRoute), true);
+        pushRouteCandidate(bottomRoute, routeAxisFromEndpoints(bottomRoute), true);
+      }
+    }
 
     const fallbackCandidate = routeCandidates[0] ?? {
       route: preferredRouteResult.route,
-      axis: preferredRouteResult.axis
+      axis: preferredRouteResult.axis,
+      isFeedbackGutter: false
     };
 
     let bestCandidate = fallbackCandidate;
-    let bestArtifactPenalty = routeVisualArtifactPenalty(fallbackCandidate.route, dashed);
+    let bestArtifactPenalty =
+      routeVisualArtifactPenalty(fallbackCandidate.route, dashed) +
+      (prefersFeedbackGutter && !fallbackCandidate.isFeedbackGutter ? FEEDBACK_NON_GUTTER_ARTIFACT_PENALTY : 0);
     let bestQualityScore = routeScoreWithOverlap(fallbackCandidate.route, sourceNode, targetNode, nodes, selectedRoutes);
 
     for (let candidateIndex = 1; candidateIndex < routeCandidates.length; candidateIndex += 1) {
       const candidate = routeCandidates[candidateIndex];
-      const candidateArtifactPenalty = routeVisualArtifactPenalty(candidate.route, dashed);
+      const candidateArtifactPenalty =
+        routeVisualArtifactPenalty(candidate.route, dashed) +
+        (prefersFeedbackGutter && !candidate.isFeedbackGutter ? FEEDBACK_NON_GUTTER_ARTIFACT_PENALTY : 0);
       const candidateQualityScore = routeScoreWithOverlap(candidate.route, sourceNode, targetNode, nodes, selectedRoutes);
       const hasBetterArtifacts = candidateArtifactPenalty < bestArtifactPenalty;
       const hasBetterQuality = candidateArtifactPenalty === bestArtifactPenalty && candidateQualityScore < bestQualityScore;
@@ -751,7 +1152,7 @@ export function buildRenderedLinks({
     }
     const pathDistance = Math.max(routeLength(resolvedRoute), 1);
 
-    renderedLinks.push({
+    renderedById.set(link.id, {
       id: link.id,
       path,
       route: resolvedRoute,
@@ -767,7 +1168,10 @@ export function buildRenderedLinks({
     selectedRoutes.push(resolvedRoute);
   }
 
-  return renderedLinks;
+  const renderedInInputOrder = links
+    .map((link) => renderedById.get(link.id))
+    .filter((entry): entry is RenderedLink => Boolean(entry));
+  return distributePortsOnRenderedLinks(renderedInInputOrder, links, nodeById);
 }
 
 export function syncRouteAxisMemory(

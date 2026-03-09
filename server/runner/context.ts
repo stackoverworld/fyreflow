@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MAX_CONTEXT_WINDOW_TOKENS } from "../modelCatalog.js";
 import {
   formatRunInputsSummary,
   getRunInputValue,
@@ -8,6 +9,11 @@ import {
 } from "../runInputs.js";
 import type { PipelineLink, PipelineStep, StorageConfig } from "../types.js";
 import type { StepStoragePaths, TimelineEntry } from "./types.js";
+import { parseJsonOutput, resolvePathValue } from "./qualityGates/normalizers.js";
+
+const CONTEXT_OUTPUT_SUMMARY_CHARS = 1_200;
+const CONTEXT_PREVIOUS_OUTPUT_SUMMARY_CHARS = 1_600;
+const CONTEXT_RECENT_TIMELINE_LIMIT = 4;
 
 export const safeStorageSegment = (value: string): string => {
   const trimmed = value.trim();
@@ -16,7 +22,7 @@ export const safeStorageSegment = (value: string): string => {
 };
 
 function clampContextToWindow(context: string, contextWindowTokens: number): string {
-  const safeTokens = Math.max(16_000, Math.min(1_000_000, Math.floor(contextWindowTokens || 272_000)));
+  const safeTokens = Math.max(16_000, Math.min(MAX_CONTEXT_WINDOW_TOKENS, Math.floor(contextWindowTokens || 272_000)));
   const characterBudget = safeTokens * 4;
 
   if (context.length <= characterBudget) {
@@ -29,6 +35,68 @@ function clampContextToWindow(context: string, contextWindowTokens: number): str
   const tail = context.slice(context.length - trail);
 
   return `${head}\n\n[Context trimmed for configured window: ${safeTokens.toLocaleString()} tokens]\n\n${tail}`;
+}
+
+function clipText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}\n...[truncated for context]`;
+}
+
+function summarizeJsonForContext(payload: Record<string, unknown>, maxChars: number): string {
+  const preferredPaths = [
+    "status",
+    "workflow_status",
+    "summary",
+    "has_changes",
+    "confidence",
+    "needs_human_review",
+    "review_result",
+    "issues_found",
+    "pass_count",
+    "fail_count",
+    "test_results"
+  ];
+  const parts = preferredPaths
+    .map((fieldPath) => {
+      const value = resolvePathValue(payload, fieldPath);
+      if (!value.found) {
+        return null;
+      }
+      return `${fieldPath}=${JSON.stringify(value.value)}`;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (parts.length > 0) {
+    return clipText(parts.join("; "), maxChars);
+  }
+
+  return clipText(JSON.stringify(payload), maxChars);
+}
+
+function summarizeOutputForContext(output: string | undefined, maxChars: number): string {
+  const trimmed = typeof output === "string" ? output.trim() : "";
+  if (trimmed.length === 0) {
+    return "No output";
+  }
+
+  const parsedJson = parseJsonOutput(trimmed);
+  if (parsedJson) {
+    return summarizeJsonForContext(parsedJson, maxChars);
+  }
+
+  return clipText(trimmed.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n"), maxChars);
+}
+
+function formatUpstreamContextEntry(step: PipelineStep, output: string | undefined, maxChars: number): string {
+  const artifactHint =
+    step.requiredOutputFiles.length > 0 ? step.requiredOutputFiles.join(", ") : "none declared";
+  return [
+    `${step.name}:`,
+    `Summary: ${summarizeOutputForContext(output, maxChars)}`,
+    `Artifacts: ${artifactHint}`
+  ].join("\n");
 }
 
 export function resolveStepStoragePaths(
@@ -67,7 +135,7 @@ export async function ensureStepStorage(paths: StepStoragePaths): Promise<void> 
 }
 
 function applyStoragePathTokens(template: string, storagePaths: StepStoragePaths, runInputs: RunInputs): string {
-  const rendered = replaceInputTokens(template, runInputs)
+  const rendered = replaceInputTokens(template, runInputs, { includeSecrets: false })
     .replace(/\{\{shared_storage_path\}\}/g, storagePaths.sharedStoragePath)
     .replace(/\{\{isolated_storage_path\}\}/g, storagePaths.isolatedStoragePath)
     .replace(/\{\{run_storage_path\}\}/g, storagePaths.runStoragePath)
@@ -164,10 +232,17 @@ export function composeContext(
   storagePaths: StepStoragePaths,
   runInputs: RunInputs
 ): string {
-  const renderedTask = replaceInputTokens(task, runInputs);
-  const previousOutput = timeline[timeline.length - 1]?.output ?? "No previous output";
+  const renderedTask = replaceInputTokens(task, runInputs, { includeSecrets: false });
+  const previousOutput = summarizeOutputForContext(
+    timeline[timeline.length - 1]?.output,
+    CONTEXT_PREVIOUS_OUTPUT_SUMMARY_CHARS
+  );
   const allOutputs = timeline
-    .map((entry, index) => `Step ${index + 1} (${entry.stepName}):\n${entry.output}`)
+    .slice(-CONTEXT_RECENT_TIMELINE_LIMIT)
+    .map((entry, index, entries) => {
+      const recentIndex = timeline.length - entries.length + index + 1;
+      return `Step ${recentIndex} (${entry.stepName}):\n${summarizeOutputForContext(entry.output, CONTEXT_OUTPUT_SUMMARY_CHARS)}`;
+    })
     .join("\n\n");
   const incomingOutputs = incomingLinks
     .map((link) => {
@@ -176,7 +251,7 @@ export function composeContext(
       if (!sourceStep || !output) {
         return "";
       }
-      return `${sourceStep.name}:\n${output}`;
+      return formatUpstreamContextEntry(sourceStep, output, CONTEXT_OUTPUT_SUMMARY_CHARS);
     })
     .filter((entry) => entry.length > 0)
     .join("\n\n");
@@ -187,7 +262,7 @@ export function composeContext(
     `shared_storage: ${storagePaths.sharedStoragePath !== "DISABLED" ? "rw" : "disabled"}`,
     `isolated_storage: ${storagePaths.isolatedStoragePath !== "DISABLED" ? "rw" : "disabled"}`
   ].join("\n");
-  const runInputsSummary = formatRunInputsSummary(runInputs);
+  const runInputsSummary = formatRunInputsSummary(runInputs, { redactSecrets: true });
   const outputContract = [
     `output_format: ${step.outputFormat}`,
     `required_output_fields: ${step.requiredOutputFields.length > 0 ? step.requiredOutputFields.join(", ") : "none"}`,
@@ -221,11 +296,11 @@ export function composeContext(
       "",
       `Attempt:\n${attempt}`,
       "",
-      `Previous output:\n${previousOutput}`,
+      `Previous step summary:\n${previousOutput}`,
       "",
-      `Incoming outputs:\n${incomingOutputs || "None"}`,
+      `Direct upstream summaries:\n${incomingOutputs || "None"}`,
       "",
-      `All completed outputs:\n${allOutputs || "None"}`,
+      `Recent completed step summaries:\n${allOutputs || "None"}`,
       "",
       storageInfo
     ].join("\n");
@@ -249,7 +324,8 @@ export function composeContext(
         /\{\{mcp_servers\}\}/g,
         step.enabledMcpServerIds.length > 0 ? step.enabledMcpServerIds.join(", ") : "None"
       ),
-    runInputs
+    runInputs,
+    { includeSecrets: false }
   );
 
   const rendered = `${renderedTemplate}\n\n${storageInfo}`;

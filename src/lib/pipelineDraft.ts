@@ -1,4 +1,8 @@
-import { getDefaultContextWindowForModel, getDefaultModelForProvider } from "@/lib/modelCatalog";
+import {
+  getDefaultContextWindowForModel,
+  getDefaultModelForProvider,
+  resolve1MContextEnabled
+} from "@/lib/modelCatalog";
 import { normalizeSmartRunInputs } from "@/lib/smartRunInputs";
 import type {
   LinkCondition,
@@ -61,18 +65,27 @@ export function connectNodes(
   links: PipelinePayload["links"],
   sourceStepId: string,
   targetStepId: string,
-  condition: LinkCondition = "always"
+  condition: LinkCondition = "always",
+  conditionExpression?: string
 ): PipelinePayload["links"] {
   if (sourceStepId === targetStepId) {
     return links;
   }
+
+  const normalizedConditionExpression =
+    typeof conditionExpression === "string" && conditionExpression.trim().length > 0
+      ? conditionExpression.trim()
+      : undefined;
 
   if (
     links.some(
       (link) =>
         link.sourceStepId === sourceStepId &&
         link.targetStepId === targetStepId &&
-        (link.condition ?? "always") === condition
+        (link.condition ?? "always") === condition &&
+        (typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+          ? link.conditionExpression.trim()
+          : undefined) === normalizedConditionExpression
     )
   ) {
     return links;
@@ -84,7 +97,8 @@ export function connectNodes(
       id: createLinkId(),
       sourceStepId,
       targetStepId,
-      condition
+      condition,
+      ...(normalizedConditionExpression ? { conditionExpression: normalizedConditionExpression } : {})
     }
   ];
 }
@@ -152,6 +166,7 @@ export function isValidTimeZoneValue(value: string): boolean {
 export function createOrchestratorStep(index: number): PipelinePayload["steps"][number] {
   const providerId: ProviderId = "openai";
   const model = getDefaultModelForProvider(providerId);
+  const use1MContext = resolve1MContextEnabled(providerId, model, false);
 
   return {
     id: createStepId(),
@@ -163,7 +178,7 @@ export function createOrchestratorStep(index: number): PipelinePayload["steps"][
     model,
     reasoningEffort: "medium",
     fastMode: false,
-    use1MContext: false,
+    use1MContext,
     contextWindowTokens: getDefaultContextWindowForModel(providerId, model),
     position: defaultStepPosition(index),
     contextTemplate: "Task:\n{{task}}\n\nPrevious output:\n{{previous_output}}\n\nAll outputs:\n{{all_outputs}}",
@@ -172,6 +187,7 @@ export function createOrchestratorStep(index: number): PipelinePayload["steps"][
     enableIsolatedStorage: false,
     enableSharedStorage: false,
     enabledMcpServerIds: [],
+    sandboxMode: "auto",
     outputFormat: "markdown",
     requiredOutputFields: [],
     requiredOutputFiles: [],
@@ -186,6 +202,7 @@ export function createOrchestratorStep(index: number): PipelinePayload["steps"][
 export function createDraftStep(index: number): PipelinePayload["steps"][number] {
   const providerId: ProviderId = "openai";
   const model = getDefaultModelForProvider(providerId);
+  const use1MContext = resolve1MContextEnabled(providerId, model, false);
 
   return {
     id: createStepId(),
@@ -196,7 +213,7 @@ export function createDraftStep(index: number): PipelinePayload["steps"][number]
     model,
     reasoningEffort: "medium",
     fastMode: false,
-    use1MContext: false,
+    use1MContext,
     contextWindowTokens: getDefaultContextWindowForModel(providerId, model),
     position: defaultStepPosition(index),
     contextTemplate: "Task:\n{{task}}\n\nPrevious output:\n{{previous_output}}",
@@ -205,6 +222,7 @@ export function createDraftStep(index: number): PipelinePayload["steps"][number]
     enableIsolatedStorage: false,
     enableSharedStorage: false,
     enabledMcpServerIds: [],
+    sandboxMode: "auto",
     outputFormat: "markdown",
     requiredOutputFields: [],
     requiredOutputFiles: [],
@@ -238,6 +256,7 @@ export function toDraft(pipeline: Pipeline): PipelinePayload {
       enableIsolatedStorage: step.enableIsolatedStorage,
       enableSharedStorage: step.enableSharedStorage,
       enabledMcpServerIds: step.enabledMcpServerIds,
+      sandboxMode: step.sandboxMode ?? "auto",
       outputFormat: step.outputFormat,
       requiredOutputFields: step.requiredOutputFields,
       requiredOutputFiles: step.requiredOutputFiles,
@@ -253,7 +272,10 @@ export function toDraft(pipeline: Pipeline): PipelinePayload {
       id: link.id,
       sourceStepId: link.sourceStepId,
       targetStepId: link.targetStepId,
-      condition: link.condition ?? "always"
+      condition: link.condition ?? "always",
+      ...(typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+        ? { conditionExpression: link.conditionExpression.trim() }
+        : {})
     })),
     qualityGates: (pipeline.qualityGates ?? []).map((gate) => ({
       id: gate.id,

@@ -11,6 +11,7 @@ import type {
 } from "../../../secureInputs.js";
 import type {
   getProviderOAuthStatus,
+  probeOpenAiApiCredential,
   startProviderOAuthLogin,
   submitProviderOAuthCode,
   syncProviderOAuthToken
@@ -28,6 +29,7 @@ export interface PipelineRouteContext {
   }) => Promise<PipelineRun>;
   isRunPreflightError: (error: unknown) => error is { failedChecks: SmartRunCheck[] };
   getProviderOAuthStatus: typeof getProviderOAuthStatus;
+  probeOpenAiApiCredential: typeof probeOpenAiApiCredential;
   startProviderOAuthLogin: typeof startProviderOAuthLogin;
   submitProviderOAuthCode: typeof submitProviderOAuthCode;
   syncProviderOAuthToken: typeof syncProviderOAuthToken;

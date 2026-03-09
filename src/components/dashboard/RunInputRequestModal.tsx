@@ -1,4 +1,4 @@
-import { AlertTriangle, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, CircleHelp, ShieldAlert, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import type { RunInputRequest, RunStartupBlocker } from "@/lib/types";
@@ -25,6 +25,17 @@ export const MASKED_SECRET_INPUT_VALUE = "[secure]";
 const REPO_SLUG_REGEX = /^[^/\s]+(?:\/[^/\s]+)+$/;
 const REPO_HINT_REGEX = /(owner\/repo|repo format|without protocol|nested url)/i;
 const RELATIVE_PATH_HINT_REGEX = /(without leading ["/]?\/["/]?|no leading \/|relative path)/i;
+const GITHUB_REPO_URL_REGEX = /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)(?:[/?#].*)?$/i;
+const SSH_REPO_REGEX = /^git@[^:]+:([^#?\s]+)$/i;
+const SECRET_CONTEXT_REGEX = /\b(token|api[_ -]?key|secret|password|pat|access[_ -]?token)\b/i;
+const REPOSITORY_CONTEXT_REGEX = /(repo|repository)/i;
+
+export interface RunInputRequestGuidance {
+  title: string;
+  message: string;
+  docsUrl?: string;
+  docsLabel?: string;
+}
 
 function isValidHttpUrl(value: string): boolean {
   try {
@@ -42,6 +53,95 @@ function formatRequestTypeLabel(type: RunInputRequest["type"]): string {
   if (type === "url") return "URL";
   if (type === "select") return "Select";
   return "Text";
+}
+
+function normalizeRepoSlugValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  if (REPO_SLUG_REGEX.test(trimmed) && !/https?:\/\/|ssh:\/\/|git@/i.test(trimmed)) {
+    return trimmed.replace(/\.git$/i, "");
+  }
+
+  const githubMatch = trimmed.match(GITHUB_REPO_URL_REGEX);
+  if (githubMatch) {
+    const owner = githubMatch[1] ?? "";
+    const repo = (githubMatch[2] ?? "").replace(/\.git$/i, "");
+    if (owner.length > 0 && repo.length > 0) {
+      return `${owner}/${repo}`;
+    }
+  }
+
+  const sshMatch = trimmed.match(SSH_REPO_REGEX);
+  if (sshMatch?.[1]) {
+    const normalized = sshMatch[1].replace(/^\/+/, "").replace(/\.git$/i, "");
+    if (REPO_SLUG_REGEX.test(normalized)) {
+      return normalized;
+    }
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase();
+    const segments = parsed.pathname
+      .replace(/^\/+|\/+$/g, "")
+      .split("/")
+      .filter((segment) => segment.length > 0);
+    if (segments.length < 2) {
+      return null;
+    }
+
+    const stripGitSuffix = (input: string): string => input.replace(/\.git$/i, "");
+    if (host.endsWith("github.com") || host.endsWith("bitbucket.org")) {
+      const owner = segments[0] ?? "";
+      const repo = stripGitSuffix(segments[1] ?? "");
+      const normalized = `${owner}/${repo}`;
+      return REPO_SLUG_REGEX.test(normalized) ? normalized : null;
+    }
+
+    if (host.endsWith("gitlab.com")) {
+      const separatorIndex = segments.findIndex((segment) => segment === "-");
+      const repoSegments = separatorIndex > 1 ? segments.slice(0, separatorIndex) : segments;
+      if (repoSegments.length < 2) {
+        return null;
+      }
+      const normalized = repoSegments
+        .map((segment, index) => (index === repoSegments.length - 1 ? stripGitSuffix(segment) : segment))
+        .join("/");
+      return REPO_SLUG_REGEX.test(normalized) ? normalized : null;
+    }
+
+    const normalized = `${segments[0]}/${stripGitSuffix(segments[1] ?? "")}`;
+    return REPO_SLUG_REGEX.test(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRequestValue(request: RunInputRequest, rawValue: string): string {
+  const value = rawValue.trim();
+  if (value.length === 0 || request.type === "secret") {
+    return value;
+  }
+
+  const context = `${request.reason} ${request.placeholder ?? ""}`;
+  const repoHint = REPO_HINT_REGEX.test(context);
+  const relativePathHint = RELATIVE_PATH_HINT_REGEX.test(context);
+
+  if (/repo|repository/i.test(request.key) && repoHint) {
+    const normalized = normalizeRepoSlugValue(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  if (request.type === "path" && relativePathHint) {
+    return value.replace(/^\/+/, "");
+  }
+
+  return value;
 }
 
 export function normalizeSeededInputValue(request: RunInputRequest, seededRaw: string): string {
@@ -102,6 +202,65 @@ export function getRequestValidationError(request: RunInputRequest, values: Reco
   return null;
 }
 
+export function getRequestGuidance(request: RunInputRequest): RunInputRequestGuidance | null {
+  const keyLabelContext = `${request.key} ${request.label}`.toLowerCase();
+  const fullContext = `${keyLabelContext} ${request.reason} ${request.placeholder ?? ""}`.toLowerCase();
+  const hasSecretContext = request.type === "secret" || SECRET_CONTEXT_REGEX.test(keyLabelContext);
+
+  if (hasSecretContext && fullContext.includes("github")) {
+    return {
+      title: "Where to get it",
+      message:
+        "Create a GitHub token in Settings -> Developer settings -> Personal access tokens. If you use a classic PAT, you will NOT see `Contents: Read` in scopes - use `repo` (private) or `public_repo` (public). `Contents: Read` and `Metadata: Read` apply only to fine-grained PAT permissions.",
+      docsUrl:
+        "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+      docsLabel: "GitHub PAT docs"
+    };
+  }
+
+  if (hasSecretContext && fullContext.includes("gitlab")) {
+    return {
+      title: "Where to get it",
+      message:
+        "Create a GitLab personal access token in User Settings -> Access Tokens. Use `read_repository` for fetch steps; add `write_repository` when this flow publishes updates.",
+      docsUrl: "https://docs.gitlab.com/user/profile/personal_access_tokens/",
+      docsLabel: "GitLab token docs"
+    };
+  }
+
+  if (hasSecretContext) {
+    return {
+      title: "What this field needs",
+      message:
+        "Provide the full raw secret value (not masked). It must include the permissions required by this step: read for fetch/lookup actions and write for publish/update actions."
+    };
+  }
+
+  if (REPOSITORY_CONTEXT_REGEX.test(fullContext)) {
+    return {
+      title: "Expected format",
+      message:
+        "Use repository slug format, not full URL. Example: `owner/repo` (GitHub) or `group/subgroup/repo` (GitLab)."
+    };
+  }
+
+  if (request.type === "path") {
+    return {
+      title: "Expected format",
+      message: "Use path relative to repository root (for example `docs/WHITEPAPER.md`) unless the prompt explicitly asks for an absolute path."
+    };
+  }
+
+  if (request.type === "url") {
+    return {
+      title: "Expected format",
+      message: "Use a full `https://` URL that the runtime environment can access."
+    };
+  }
+
+  return null;
+}
+
 export function RunInputRequestModal({
   open,
   title,
@@ -129,21 +288,22 @@ export function RunInputRequestModal({
       const key = request.key;
       const seededRaw = initialValues?.[key] ?? request.defaultValue ?? "";
       const seededValue = normalizeSeededInputValue(request, seededRaw);
+      const normalizedSeeded = normalizeRequestValue(request, seededValue);
 
       if (request.type === "select" && request.options && request.options.length > 0) {
-        const matching = request.options.find((option) => option.value === seededValue);
+        const matching = request.options.find((option) => option.value === normalizedSeeded);
         if (matching) {
           nextValues[key] = matching.value;
           nextChoice[key] = matching.value;
-        } else if (seededValue.length > 0 && (request.allowCustom ?? true)) {
-          nextValues[key] = seededValue;
+        } else if (normalizedSeeded.length > 0 && (request.allowCustom ?? true)) {
+          nextValues[key] = normalizedSeeded;
           nextChoice[key] = CUSTOM_VALUE;
         } else {
           nextValues[key] = "";
           nextChoice[key] = "";
         }
       } else {
-        nextValues[key] = seededValue;
+        nextValues[key] = normalizedSeeded;
       }
     }
 
@@ -236,6 +396,7 @@ export function RunInputRequestModal({
                       const useCustomInput = showSelect && selectChoice[key] === CUSTOM_VALUE;
                       const missing = isRequiredMissing(request, values);
                       const validationError = missing ? null : getRequestValidationError(request, values);
+                      const guidance = getRequestGuidance(request);
 
                       return (
                         <label key={key} className="block space-y-1.5">
@@ -339,6 +500,16 @@ export function RunInputRequestModal({
                                   [key]: event.target.value
                                 }))
                               }
+                              onBlur={(event) => {
+                                const normalized = normalizeRequestValue(request, event.target.value);
+                                if (normalized === event.target.value) {
+                                  return;
+                                }
+                                setValues((current) => ({
+                                  ...current,
+                                  [key]: normalized
+                                }));
+                              }}
                               placeholder={
                                 request.type === "secret" && (values[key] ?? "") === MASKED_SECRET_INPUT_VALUE
                                   ? "Stored securely (leave empty to reuse)"
@@ -348,6 +519,27 @@ export function RunInputRequestModal({
                           )}
 
                           <p className="text-[11px] text-ink-500">{request.reason}</p>
+                          {guidance ? (
+                            <div className="rounded-lg border border-ink-800/50 bg-[var(--surface-inset)] px-2.5 py-2">
+                              <div className="flex items-start gap-1.5">
+                                <CircleHelp className="mt-px h-3.5 w-3.5 shrink-0 text-ink-400" />
+                                <div className="space-y-1">
+                                  <p className="text-[11px] font-medium text-ink-300">{guidance.title}</p>
+                                  <p className="text-[11px] text-ink-500">{guidance.message}</p>
+                                  {guidance.docsUrl ? (
+                                    <a
+                                      href={guidance.docsUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-[11px] text-ink-300 underline decoration-ink-700 underline-offset-2 transition-colors hover:text-ink-200"
+                                    >
+                                      {guidance.docsLabel ?? "Documentation"}
+                                    </a>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                           {missing ? <p className="text-[11px] text-red-400">Required field is empty.</p> : null}
                           {validationError ? <p className="text-[11px] text-red-400">{validationError}</p> : null}
                         </label>
@@ -382,7 +574,10 @@ export function RunInputRequestModal({
                 <Button
                   disabled={!canConfirm}
                   onClick={() => {
-                    void onConfirm(values);
+                    const normalizedValues = Object.fromEntries(
+                      requests.map((request) => [request.key, normalizeRequestValue(request, values[request.key] ?? "")])
+                    );
+                    void onConfirm(normalizedValues);
                   }}
                 >
                   {confirmLabel}

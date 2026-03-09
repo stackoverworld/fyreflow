@@ -103,6 +103,39 @@ describe("buildRunCompletionModalContext", () => {
     expect(context.finalStepName).toBe("GitHub Fetcher");
     expect(context.finalOutputPreview).toContain("token_expired");
   });
+
+  it("prefers non-generic failed step details over later cancelled wrapper failures", () => {
+    const run = createRun({
+      status: "failed",
+      finishedAt: "2026-03-04T00:12:00.000Z",
+      logs: [
+        "GitHub Fetcher failed: OpenAI request failed (401): token_expired",
+        "Orchestrator failed: Cancelled",
+        "Run failed: GitHub Fetcher failed due to token_expired"
+      ],
+      steps: [
+        createStep({
+          stepId: "step-github",
+          stepName: "GitHub Fetcher",
+          status: "failed",
+          output: "Provider round 1 failed: code=token_expired",
+          error: "OpenAI request failed (401): token_expired"
+        }),
+        createStep({
+          stepId: "step-orchestrator",
+          stepName: "Orchestrator",
+          status: "failed",
+          output: "This operation was aborted",
+          error: "Cancelled"
+        })
+      ]
+    });
+
+    const context = buildRunCompletionModalContext(run);
+
+    expect(context.failureStepName).toBe("GitHub Fetcher");
+    expect(context.failureReason).toContain("token_expired");
+  });
 });
 
 describe("syncRunStatusNotifications", () => {
@@ -138,5 +171,46 @@ describe("syncRunStatusNotifications", () => {
     );
     expect(onRunFailed).toHaveBeenCalledWith(failedRun);
     expect(onRunCompleted).not.toHaveBeenCalled();
+  });
+
+  it("suppresses failed notifications when the failure includes recoverable runtime input requests", () => {
+    const failedRun = createRun({
+      status: "failed",
+      steps: [
+        createStep({
+          stepId: "step-github",
+          stepName: "GitHub Fetcher",
+          status: "failed",
+          output: JSON.stringify({
+            status: "needs_input",
+            summary: "Provide GitHub token to continue.",
+            input_requests: [
+              {
+                key: "github_token",
+                label: "GitHub token",
+                type: "secret",
+                required: true,
+                reason: "Token is required for repository access."
+              }
+            ]
+          }),
+          error: "Cancelled"
+        })
+      ],
+      logs: ["Run failed: GitHub Fetcher requested additional input"]
+    });
+
+    const notifyDesktop = vi.fn();
+    const onRunFailed = vi.fn();
+
+    syncRunStatusNotifications(
+      [failedRun],
+      { current: new Map([[failedRun.id, "running"]]) },
+      notifyDesktop,
+      { onRunFailed }
+    );
+
+    expect(notifyDesktop).not.toHaveBeenCalled();
+    expect(onRunFailed).not.toHaveBeenCalled();
   });
 });

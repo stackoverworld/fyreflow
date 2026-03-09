@@ -16,7 +16,16 @@ import type {
   ProviderId,
   ScheduleRunMode
 } from "../../types.js";
-import { resolveDefaultContextWindow, resolveDefaultModel, resolveReasoning } from "../../modelCatalog.js";
+import {
+  ONE_MILLION_CONTEXT_TOKENS,
+  getModelEntry,
+  resolve1MContextEnabled,
+  resolveDefaultContextWindow,
+  resolveDefaultModel,
+  resolveMinimumContextWindow,
+  resolveReasoning
+} from "../../modelCatalog.js";
+import { normalizeStepSandboxMode } from "../../sandboxMode.js";
 import { defaultStepPosition } from "./contracts.js";
 import { isValidTimeZone, normalizeQualityGateKind, normalizeStringList } from "./validators.js";
 
@@ -64,15 +73,23 @@ export function normalizeStep(
   const stepName = normalizeStepLabel(step.name, stepId);
   const providerId: ProviderId = step.providerId === "claude" ? "claude" : "openai";
   const model = step.model && step.model.length > 0 ? step.model : resolveDefaultModel(providerId);
-  const use1MContext = step.use1MContext === true;
+  const modelMeta = getModelEntry(providerId, model);
+  const use1MContext = resolve1MContextEnabled(providerId, model, step.use1MContext === true);
   const fallbackPosition = defaultStepPosition(fallbackIndex);
   const defaultContextWindow = resolveDefaultContextWindow(providerId, model);
+  const minimumContextWindow = resolveMinimumContextWindow(providerId, model, use1MContext);
   let contextWindowTokens =
     typeof step.contextWindowTokens === "number" && step.contextWindowTokens > 0
       ? Math.floor(step.contextWindowTokens)
       : defaultContextWindow;
 
-  if (!step.use1MContext && providerId === "claude" && contextWindowTokens >= 1_000_000) {
+  if (use1MContext) {
+    contextWindowTokens = Math.max(contextWindowTokens, minimumContextWindow);
+  } else if (
+    modelMeta &&
+    contextWindowTokens >= ONE_MILLION_CONTEXT_TOKENS &&
+    defaultContextWindow < ONE_MILLION_CONTEXT_TOKENS
+  ) {
     contextWindowTokens = defaultContextWindow;
   }
 
@@ -86,7 +103,7 @@ export function normalizeStep(
     reasoningEffort: resolveReasoning(providerId, step.reasoningEffort, model, "medium"),
     fastMode: step.fastMode === true,
     use1MContext,
-    contextWindowTokens: step.use1MContext ? Math.max(contextWindowTokens, 1_000_000) : contextWindowTokens,
+    contextWindowTokens,
     position: {
       x:
         typeof step.position?.x === "number" && Number.isFinite(step.position.x)
@@ -111,6 +128,7 @@ export function normalizeStep(
           .map((entry) => entry.trim())
           .slice(0, 16)
       : [],
+    sandboxMode: normalizeStepSandboxMode(step.sandboxMode),
     outputFormat: step.outputFormat === "json" ? "json" : "markdown",
     requiredOutputFields: normalizeStringList(step.requiredOutputFields),
     requiredOutputFiles: normalizeStringList(step.requiredOutputFiles),

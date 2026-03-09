@@ -1,16 +1,22 @@
 import { getHealth, getState, getSmartRunPlan } from "@/lib/api";
 import { getActiveConnectionSettings } from "@/lib/connectionSettingsStorage";
 import { createDraftWorkflowKey, emptyDraft, toDraft } from "@/lib/pipelineDraft";
-import { buildSmartRunPlanSignature, normalizeSmartRunInputs, setSmartRunPlanCacheEntry } from "@/lib/smartRunInputs";
+import { isRunInputModalDismissed } from "@/lib/runInputModalStorage";
+import {
+  buildSmartRunPlanSignature,
+  normalizeSmartRunInputs,
+  normalizeSmartRunPlan,
+  setSmartRunPlanCacheEntry
+} from "@/lib/smartRunInputs";
 import { parseRunInputRequestsFromText } from "@/lib/runInputRequests";
 import type { DashboardState, PipelinePayload, PipelineRun, RunStatus, SmartRunPlan } from "@/lib/types";
 import {
+  buildRuntimeInputModalInitialInputs,
   buildRuntimeInputPromptSignature,
-  seedRunInputsWithDefaults,
   selectRuntimeInputPromptCandidateRuns,
   trimRuntimeInputPromptSeenCache
 } from "../appStateRunHelpers";
-import { extractCompletedRunSummary, hasTransitionedFromActive } from "../appStateEffects";
+import { buildRunInputModalSignature, extractCompletedRunSummary, hasTransitionedFromActive } from "../appStateEffects";
 import { selectScheduleRunPlanSignature } from "../appStateSelectors";
 import {
   RUNTIME_INPUT_PROMPT_CACHE_LIMIT,
@@ -36,6 +42,21 @@ interface RunStatusNotificationOptions {
 function isUnauthorizedMessage(rawMessage: string): boolean {
   const normalized = rawMessage.trim().toLowerCase();
   return normalized === "unauthorized" || normalized.includes("401");
+}
+
+function hasRecoverableRuntimeInputRequest(run: PipelineRun): boolean {
+  for (const step of [...run.steps].reverse()) {
+    if (!step.output || step.output.trim().length === 0) {
+      continue;
+    }
+
+    const parsed = parseRunInputRequestsFromText(step.output);
+    if (parsed && parsed.requests.length > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function getClientUpdateRequiredMessage(health: ApiHealthStatus): string | null {
@@ -119,6 +140,10 @@ export function syncRunStatusNotifications(
     }
 
     if (run.status === "failed") {
+      if (hasRecoverableRuntimeInputRequest(run)) {
+        continue;
+      }
+
       const failedStep = [...run.steps].reverse().find((step) => step.status === "failed");
       const latestLogLine = [...run.logs].reverse().find((entry) => entry.trim().length > 0);
       notifyDesktop("runFailed", `Flow failed: ${run.pipelineName}`, failedStep?.error ?? latestLogLine ?? "Run failed.");
@@ -196,6 +221,7 @@ export async function loadInitialState(args: {
 
 export function inspectRuntimeInputPrompts(args: {
   runs: DashboardState["runs"];
+  selectedPipelineId: string | null;
   processingRunInputModal: boolean;
   runInputModal: RunInputModalContext | null;
   runtimeInputPromptSeenRef: MutableRefObject<Set<string>>;
@@ -206,7 +232,7 @@ export function inspectRuntimeInputPrompts(args: {
     return;
   }
 
-  const candidateRuns = selectRuntimeInputPromptCandidateRuns(args.runs);
+  const candidateRuns = selectRuntimeInputPromptCandidateRuns(args.runs, args.selectedPipelineId);
   for (const activeRun of candidateRuns) {
     const stepsByLatest = [...activeRun.steps].reverse();
     for (const step of stepsByLatest) {
@@ -215,11 +241,17 @@ export function inspectRuntimeInputPrompts(args: {
       }
 
       const parsed = parseRunInputRequestsFromText(step.output);
-      if (!parsed || parsed.requests.length === 0) {
+      if (!parsed || (parsed.requests.length === 0 && parsed.blockers.length === 0)) {
         continue;
       }
 
-      const signature = buildRuntimeInputPromptSignature(activeRun.id, step.stepId, step.attempts, parsed.requests);
+      const signature = buildRuntimeInputPromptSignature(
+        activeRun.id,
+        step.stepId,
+        step.attempts,
+        parsed.requests,
+        parsed.blockers
+      );
       if (args.runtimeInputPromptSeenRef.current.has(signature)) {
         continue;
       }
@@ -227,9 +259,7 @@ export function inspectRuntimeInputPrompts(args: {
       args.runtimeInputPromptSeenRef.current.add(signature);
       trimRuntimeInputPromptSeenCache(args.runtimeInputPromptSeenRef.current, RUNTIME_INPUT_PROMPT_CACHE_LIMIT);
 
-      const seededInputs = seedRunInputsWithDefaults(activeRun.inputs, parsed.requests);
-
-      args.setRunInputModal({
+      const modalContext: RunInputModalContext = {
         source: "runtime",
         pipelineId: activeRun.pipelineId,
         runId: activeRun.id,
@@ -237,10 +267,18 @@ export function inspectRuntimeInputPrompts(args: {
         requests: parsed.requests,
         blockers: parsed.blockers,
         summary: parsed.summary || `${step.stepName} requested additional inputs.`,
-        inputs: normalizeSmartRunInputs(seededInputs),
+        inputs: buildRuntimeInputModalInitialInputs(activeRun.inputs, parsed.requests),
         confirmLabel: "Apply & Restart Run"
-      });
-      args.setNotice(`${step.stepName}: additional input required.`);
+      };
+      const modalSignature = buildRunInputModalSignature(modalContext);
+      if (isRunInputModalDismissed(modalSignature)) {
+        continue;
+      }
+
+      args.setRunInputModal(modalContext);
+      args.setNotice(
+        parsed.requests.length > 0 ? `${step.stepName}: additional input required.` : `${step.stepName}: run is blocked.`
+      );
       return;
     }
   }
@@ -293,9 +331,10 @@ export async function loadSmartRunPlan(args: {
       return;
     }
 
-    args.setPlan(response.plan);
+    const normalizedPlan = normalizeSmartRunPlan(response.plan);
+    args.setPlan(normalizedPlan);
     args.lastSignatureRef.current = signature;
-    setSmartRunPlanCacheEntry(args.cacheRef.current, signature, response.plan);
+    setSmartRunPlanCacheEntry(args.cacheRef.current, signature, normalizedPlan);
   } catch (error) {
     if (requestId !== args.requestIdRef.current) {
       return;
@@ -361,9 +400,10 @@ export async function loadScheduleRunPlan(args: {
       return;
     }
 
-    args.setPlan(response.plan);
+    const normalizedPlan = normalizeSmartRunPlan(response.plan);
+    args.setPlan(normalizedPlan);
     args.lastSignatureRef.current = signature;
-    setSmartRunPlanCacheEntry(args.cacheRef.current, signature, response.plan);
+    setSmartRunPlanCacheEntry(args.cacheRef.current, signature, normalizedPlan);
   } catch (error) {
     if (requestId !== args.requestIdRef.current) {
       return;

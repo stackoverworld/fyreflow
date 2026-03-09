@@ -1,13 +1,38 @@
-import { MODEL_CATALOG } from "@/lib/modelCatalog";
+import {
+  getSelectableModelsForProvider,
+  type ModelCatalogEntry
+} from "@/lib/modelCatalog";
 import { toModelSelectOption } from "@/lib/modelLabel";
-import type { AuthMode, ProviderConfig, ProviderId } from "@/lib/types";
+import type { AuthMode, ProviderConfig, ProviderId, ProviderOAuthStatus } from "@/lib/types";
 
 export type ProviderDrafts = Record<ProviderId, ProviderConfig>;
 
 export const PROVIDER_ORDER: ProviderId[] = ["openai", "claude"];
 
-export function getProviderModelOptions(providerId: ProviderId) {
-  return MODEL_CATALOG[providerId].map(toModelSelectOption);
+export function getProviderModelOptions(
+  providerId: ProviderId,
+  provider?: ProviderConfig | null,
+  oauthStatus?: ProviderOAuthStatus | null,
+  currentModelId?: string
+) {
+  return getSelectableModelsForProvider(providerId, {
+    provider,
+    oauthStatus,
+    currentModelId
+  }).map(toModelSelectOption);
+}
+
+export function getProviderSelectableModels(
+  providerId: ProviderId,
+  provider?: ProviderConfig | null,
+  oauthStatus?: ProviderOAuthStatus | null,
+  currentModelId?: string
+): ModelCatalogEntry[] {
+  return getSelectableModelsForProvider(providerId, {
+    provider,
+    oauthStatus,
+    currentModelId
+  });
 }
 
 export function setProviderAuthMode(

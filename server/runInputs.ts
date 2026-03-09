@@ -2,7 +2,7 @@ export interface RunInputs {
   [key: string]: string;
 }
 
-const INPUT_TOKEN_REGEX = /\{\{\s*(?:input|secret)\.([a-zA-Z0-9._-]+)\s*\}\}/g;
+const INPUT_TOKEN_REGEX = /\{\{\s*(input|secret)\.([a-zA-Z0-9._-]+)\s*\}\}/g;
 const KEY_SEPARATOR_REGEX = /[.\-\s]+/g;
 const EDGE_UNDERSCORE_REGEX = /^_+|_+$/g;
 const DUPLICATE_UNDERSCORE_REGEX = /_+/g;
@@ -13,6 +13,8 @@ const TOKEN_CANONICAL_EQUIVALENTS: Record<string, string> = {
   uris: "links",
   endpoint: "link",
   endpoints: "links",
+  repository: "repo",
+  repositories: "repos",
   directory: "dir",
   directories: "dirs",
   folder: "dir",
@@ -186,7 +188,7 @@ export function extractInputKeysFromText(text: string): string[] {
 
   const keys = new Set<string>();
   for (const match of text.matchAll(INPUT_TOKEN_REGEX)) {
-    const key = normalizeRunInputKey(match[1] ?? "");
+    const key = normalizeRunInputKey(match[2] ?? "");
     if (key.length > 0) {
       keys.add(key);
     }
@@ -195,12 +197,23 @@ export function extractInputKeysFromText(text: string): string[] {
   return [...keys];
 }
 
-export function replaceInputTokens(text: string, runInputs: RunInputs): string {
+export function replaceInputTokens(
+  text: string,
+  runInputs: RunInputs,
+  options?: {
+    includeSecrets?: boolean;
+  }
+): string {
   if (!text || text.length === 0) {
     return text;
   }
 
-  return text.replace(INPUT_TOKEN_REGEX, (_match, keyRaw: string) => {
+  const includeSecrets = options?.includeSecrets ?? true;
+
+  return text.replace(INPUT_TOKEN_REGEX, (match, scope: string, keyRaw: string) => {
+    if (scope === "secret" && !includeSecrets) {
+      return match;
+    }
     const key = normalizeRunInputKey(keyRaw);
     const value = getRunInputValue(runInputs, key);
     if (typeof value !== "string" || value.length === 0) {
@@ -208,6 +221,32 @@ export function replaceInputTokens(text: string, runInputs: RunInputs): string {
     }
     return value;
   });
+}
+
+export function replaceInputTokensInValue<T>(
+  value: T,
+  runInputs: RunInputs,
+  options?: {
+    includeSecrets?: boolean;
+  }
+): T {
+  if (typeof value === "string") {
+    return replaceInputTokens(value, runInputs, options) as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => replaceInputTokensInValue(entry, runInputs, options)) as T;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      result[key] = replaceInputTokensInValue(entry, runInputs, options);
+    }
+    return result as T;
+  }
+
+  return value;
 }
 
 export function normalizeRunInputs(raw: unknown): RunInputs {
@@ -275,7 +314,11 @@ export function normalizeRunInputs(raw: unknown): RunInputs {
   return result;
 }
 
-export function formatRunInputsSummary(runInputs: RunInputs): string {
+export function formatRunInputsSummary(
+  runInputs: RunInputs,
+  options?: { redactSecrets?: boolean }
+): string {
+  const redactSecrets = options?.redactSecrets ?? true;
   const entries = Object.entries(runInputs)
     .map(([key, value]) => [normalizeRunInputKey(key), value] as const)
     .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
@@ -286,6 +329,6 @@ export function formatRunInputsSummary(runInputs: RunInputs): string {
   }
 
   return entries
-    .map(([key, value]) => `- ${key}: ${isSensitiveRunInputKey(key) ? "[REDACTED]" : value}`)
+    .map(([key, value]) => `- ${key}: ${redactSecrets && isSensitiveRunInputKey(key) ? "[REDACTED]" : value}`)
     .join("\n");
 }

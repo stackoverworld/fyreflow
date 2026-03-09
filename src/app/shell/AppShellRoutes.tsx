@@ -4,7 +4,9 @@ import { SettingsModal } from "@/components/dashboard/SettingsModal";
 import { RemotePairingSettings } from "@/components/dashboard/RemotePairingSettings";
 import { UpdatesSettings } from "@/components/dashboard/UpdatesSettings";
 import { ProviderSettings } from "@/components/dashboard/ProviderSettings";
+import { dismissRunInputModalSignature } from "@/lib/runInputModalStorage";
 import { type useAppState } from "@/app/useAppState";
+import { buildRunInputModalSignature } from "@/app/state/appStateEffects";
 import { type useNavigationState } from "@/app/useNavigationState";
 import { type AppShellActions } from "./useAppShellActions";
 import { canActivatePanel } from "./routes/guards";
@@ -79,6 +81,9 @@ export function AppShellRoutes({
         confirmLabel={runInputModal?.confirmLabel}
         onClose={() => {
           if (!processingRunInputModal) {
+            if (runInputModal?.source === "runtime") {
+              dismissRunInputModalSignature(buildRunInputModalSignature(runInputModal));
+            }
             setRunInputModal(null);
           }
         }}

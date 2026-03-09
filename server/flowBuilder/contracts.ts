@@ -10,6 +10,13 @@ export interface FlowChatMessage {
 }
 
 export type FlowBuilderAction = "answer" | "update_current_flow" | "replace_flow";
+export type FlowBuilderGeneratedStepStrategy = "openai-first" | "anthropic-first" | "balanced";
+
+export interface FlowBuilderGeneratedStepPolicy {
+  strategy: FlowBuilderGeneratedStepStrategy;
+  allowPremiumModes: boolean;
+  openAiApiCapable?: boolean;
+}
 
 export interface FlowBuilderQuestionOption {
   label: string;
@@ -31,13 +38,14 @@ export interface FlowBuilderRequest {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   use1MContext?: boolean;
+  generatedStepPolicy?: FlowBuilderGeneratedStepPolicy;
   history?: FlowChatMessage[];
   currentDraft?: PipelineInput;
   availableMcpServers?: Array<{
     id: string;
     name: string;
     enabled?: boolean;
-    transport?: "stdio" | "http" | "sse";
+    transport?: "stdio" | "http";
     summary?: string;
   }>;
 }

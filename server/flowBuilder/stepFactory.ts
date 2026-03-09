@@ -1,6 +1,8 @@
 import { nanoid } from "nanoid";
 import {
-  resolveDefaultContextWindow,
+  getModelEntry,
+  resolve1MContextEnabled,
+  resolveMinimumContextWindow,
   resolveReasoning
 } from "../modelCatalog.js";
 import type { PipelineStep } from "../types.js";
@@ -15,12 +17,10 @@ export function createGeneratorStep(
   name: string,
   prompt: string
 ): PipelineStep {
-  const use1MContext =
-    request.providerId === "claude" && request.use1MContext === true;
-  const baseContext = resolveDefaultContextWindow(
-    request.providerId,
-    request.model
-  );
+  const modelMeta = getModelEntry(request.providerId, request.model);
+  const use1MContext = resolve1MContextEnabled(request.providerId, request.model, request.use1MContext === true);
+  const fastMode = request.fastMode === true && modelMeta?.supportsFastMode === true;
+  const baseContext = resolveMinimumContextWindow(request.providerId, request.model, use1MContext);
 
   return {
     id: nanoid(),
@@ -35,9 +35,9 @@ export function createGeneratorStep(
       request.model,
       "medium"
     ),
-    fastMode: request.providerId === "claude" ? request.fastMode === true : false,
+    fastMode,
     use1MContext,
-    contextWindowTokens: use1MContext ? Math.max(baseContext, 1_000_000) : baseContext,
+    contextWindowTokens: baseContext,
     position: { x: 80, y: 120 },
     contextTemplate: "Task:\n{{task}}\n\nContext:\n{{previous_output}}",
     enableDelegation: false,
@@ -45,6 +45,7 @@ export function createGeneratorStep(
     enableIsolatedStorage: false,
     enableSharedStorage: false,
     enabledMcpServerIds: [],
+    sandboxMode: "secure",
     outputFormat: "json",
     requiredOutputFields: [],
     requiredOutputFiles: [],

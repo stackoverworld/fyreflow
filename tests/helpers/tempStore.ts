@@ -10,10 +10,12 @@ export async function createTempStore(): Promise<{
 }> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fyreflow-tests-"));
   const dbPath = path.join(tempDir, "local-db.json");
+  const store = new LocalStore(dbPath);
 
   return {
-    store: new LocalStore(dbPath),
+    store,
     cleanup: async () => {
+      await store.flush();
       await rm(tempDir, { recursive: true, force: true });
     }
   };

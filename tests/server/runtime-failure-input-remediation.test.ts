@@ -10,7 +10,7 @@ function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
     role: partial.role ?? "executor",
     prompt: partial.prompt ?? "",
     providerId: partial.providerId ?? "openai",
-    model: partial.model ?? "gpt-5.3-codex",
+    model: partial.model ?? "gpt-5.4",
     reasoningEffort: partial.reasoningEffort ?? "medium",
     fastMode: partial.fastMode ?? false,
     use1MContext: partial.use1MContext ?? false,
@@ -59,6 +59,44 @@ describe("runtime failure input remediation", () => {
     expect(parsed.status).toBe("needs_input");
     expect(parsed.input_requests).toEqual(
       expect.arrayContaining([expect.objectContaining({ key: "github_token", type: "secret" })])
+    );
+  });
+
+  it("emits blocker remediation for provider OAuth connectivity blockers", () => {
+    const step = createStep({
+      name: "Orchestrator",
+      role: "orchestrator",
+      providerId: "claude",
+      prompt: "Plan sync from {{input.github_repo}} and {{input.gitlab_repo}}"
+    });
+
+    const output = buildRuntimeInputRequestOutputFromFailure({
+      step,
+      errorMessage:
+        "Provider OAuth is not ready. Claude CLI runtime preflight failed. Claude CLI is not logged in. Open Provider Auth and reconnect.",
+      runInputs: {
+        github_repo: "Lunarbase-Lab/Prop-AMM-RnD",
+        gitlab_repo: "info/group/project",
+        github_token: "ghp-old",
+        gitlab_token: "glpat-old"
+      }
+    });
+
+    expect(output).not.toBeNull();
+    const parsed = JSON.parse(output as string) as {
+      status: string;
+      input_requests: unknown[];
+      blockers: Array<{ id: string; title: string; message: string; details?: string }>;
+    };
+    expect(parsed.status).toBe("blocked");
+    expect(parsed.input_requests).toEqual([]);
+    expect(parsed.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "claude-provider-auth",
+          title: "Claude provider auth required"
+        })
+      ])
     );
   });
 

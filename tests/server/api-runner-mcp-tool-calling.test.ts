@@ -14,7 +14,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       apiKey: "sk-test",
       oauthToken: "",
       baseUrl: providerId === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1",
-      defaultModel: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      defaultModel: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       updatedAt: new Date().toISOString()
     },
     step: {
@@ -23,7 +23,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       role: "analysis",
       prompt: "Extract design assets",
       providerId,
-      model: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      model: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       reasoningEffort: "medium",
       fastMode: false,
       use1MContext: false,

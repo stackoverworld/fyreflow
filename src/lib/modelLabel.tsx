@@ -1,5 +1,5 @@
-import type { ModelCatalogEntry } from "./modelCatalog";
 import type { SelectOption } from "@/components/optics/select";
+import type { ModelCatalogEntry } from "./modelCatalog";
 
 const DATE_CODE_RE = /-(\d{8})$/;
 
@@ -11,7 +11,7 @@ function ModelChip({ children }: { children: React.ReactNode }) {
   );
 }
 
-function buildLabelNode(entry: ModelCatalogEntry): React.ReactNode {
+function buildBaseLabel(entry: ModelCatalogEntry): React.ReactNode {
   const dateMatch = entry.id.match(DATE_CODE_RE);
   if (dateMatch) {
     const baseName = entry.id.slice(0, -dateMatch[0].length);
@@ -24,6 +24,29 @@ function buildLabelNode(entry: ModelCatalogEntry): React.ReactNode {
   }
 
   return entry.label;
+}
+
+function buildLabelNode(entry: ModelCatalogEntry): React.ReactNode {
+  const chips: string[] = [];
+  if (entry.runtimeAvailability === "api_only") {
+    chips.push("API only");
+  }
+  if (entry.lifecycle === "legacy") {
+    chips.push("Legacy");
+  }
+
+  if (chips.length === 0) {
+    return buildBaseLabel(entry);
+  }
+
+  return (
+    <span className="inline-flex items-center">
+      {buildBaseLabel(entry)}
+      {chips.map((chip) => (
+        <ModelChip key={`${entry.id}:${chip}`}>{chip}</ModelChip>
+      ))}
+    </span>
+  );
 }
 
 export function toModelSelectOption(entry: ModelCatalogEntry): SelectOption {

@@ -5,8 +5,8 @@ export const NODE_HEIGHT = 116;
 export const NODE_COLLISION_GAP = 16;
 export const MAX_COLLISION_PASSES = 12;
 export const DELEGATION_SPINE_HEIGHT = 8;
-export const DELEGATION_CARD_HEIGHT_BASE = 56;
-export const DELEGATION_CARD_ROW_HEIGHT = 24;
+export const DELEGATION_CARD_HEIGHT_BASE = 52;
+export const DELEGATION_CARD_ROW_HEIGHT = 22;
 export const DELEGATION_BADGES_PER_ROW = 4;
 
 export function delegationCardHeight(delegationCount: number): number {

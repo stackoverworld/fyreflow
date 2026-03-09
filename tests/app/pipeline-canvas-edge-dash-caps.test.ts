@@ -21,15 +21,19 @@ function routePath(route: Array<{ x: number; y: number }>): string {
     .join(" ");
 }
 
-function renderEdge(dasharray: string | null, route: Array<{ x: number; y: number }> = [
-  { x: 0, y: 0 },
-  { x: 40, y: 0 },
-  { x: 40, y: 30 }
-]): string {
+function renderEdge(
+  dasharray: string | null,
+  route: Array<{ x: number; y: number }> = [
+    { x: 0, y: 0 },
+    { x: 40, y: 0 },
+    { x: 40, y: 30 }
+  ],
+  id: string = "edge-1"
+): string {
   const length = routeLength(route);
   const data: EdgeRenderData = {
     link: {
-      id: "edge-1",
+      id,
       path: routePath(route),
       route,
       pathDistance: length,
@@ -56,7 +60,21 @@ function renderEdge(dasharray: string | null, route: Array<{ x: number; y: numbe
   return renderToStaticMarkup(createElement(EdgePathGroup, { data }));
 }
 
+function extractDashOffset(markup: string): number {
+  const match = markup.match(/stroke-dashoffset="([^"]+)"/);
+  expect(match).not.toBeNull();
+  return Number(match?.[1] ?? "NaN");
+}
+
 describe("edge dash endpoint caps", () => {
+  it("renders a background separator underlay for overlap readability", () => {
+    const dashed = renderEdge("8 7");
+    const solid = renderEdge(null);
+
+    expect(dashed).toContain('stroke="rgb(var(--canvas-bg))"');
+    expect(solid).toContain('stroke="rgb(var(--canvas-bg))"');
+  });
+
   it("chooses a dashed phase that keeps endpoint visible and avoids corner boundary artifacts", () => {
     const route = [
       { x: 0, y: 0 },
@@ -65,9 +83,7 @@ describe("edge dash endpoint caps", () => {
     ];
     const html = renderEdge("8 7", route);
 
-    const match = html.match(/stroke-dashoffset="([^"]+)"/);
-    expect(match).not.toBeNull();
-    const offset = Number(match?.[1] ?? "NaN");
+    const offset = extractDashOffset(html);
     expect(Number.isFinite(offset)).toBe(true);
 
     const cycle = 15;
@@ -96,9 +112,7 @@ describe("edge dash endpoint caps", () => {
       { x: 1336, y: -174 }
     ];
     const html = renderEdge("8 7", route);
-    const match = html.match(/stroke-dashoffset="([^"]+)"/);
-    expect(match).not.toBeNull();
-    const offset = Number(match?.[1] ?? "NaN");
+    const offset = extractDashOffset(html);
 
     const cycle = 15;
     const dash = 8;
@@ -108,5 +122,20 @@ describe("edge dash endpoint caps", () => {
 
     expect(endpointPhase).toBeLessThan(dash);
     expect(Math.min(Math.abs(cornerPhase), Math.abs(cornerPhase - dash))).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses stable id-based dash phase to reduce identical-path overlap ambiguity", () => {
+    const route = [
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      { x: 40, y: 30 }
+    ];
+    const first = renderEdge("8 7", route, "edge-1");
+    const second = renderEdge("8 7", route, "edge-2");
+
+    const firstOffset = extractDashOffset(first);
+    const secondOffset = extractDashOffset(second);
+
+    expect(firstOffset).not.toEqual(secondOffset);
   });
 });

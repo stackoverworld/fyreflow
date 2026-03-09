@@ -4,9 +4,129 @@ import {
   normalizeRunInputKey,
   pickPreferredRunInputKey
 } from "@/lib/runInputAliases";
-import type { SmartRunPlan } from "@/lib/types";
+import type { SmartRunCheck, SmartRunField, SmartRunPlan } from "@/lib/types";
 
 const SMART_RUN_PLAN_CACHE_LIMIT = 24;
+
+function mergeSmartRunFields(fields: SmartRunField[]): SmartRunField[] {
+  const byKey = new Map<string, SmartRunField>();
+
+  for (const field of fields) {
+    const normalizedKey = normalizeRunInputKey(field.key);
+    if (normalizedKey.length === 0) {
+      continue;
+    }
+
+    const equivalentKey = [...byKey.keys()].find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, normalizedKey)
+    );
+    const key =
+      equivalentKey === undefined ? normalizedKey : pickPreferredRunInputKey(equivalentKey, normalizedKey);
+    const existing = equivalentKey ? byKey.get(equivalentKey) : byKey.get(key);
+
+    if (!existing) {
+      byKey.set(key, {
+        ...field,
+        key,
+        sources: [...new Set(field.sources)].sort()
+      });
+      continue;
+    }
+
+    const mergedSources = [...new Set([...(existing.sources ?? []), ...(field.sources ?? [])])].sort();
+
+    if (equivalentKey && equivalentKey !== key) {
+      byKey.delete(equivalentKey);
+    }
+
+    byKey.set(key, {
+      ...existing,
+      key,
+      label: existing.label || field.label,
+      type: existing.type === "text" && field.type !== "text" ? field.type : existing.type,
+      required: existing.required || field.required,
+      description: existing.description || field.description,
+      placeholder: existing.placeholder || field.placeholder,
+      sources: mergedSources
+    });
+  }
+
+  return [...byKey.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function smartRunCheckSeverity(status: SmartRunCheck["status"]): number {
+  if (status === "fail") {
+    return 2;
+  }
+  if (status === "warn") {
+    return 1;
+  }
+  return 0;
+}
+
+function mergeInputChecks(checks: SmartRunCheck[], normalizedFields: SmartRunField[]): SmartRunCheck[] {
+  const byKey = new Map<string, SmartRunCheck>();
+  const labelByKey = new Map(normalizedFields.map((field) => [field.key, field.label] as const));
+
+  for (const check of checks) {
+    if (!check.id.startsWith("input:")) {
+      continue;
+    }
+
+    const rawKey = check.id.replace(/^input:/, "");
+    const normalizedKey = normalizeRunInputKey(rawKey);
+    if (normalizedKey.length === 0) {
+      continue;
+    }
+
+    const equivalentKey = [...byKey.keys()].find((existingKey) =>
+      areRunInputKeysEquivalent(existingKey, normalizedKey)
+    );
+    const key =
+      equivalentKey === undefined ? normalizedKey : pickPreferredRunInputKey(equivalentKey, normalizedKey);
+    const existing = equivalentKey ? byKey.get(equivalentKey) : byKey.get(key);
+
+    if (!existing) {
+      byKey.set(key, {
+        ...check,
+        id: `input:${key}`,
+        title: labelByKey.has(key) ? `Input ${labelByKey.get(key)}` : check.title
+      });
+      continue;
+    }
+
+    const nextCheck =
+      smartRunCheckSeverity(check.status) > smartRunCheckSeverity(existing.status)
+        ? check
+        : existing;
+
+    if (equivalentKey && equivalentKey !== key) {
+      byKey.delete(equivalentKey);
+    }
+
+    byKey.set(key, {
+      ...nextCheck,
+      id: `input:${key}`,
+      title: labelByKey.has(key) ? `Input ${labelByKey.get(key)}` : nextCheck.title
+    });
+  }
+
+  return [...byKey.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function normalizeSmartRunPlan(plan: SmartRunPlan): SmartRunPlan {
+  const fields = mergeSmartRunFields(plan.fields ?? []);
+  const inputChecks = mergeInputChecks(plan.checks ?? [], fields);
+  const nonInputChecks = (plan.checks ?? []).filter((check) => !check.id.startsWith("input:"));
+  const checks = [...nonInputChecks, ...inputChecks];
+
+  return {
+    ...plan,
+    fields,
+    checks,
+    canRun: checks.every((check) => check.status !== "fail")
+  };
+}
 
 export function normalizeSmartRunInputs(inputs?: Record<string, string>): Record<string, string> {
   if (!inputs) {

@@ -3,15 +3,15 @@ import { describe, expect, it } from "vitest";
 import { resolveEffectiveStageTimeoutMs } from "../../server/runner/execution.js";
 import type { PipelineStep, ProviderConfig } from "../../server/types/contracts.js";
 
-function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
+function createStep(overrides?: Partial<PipelineStep>): PipelineStep {
   return {
     id: "step-1",
-    name: "Step",
+    name: "Git Fetcher",
     role: "analysis",
-    prompt: "prompt",
+    prompt: "Fetch",
     providerId: "claude",
-    model: "claude-sonnet-4-6",
-    reasoningEffort: "medium",
+    model: "claude-opus-4-1",
+    reasoningEffort: "high",
     fastMode: false,
     use1MContext: false,
     contextWindowTokens: 128_000,
@@ -22,51 +22,43 @@ function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
     enableIsolatedStorage: false,
     enableSharedStorage: true,
     enabledMcpServerIds: [],
+    sandboxMode: "secure",
     outputFormat: "markdown",
     requiredOutputFields: [],
     requiredOutputFiles: [],
     scenarios: [],
     skipIfArtifacts: [],
-    ...partial
+    policyProfileIds: [],
+    cacheBypassInputKeys: [],
+    cacheBypassOrchestratorPromptPatterns: [],
+    ...overrides
   };
 }
 
-function createProvider(partial: Partial<ProviderConfig> = {}): ProviderConfig {
-  return {
-    id: "claude",
-    label: "Anthropic",
-    authMode: "oauth",
-    apiKey: "",
-    oauthToken: "",
-    baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-sonnet-4-6",
-    updatedAt: new Date().toISOString(),
-    ...partial
-  };
-}
+const claudeProvider: ProviderConfig = {
+  id: "claude",
+  label: "Anthropic",
+  authMode: "oauth",
+  apiKey: "",
+  oauthToken: "",
+  baseUrl: "https://api.anthropic.com/v1",
+  defaultModel: "claude-opus-4-1",
+  updatedAt: new Date().toISOString()
+};
 
 describe("resolveEffectiveStageTimeoutMs", () => {
-  it("extends sonnet high-effort artifact roles to multi-minute budgets", () => {
-    const step = createStep({ role: "analysis", reasoningEffort: "high", model: "claude-sonnet-4-6" });
-    const provider = createProvider({ id: "claude", defaultModel: "claude-sonnet-4-6" });
-
-    const timeoutMs = resolveEffectiveStageTimeoutMs(step, provider, 420_000);
-    expect(timeoutMs).toBe(2_400_000);
+  it("caps heavy claude stages instead of inflating them to hour-long waits", () => {
+    const timeoutMs = resolveEffectiveStageTimeoutMs(createStep(), claudeProvider, 3_600_000);
+    expect(timeoutMs).toBe(900_000);
   });
 
-  it("extends sonnet artifact roles at medium effort to at least 20 minutes", () => {
-    const step = createStep({ role: "executor", reasoningEffort: "medium", model: "claude-sonnet-4-6" });
-    const provider = createProvider({ id: "claude", defaultModel: "claude-sonnet-4-6" });
+  it("preserves smaller caller-provided timeouts", () => {
+    const timeoutMs = resolveEffectiveStageTimeoutMs(
+      createStep({ model: "claude-sonnet-4-6", reasoningEffort: "medium" }),
+      { ...claudeProvider, defaultModel: "claude-sonnet-4-6" },
+      180_000
+    );
 
-    const timeoutMs = resolveEffectiveStageTimeoutMs(step, provider, 420_000);
-    expect(timeoutMs).toBe(1_200_000);
-  });
-
-  it("keeps non-artifact claude roles on baseline floor", () => {
-    const step = createStep({ role: "orchestrator", reasoningEffort: "low", model: "claude-sonnet-4-6" });
-    const provider = createProvider({ id: "claude", defaultModel: "claude-sonnet-4-6" });
-
-    const timeoutMs = resolveEffectiveStageTimeoutMs(step, provider, 420_000);
-    expect(timeoutMs).toBe(420_000);
+    expect(timeoutMs).toBe(180_000);
   });
 });

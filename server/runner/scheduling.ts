@@ -8,10 +8,12 @@ export {
   markRunStart,
   markRunCompleted,
   markRunFailed,
+  markRunPausedForInput,
   markRunCancelled,
   markStepRunning,
   markStepCompleted,
   markStepFailed,
+  markStepNeedsInput,
   markStepPaused
 } from "./scheduling/state.js";
 export type { RuntimeConfig } from "./types.js";

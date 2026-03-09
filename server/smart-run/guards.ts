@@ -109,9 +109,23 @@ export async function collectRuntimeChecks(pipeline: Pipeline, state: DashboardS
       continue;
     }
 
-    if ((server.transport === "http" || server.transport === "sse") && server.url.trim().length === 0) {
+    if (server.transport === "http" && server.url.trim().length === 0) {
       checks.push(
-        makeCheck(`mcp:${server.id}`, `MCP ${server.name}`, "fail", "HTTP/SSE transport requires URL.")
+        makeCheck(`mcp:${server.id}`, `MCP ${server.name}`, "fail", "HTTP transport requires URL.")
+      );
+      continue;
+    }
+
+    if (server.transport === "http" && server.toolAllowlist.trim().length === 0) {
+      checks.push(
+        makeCheck(`mcp:${server.id}:toolAllowlist`, `MCP ${server.name}`, "fail", "HTTP transport requires a tool allowlist.")
+      );
+      continue;
+    }
+
+    if (server.transport === "http" && server.hostAllowlist.trim().length === 0) {
+      checks.push(
+        makeCheck(`mcp:${server.id}:hostAllowlist`, `MCP ${server.name}`, "fail", "HTTP transport requires a host allowlist.")
       );
       continue;
     }

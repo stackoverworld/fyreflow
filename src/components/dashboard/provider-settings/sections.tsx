@@ -598,7 +598,7 @@ export function ProviderSettingsSection({
             onValueChange={(value) => {
               onDefaultModelChange(providerId, value);
             }}
-            options={getProviderModelOptions(providerId)}
+            options={getProviderModelOptions(providerId, provider, status)}
             placeholder="Select model..."
           />
         </div>

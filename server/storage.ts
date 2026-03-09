@@ -35,15 +35,38 @@ import type {
 } from "./types.js";
 import type { RunInputs } from "./runInputs.js";
 
+const RUN_PERSIST_DEBOUNCE_MS = 250;
+
 export class LocalStore {
   private state: DashboardState;
+  private pendingRunPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly dbPath: string = DB_PATH) {
     this.state = bootstrapStorageState(this.dbPath);
   }
 
-  private persist(): void {
+  private persistNow(): void {
     persistStorageStateForFacade(this.dbPath, this.state);
+  }
+
+  private scheduleRunPersist(): void {
+    if (this.pendingRunPersistTimer) {
+      return;
+    }
+
+    this.pendingRunPersistTimer = setTimeout(() => {
+      this.pendingRunPersistTimer = null;
+      this.persistNow();
+    }, RUN_PERSIST_DEBOUNCE_MS);
+    this.pendingRunPersistTimer.unref?.();
+  }
+
+  async flush(): Promise<void> {
+    if (this.pendingRunPersistTimer) {
+      clearTimeout(this.pendingRunPersistTimer);
+      this.pendingRunPersistTimer = null;
+    }
+    this.persistNow();
   }
 
   getState(): DashboardState {
@@ -64,7 +87,7 @@ export class LocalStore {
 
   createPipeline(input: PipelineInput): Pipeline {
     const pipeline = createPipeline(this.state, input);
-    this.persist();
+    this.persistNow();
     return pipeline;
   }
 
@@ -74,7 +97,7 @@ export class LocalStore {
       return undefined;
     }
 
-    this.persist();
+    this.persistNow();
     return updated;
   }
 
@@ -84,13 +107,13 @@ export class LocalStore {
       return false;
     }
 
-    this.persist();
+    this.persistNow();
     return true;
   }
 
   upsertProvider(providerId: ProviderId, input: ProviderUpdateInput): ProviderConfig {
     const updated = upsertProvider(this.state, providerId, input);
-    this.persist();
+    this.persistNow();
     return updated;
   }
 
@@ -100,7 +123,7 @@ export class LocalStore {
 
   createMcpServer(input: McpServerInput): McpServerConfig {
     const server = createMcpServer(this.state, input);
-    this.persist();
+    this.persistNow();
     return server;
   }
 
@@ -110,7 +133,7 @@ export class LocalStore {
       return undefined;
     }
 
-    this.persist();
+    this.persistNow();
     return updated;
   }
 
@@ -120,19 +143,19 @@ export class LocalStore {
       return false;
     }
 
-    this.persist();
+    this.persistNow();
     return true;
   }
 
   updateStorageConfig(input: StorageUpdateInput): StorageConfig {
     const updated = updateStorageConfig(this.state, input);
-    this.persist();
+    this.persistNow();
     return updated;
   }
 
   createRun(pipeline: Pipeline, task: string, rawInputs?: RunInputs, scenario?: string): PipelineRun {
     const run = createRun(this.state, pipeline, task, rawInputs, scenario);
-    this.persist();
+    this.persistNow();
     return run;
   }
 
@@ -146,7 +169,7 @@ export class LocalStore {
       return undefined;
     }
 
-    this.persist();
+    this.scheduleRunPersist();
     return updated;
   }
 

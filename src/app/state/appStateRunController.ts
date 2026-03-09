@@ -1,9 +1,10 @@
 import { getRunStartupCheck, listRuns, pauseRun, resolveRunApproval, resumeRun, savePipelineSecureInputs, startRun, stopRun } from "@/lib/api";
+import { dedupeRunInputRequests } from "@/lib/runInputRequests";
 import { isActiveRunStatus } from "@/lib/pipelineDraft";
 import { normalizeSmartRunInputs } from "@/lib/smartRunInputs";
 import type { DashboardState } from "@/lib/types";
 import type { Dispatch, SetStateAction } from "react";
-import { collectSecretInputsToSave, resolveRunActionTarget } from "./appStateRunHelpers";
+import { autoNormalizeInputsFromRequests, collectSecretInputsToSave, resolveRunActionTarget } from "./appStateRunHelpers";
 import type { RunInputModalContext, RunInputModalSource } from "./appStateTypes";
 
 export type HandleStartRunOptions = {
@@ -36,8 +37,26 @@ export async function runStartupCheckBeforeStart({
   setNotice,
   setRunInputModal
 }: RunStartupCheckBeforeStartArgs): Promise<"pass" | "needs_input" | "blocked"> {
-  const response = await getRunStartupCheck(pipelineId, task, inputs);
-  const check = response.check;
+  let response = await getRunStartupCheck(pipelineId, task, inputs);
+  let check = {
+    ...response.check,
+    requests: dedupeRunInputRequests(response.check.requests)
+  };
+
+  if (check.requests.length > 0) {
+    const normalized = autoNormalizeInputsFromRequests(inputs, check.requests);
+    if (normalized.changed) {
+      for (const [key, value] of Object.entries(normalized.inputs)) {
+        inputs[key] = value;
+      }
+
+      response = await getRunStartupCheck(pipelineId, task, inputs);
+      check = {
+        ...response.check,
+        requests: dedupeRunInputRequests(response.check.requests)
+      };
+    }
+  }
 
   if (check.status === "blocked") {
     const firstBlocker = check.blockers[0];

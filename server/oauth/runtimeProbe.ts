@@ -20,6 +20,26 @@ function runCommandCapture(command: string, args: string[], timeoutMs: number): 
     let stderr = "";
     let settled = false;
     let timedOut = false;
+    const tail = (value: string, maxChars = 520): string => {
+      const normalized = value.replace(/\s+/g, " ").trim();
+      if (normalized.length <= maxChars) {
+        return normalized;
+      }
+      return normalized.slice(normalized.length - maxChars);
+    };
+
+    const buildNonZeroExitSummary = (code: number | null): string => {
+      const normalizedCode = typeof code === "number" ? code : "unknown";
+      const stderrTail = stderr.length > 0 ? tail(stderr) : "";
+      const stdoutTail = stdout.length > 0 ? tail(stdout) : "";
+      if (stderrTail.length > 0) {
+        return `${command} exited with code ${normalizedCode}: stderr_tail=${JSON.stringify(stderrTail)}`;
+      }
+      if (stdoutTail.length > 0) {
+        return `${command} exited with code ${normalizedCode}: stdout_tail=${JSON.stringify(stdoutTail)}`;
+      }
+      return `${command} exited with code ${normalizedCode}: no stdout/stderr captured`;
+    };
 
     const finish = (fn: () => void) => {
       if (settled) {
@@ -65,7 +85,7 @@ function runCommandCapture(command: string, args: string[], timeoutMs: number): 
       }
 
       const nonZeroError = Object.assign(
-        new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 520)}`),
+        new Error(buildNonZeroExitSummary(code)),
         {
           code: code ?? undefined,
           signal: signal ?? undefined,

@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/optics/button";
 import { Badge } from "@/components/optics/badge";
 import { cn } from "@/lib/cn";
-import type { AiChatMessage } from "@/lib/types";
+import type { AiChatMessage, FlowBuilderQuestion } from "@/lib/types";
+import { summarizeDraftArchitecture } from "../draftArchitecture";
 import {
   type MarkdownBlock,
   parseMarkdownBlocks,
@@ -168,17 +169,107 @@ function renderBlock(block: MarkdownBlock, index: number, trailingDot = false) {
 }
 
 
-interface ChatBubbleProps {
-  message: AiChatMessage;
-  onApply?: () => void;
-  onQuickReply?: (value: string) => Promise<void>;
-  readOnly?: boolean;
+function formatClarificationReply(
+  questions: FlowBuilderQuestion[],
+  selections: Record<string, string>
+): string {
+  return questions
+    .map((q) => {
+      const selected = selections[q.id];
+      const option = q.options.find((o) => o.value === selected);
+      return `${q.question} ${option?.label ?? selected}`;
+    })
+    .join("\n");
 }
 
-export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }: ChatBubbleProps) {
+function ClarificationQuestions({
+  questions,
+  readOnly,
+  onSubmit
+}: {
+  questions: FlowBuilderQuestion[];
+  readOnly: boolean;
+  onSubmit: (value: string) => Promise<void>;
+}) {
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [submitted, setSubmitted] = useState(false);
+  const allAnswered = questions.every((q) => q.id in selections);
+
+  const handleSelect = (questionId: string, value: string) => {
+    if (submitted) return;
+    setSelections((prev) => {
+      if (prev[questionId] === value) {
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
+      }
+      return { ...prev, [questionId]: value };
+    });
+  };
+
+  const handleSubmit = () => {
+    if (!allAnswered || submitted) return;
+    setSubmitted(true);
+    void onSubmit(formatClarificationReply(questions, selections));
+  };
+
+  return (
+    <div className="mt-2 space-y-2">
+      {questions.map((question) => (
+        <div
+          key={question.id}
+          className="rounded-lg bg-ink-900/50 px-2.5 py-2"
+        >
+          <p className="text-[12px] font-medium text-ink-200">{question.question}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {question.options.map((option, index) => {
+              const isSelected = selections[question.id] === option.value;
+              return (
+                <Button
+                  key={`${question.id}-option-${index}`}
+                  size="sm"
+                  variant={isSelected ? "primary" : "secondary"}
+                  disabled={readOnly || submitted}
+                  onClick={() => handleSelect(question.id, option.value)}
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <motion.div
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: allAnswered ? 1 : 0.4, y: 0 }}
+        transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!allAnswered || readOnly || submitted}
+          onClick={handleSubmit}
+        >
+          {submitted ? "Submitted" : `Submit ${questions.length > 1 ? "all answers" : "answer"}`}
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
+
+interface ChatBubbleProps {
+  message: AiChatMessage;
+  onApply?: () => Promise<void> | void;
+  onQuickReply?: (value: string) => Promise<void>;
+  readOnly?: boolean;
+  questionsExpired?: boolean;
+}
+
+export function ChatBubble({ message, onApply, onQuickReply, readOnly = false, questionsExpired = false }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
   const isAssistant = !isUser && !isError;
+  const draftArchitecture = message.generatedDraft ? summarizeDraftArchitecture(message.generatedDraft) : null;
   const isNativeStreaming = message.streaming === true && isAssistant;
   const nativeStreamingWaiting = isNativeStreaming && message.content.length === 0;
   const nativeStreamingActive = isNativeStreaming && message.content.length > 0;
@@ -240,41 +331,46 @@ export function ChatBubble({ message, onApply, onQuickReply, readOnly = false }:
         )}
 
         {message.generatedDraft && onApply ? (
-          <div className="mt-2 flex items-center gap-2">
-            <Badge variant="neutral">{message.generatedDraft.steps.length} steps</Badge>
-            <Badge variant="neutral">{message.generatedDraft.links.length} links</Badge>
-            <Button size="sm" variant="ghost" disabled={readOnly} onClick={onApply}>
-              Re-apply
-            </Button>
+          <div className="mt-2 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="neutral">{message.generatedDraft.steps.length} steps</Badge>
+              <Badge variant="neutral">{message.generatedDraft.links.length} links</Badge>
+              {draftArchitecture && draftArchitecture.deterministicStepCount > 0 ? (
+                <Badge variant="neutral">{draftArchitecture.deterministicStepCount} deterministic</Badge>
+              ) : null}
+              {draftArchitecture && draftArchitecture.semanticRouteCount > 0 ? (
+                <Badge variant="neutral">
+                  {draftArchitecture.semanticRouteCount} semantic {draftArchitecture.semanticRouteCount === 1 ? "route" : "routes"}
+                </Badge>
+              ) : null}
+              {draftArchitecture && draftArchitecture.llmStepCount > 0 && draftArchitecture.deterministicStepCount > 0 ? (
+                <Badge variant="neutral">{draftArchitecture.llmStepCount} LLM</Badge>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly}
+                onClick={() => {
+                  if (!onApply) {
+                    return;
+                  }
+                  void onApply();
+                }}
+              >
+                Re-apply
+              </Button>
+            </div>
           </div>
         ) : null}
 
-        {isAssistant && hasQuestions && onQuickReply ? (
-          <div className="mt-2 space-y-2">
-            {message.questions?.map((question) => (
-              <div
-                key={question.id}
-                className="rounded-lg bg-ink-900/50 px-2.5 py-2"
-              >
-                <p className="text-[12px] font-medium text-ink-200">{question.question}</p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {question.options.map((option, index) => (
-                    <Button
-                      key={`${question.id}-option-${index}`}
-                      size="sm"
-                      variant="secondary"
-                      disabled={readOnly}
-                      onClick={() => {
-                        void onQuickReply(option.value);
-                      }}
-                    >
-                      {option.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+        {isAssistant && hasQuestions && onQuickReply && !questionsExpired ? (
+          <ClarificationQuestions
+            questions={message.questions!}
+            readOnly={readOnly}
+            onSubmit={onQuickReply}
+          />
         ) : null}
 
         <AnimatePresence initial={false}>

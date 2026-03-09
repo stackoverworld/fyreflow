@@ -8,6 +8,7 @@ import type { FlowLink, FlowNode, Point, Rect } from "../../src/components/dashb
 import {
   NODE_WIDTH,
   nodeDelegationRect,
+  nodeRect,
   nodeSourceAnchorRect,
   nodeTargetAnchorRect
 } from "../../src/components/dashboard/pipeline-canvas/useNodeLayout.ts";
@@ -69,6 +70,84 @@ function hasUndersizedEndpointLeg(route: Array<{ x: number; y: number }>): boole
   const last = segmentLength(route[n - 2], route[n - 1]);
   const beforeLast = segmentLength(route[n - 3], route[n - 2]);
   return last < 32 && beforeLast > 32;
+}
+
+function hasOuterHorizontalLane(route: Array<{ x: number; y: number }>, minTop: number, maxBottom: number): boolean {
+  for (let index = 1; index < route.length; index += 1) {
+    const previous = route[index - 1];
+    const current = route[index];
+    if (previous.y !== current.y) {
+      continue;
+    }
+
+    const segmentY = previous.y;
+    const segmentLengthX = Math.abs(current.x - previous.x);
+    const outsideBounds = segmentY < minTop || segmentY > maxBottom;
+    if (outsideBounds && segmentLengthX >= 40) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function segmentCrosses(
+  aStart: { x: number; y: number },
+  aEnd: { x: number; y: number },
+  bStart: { x: number; y: number },
+  bEnd: { x: number; y: number }
+): boolean {
+  const aVertical = aStart.x === aEnd.x;
+  const bVertical = bStart.x === bEnd.x;
+  const aHorizontal = aStart.y === aEnd.y;
+  const bHorizontal = bStart.y === bEnd.y;
+
+  if ((aVertical && bVertical) || (aHorizontal && bHorizontal)) {
+    return false;
+  }
+
+  const horizontalStart = aHorizontal ? aStart : bStart;
+  const horizontalEnd = aHorizontal ? aEnd : bEnd;
+  const verticalStart = aVertical ? aStart : bStart;
+  const verticalEnd = aVertical ? aEnd : bEnd;
+
+  if (horizontalStart.y !== horizontalEnd.y || verticalStart.x !== verticalEnd.x) {
+    return false;
+  }
+
+  const horizontalMinX = Math.min(horizontalStart.x, horizontalEnd.x);
+  const horizontalMaxX = Math.max(horizontalStart.x, horizontalEnd.x);
+  const verticalMinY = Math.min(verticalStart.y, verticalEnd.y);
+  const verticalMaxY = Math.max(verticalStart.y, verticalEnd.y);
+  const intersectionX = verticalStart.x;
+  const intersectionY = horizontalStart.y;
+
+  return (
+    intersectionX > horizontalMinX &&
+    intersectionX < horizontalMaxX &&
+    intersectionY > verticalMinY &&
+    intersectionY < verticalMaxY
+  );
+}
+
+function routeCrossingCount(routes: Array<Array<{ x: number; y: number }>>): number {
+  let count = 0;
+
+  for (let routeIndex = 1; routeIndex < routes.length; routeIndex += 1) {
+    const route = routes[routeIndex];
+    for (let previousIndex = 0; previousIndex < routeIndex; previousIndex += 1) {
+      const previous = routes[previousIndex];
+      for (let a = 1; a < route.length; a += 1) {
+        for (let b = 1; b < previous.length; b += 1) {
+          if (segmentCrosses(route[a - 1], route[a], previous[b - 1], previous[b])) {
+            count += 1;
+          }
+        }
+      }
+    }
+  }
+
+  return count;
 }
 
 function buildInput(nodes: FlowNode[], links: FlowLink[], extra?: Partial<Parameters<typeof buildRenderedLinks>[0]>) {
@@ -155,6 +234,30 @@ describe("pipeline canvas routing", () => {
         expect(end.y).toBeLessThan(targetDelegationRect.top);
       }
     });
+
+    it("distributes source ports across a side for fan-out links", () => {
+      const source = createNode("source", 120, 220);
+      const targetA = createNode("target-a", 640, 120);
+      const targetB = createNode("target-b", 640, 240);
+      const targetC = createNode("target-c", 640, 360);
+      const links: FlowLink[] = [
+        { id: "fan-a", sourceStepId: source.id, targetStepId: targetA.id, condition: "always" },
+        { id: "fan-b", sourceStepId: source.id, targetStepId: targetB.id, condition: "always" },
+        { id: "fan-c", sourceStepId: source.id, targetStepId: targetC.id, condition: "always" }
+      ];
+
+      const rendered = buildRenderedLinks(buildInput([source, targetA, targetB, targetC], links));
+      const sourceRect = nodeSourceAnchorRect(source);
+      const startPoints = rendered.map((entry) => entry.route[0]).filter(Boolean);
+
+      expect(rendered).toHaveLength(3);
+      for (const startPoint of startPoints) {
+        expect(isOnPerimeter(startPoint, sourceRect)).toBe(true);
+      }
+
+      const distinctY = new Set(startPoints.map((point) => point.y));
+      expect(distinctY.size).toBeGreaterThan(1);
+    });
   });
 
   describe("lane separation", () => {
@@ -180,6 +283,69 @@ describe("pipeline canvas routing", () => {
       expect(hasTinyEndpointHook(separatedRoute)).toBe(false);
       expect(hasUndersizedEndpointLeg(primaryRoute)).toBe(false);
       expect(hasUndersizedEndpointLeg(separatedRoute)).toBe(false);
+    });
+
+    it("avoids interior crossings on crisscross links when alternatives exist", () => {
+      const topLeft = createNode("top-left", 80, 80);
+      const topRight = createNode("top-right", 760, 80);
+      const bottomLeft = createNode("bottom-left", 80, 360);
+      const bottomRight = createNode("bottom-right", 760, 360);
+      const centerBlocker = createNode("center-blocker", 440, 220);
+      const nodes = [topLeft, topRight, bottomLeft, bottomRight, centerBlocker];
+      const links: FlowLink[] = [
+        { id: "diag-a", sourceStepId: topLeft.id, targetStepId: bottomRight.id, condition: "always" },
+        { id: "diag-b", sourceStepId: bottomLeft.id, targetStepId: topRight.id, condition: "always" }
+      ];
+
+      const rendered = buildRenderedLinks(buildInput(nodes, links));
+      const routes = rendered.map((entry) => entry.route);
+
+      expect(rendered).toHaveLength(2);
+      expect(routeCrossingCount(routes)).toBe(0);
+    });
+  });
+
+  describe("feedback gutters", () => {
+    it("routes on_fail links through a dedicated outer lane", () => {
+      const source = createNode("source", 960, 220);
+      const target = createNode("target", 240, 160);
+      const blocker = createNode("blocker", 620, 200);
+      const nodes = [source, target, blocker];
+      const links: FlowLink[] = [
+        { id: "feedback", sourceStepId: source.id, targetStepId: target.id, condition: "on_fail" }
+      ];
+
+      const rendered = buildRenderedLinks(buildInput(nodes, links));
+
+      expect(rendered).toHaveLength(1);
+      const route = rendered[0]?.route ?? [];
+      const bounds = nodes.map((node) => nodeRect(node));
+      const minTop = Math.min(...bounds.map((rect) => rect.top));
+      const maxBottom = Math.max(...bounds.map((rect) => rect.bottom));
+
+      expect(hasOuterHorizontalLane(route, minTop, maxBottom)).toBe(true);
+    });
+  });
+
+  describe("routing stability", () => {
+    it("keeps computed routes stable when link input order changes", () => {
+      const source = createNode("source", 920, 220);
+      const target = createNode("target", 220, 180);
+      const blocker = createNode("blocker", 560, 200);
+      const nodes = [source, target, blocker];
+      const links: FlowLink[] = [
+        { id: "feedback", sourceStepId: source.id, targetStepId: target.id, condition: "on_fail" },
+        { id: "forward", sourceStepId: target.id, targetStepId: source.id, condition: "always" }
+      ];
+
+      const renderedOriginal = buildRenderedLinks(buildInput(nodes, links));
+      const renderedReordered = buildRenderedLinks(buildInput(nodes, [...links].reverse()));
+
+      const routeByIdOriginal = new Map(renderedOriginal.map((entry) => [entry.id, entry.route]));
+      const routeByIdReordered = new Map(renderedReordered.map((entry) => [entry.id, entry.route]));
+
+      expect(routeByIdOriginal.get("feedback")).toEqual(routeByIdReordered.get("feedback"));
+      expect(routeByIdOriginal.get("forward")).toEqual(routeByIdReordered.get("forward"));
     });
   });
 

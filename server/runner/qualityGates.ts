@@ -2,6 +2,7 @@ export {
   normalizeStepStatus,
   parseJsonOutput,
   extractInputRequestSignal,
+  hasExplicitFailOutcomeSignal,
   inferWorkflowOutcome,
   parseGateResultContract,
   buildStatusSignalOutput

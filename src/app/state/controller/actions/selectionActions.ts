@@ -2,9 +2,11 @@ import type { Dispatch, SetStateAction } from "react";
 import { createDraftWorkflowKey, emptyDraft, normalizeRuntime, normalizeSchedule, toDraft } from "@/lib/pipelineDraft";
 import { createPipeline, deletePipeline, updatePipeline } from "@/lib/api";
 import { moveAiChatHistory } from "@/lib/aiChatStorage";
+import { moveSessionIndex } from "@/lib/aiChatSessionIndex";
 import { moveRunDraft } from "@/lib/runDraftStorage";
 import type { WorkspacePanel } from "@/app/useNavigationState";
 import type { DashboardState, PipelinePayload, SmartRunPlan } from "@/lib/types";
+import type { PipelineSaveResult } from "../types";
 import { withDraftEditLock } from "../../appStateReducers";
 import { hasPipelineRunActivity } from "../../appStateRunHelpers";
 import { selectPipelineSaveValidationError } from "../../appStateSelectors";
@@ -139,7 +141,7 @@ export async function handleSavePipelineAction(
     selectedPipelineIdRef: { current: string | null };
     draftWorkflowKeyRef: { current: string };
   }
-): Promise<boolean> {
+): Promise<PipelineSaveResult> {
   const draftSnapshot = opts.draftSnapshot ?? ctx.draft;
   const silent = opts.silent ?? false;
   const validationError = ctx.selectPipelineSaveValidationError(draftSnapshot);
@@ -148,11 +150,19 @@ export async function handleSavePipelineAction(
     if (!silent) {
       ctx.setNotice(validationError);
     }
-    return false;
+    return {
+      saved: false,
+      pipelineId: ctx.selectedPipelineId,
+      errorMessage: validationError
+    };
   }
 
   if (ctx.savingPipelineRef.current) {
-    return false;
+    return {
+      saved: false,
+      pipelineId: ctx.selectedPipelineId,
+      errorMessage: "Flow save is already in progress."
+    };
   }
 
   ctx.savingPipelineRef.current = true;
@@ -172,7 +182,9 @@ export async function handleSavePipelineAction(
     if (savingNewDraft) {
       const response = await createPipeline(payload);
       const created = response.pipeline;
+      const savedDraft = toDraft(created);
       moveAiChatHistory(saveTargetDraftKey, created.id);
+      moveSessionIndex(saveTargetDraftKey, created.id);
       moveRunDraft(saveTargetDraftKey, created.id);
       ctx.setPipelines((current) => [created, ...current.filter((pipeline) => pipeline.id !== created.id)]);
       if (
@@ -180,36 +192,55 @@ export async function handleSavePipelineAction(
         ctx.draftWorkflowKeyRef.current === saveTargetDraftKey
       ) {
         ctx.setSelectedPipelineId(created.id);
-        ctx.setBaselineDraft(payload);
+        ctx.setBaselineDraft(savedDraft);
         ctx.setIsNewDraft(false);
       }
 
       if (!silent) {
         ctx.setNotice("Flow created.");
       }
+
+      return {
+        saved: true,
+        pipelineId: created.id,
+        savedDraft
+      };
     } else {
       if (!saveTargetPipelineId) {
-        return false;
+        return {
+          saved: false,
+          pipelineId: null,
+          errorMessage: "No flow is selected."
+        };
       }
 
       const response = await updatePipeline(saveTargetPipelineId, payload);
       const updated = response.pipeline;
+      const savedDraft = toDraft(updated);
       ctx.setPipelines((current) => current.map((pipeline) => (pipeline.id === updated.id ? updated : pipeline)));
 
       if (ctx.selectedPipelineIdRef.current === saveTargetPipelineId) {
-        ctx.setBaselineDraft(payload);
+        ctx.setBaselineDraft(savedDraft);
       }
 
       if (!silent) {
         ctx.setNotice("Flow saved.");
       }
-    }
 
-    return true;
+      return {
+        saved: true,
+        pipelineId: updated.id,
+        savedDraft
+      };
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to save flow";
     ctx.setNotice(silent ? `Autosave failed: ${message}` : message);
-    return false;
+    return {
+      saved: false,
+      pipelineId: ctx.selectedPipelineId,
+      errorMessage: message
+    };
   } finally {
     ctx.savingPipelineRef.current = false;
     ctx.setSavingPipeline(false);

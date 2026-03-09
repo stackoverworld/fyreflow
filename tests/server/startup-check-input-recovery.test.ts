@@ -10,7 +10,7 @@ function createStep(partial: Partial<PipelineStep> = {}): PipelineStep {
     role: partial.role ?? "executor",
     prompt: partial.prompt ?? "",
     providerId: partial.providerId ?? "openai",
-    model: partial.model ?? "gpt-5.3-codex",
+    model: partial.model ?? "gpt-5.4",
     reasoningEffort: partial.reasoningEffort ?? "medium",
     fastMode: partial.fastMode ?? false,
     use1MContext: partial.use1MContext ?? false,

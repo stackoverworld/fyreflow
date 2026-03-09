@@ -11,7 +11,7 @@ interface PlannerRequest {
     id: string;
     name: string;
     enabled?: boolean;
-    transport?: "stdio" | "http" | "sse";
+    transport?: "stdio" | "http";
     summary?: string;
   }>;
 }
@@ -59,8 +59,8 @@ export function buildPlannerContext(request: PlannerRequest): string {
     '  "runtime": { "maxLoops": 2, "maxStepExecutions": 18, "stageTimeoutMs": 420000 },',
     '  "schedule": { "enabled": false, "cron": "0 9 * * 1-5", "timezone": "America/New_York", "task": "Run morning sync checks", "runMode": "smart", "inputs": { "source_pdf_path": "/tmp/source.pdf" } },',
     '  "steps": [',
-    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableDelegation": true, "delegationCount": 3, "enableSharedStorage": true, "outputFormat": "markdown", "policyProfileIds": [], "cacheBypassInputKeys": [], "cacheBypassOrchestratorPromptPatterns": [] },',
-    '    { "name": "Builder", "role": "executor", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nIncoming:\\n{{incoming_outputs}}", "enableIsolatedStorage": true, "enableSharedStorage": true, "enabledMcpServerIds": ["design-mcp-id"], "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"], "requiredOutputFiles": ["{{shared_storage_path}}/artifacts.html"], "scenarios": ["default"], "skipIfArtifacts": ["{{shared_storage_path}}/artifacts.html"], "policyProfileIds": ["design_deck_assets"], "cacheBypassInputKeys": ["force_refresh_design_assets"], "cacheBypassOrchestratorPromptPatterns": ["pdf content extraction.*runs always"] }',
+    '    { "name": "Main Orchestrator", "role": "orchestrator", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nRun inputs:\\n{{run_inputs}}", "enableDelegation": true, "delegationCount": 3, "enableSharedStorage": true, "sandboxMode": "secure", "outputFormat": "markdown", "policyProfileIds": [], "cacheBypassInputKeys": [], "cacheBypassOrchestratorPromptPatterns": [] },',
+    '    { "name": "Builder", "role": "executor", "prompt": "...", "contextTemplate": "Task:\\n{{task}}\\nIncoming:\\n{{incoming_outputs}}", "enableIsolatedStorage": true, "enableSharedStorage": true, "enabledMcpServerIds": ["design-mcp-id"], "sandboxMode": "secure", "outputFormat": "json", "requiredOutputFields": ["status", "artifacts.html"], "requiredOutputFiles": ["{{shared_storage_path}}/artifacts.html"], "scenarios": ["default"], "skipIfArtifacts": ["{{shared_storage_path}}/artifacts.html"], "policyProfileIds": ["design_deck_assets"], "cacheBypassInputKeys": ["force_refresh_design_assets"], "cacheBypassOrchestratorPromptPatterns": ["pdf content extraction.*runs always"] }',
     "  ],",
     '  "links": [',
     '    { "source": "Main Orchestrator", "target": "Builder", "condition": "always" }',
@@ -94,11 +94,20 @@ export function buildPlannerContext(request: PlannerRequest): string {
     "- Platform supports optional cron scheduling via schedule.enabled, schedule.cron, schedule.timezone, schedule.runMode (smart|quick), and optional schedule.inputs.",
     "- Only set schedule.enabled=true when user explicitly asks for automatic scheduled runs.",
     "- Platform supports per-step MCP access via enabledMcpServerIds and per-step isolated/shared storage.",
+    "- Set step.sandboxMode to secure for local-only steps and full for steps that must access external network targets (GitHub/GitLab/APIs/publish/deploy).",
+    "- sandboxMode allowed values: auto, secure, full.",
+    "- For multi-file repository publish/update steps, use one atomic commit operation (for GitLab: /repository/commits with actions[]) instead of per-file commit loops.",
+    "- For code/site generation flows that publish to a repo, add a blocking validation step before publish (import/build integrity) and route on_fail back to generator.",
     "- Parameterize runtime-specific values via placeholders like {{input.source_pdf_path}} instead of hardcoding secrets/paths.",
     "- Keep run-input keys canonical and reusable (for example: source_links, source_api_token, source_pdf_path, output_dir).",
+    "- For GitHub credential guidance, distinguish token types explicitly: classic PAT scope list uses repo/public_repo and does NOT include Contents: Read; fine-grained PAT uses repository permissions such as Contents: Read and Metadata: Read.",
+    "- For GitLab credential guidance, use read_repository for read/fetch steps and write_repository for publish/update steps.",
+    "- Never invent or rename provider permission/scope names. If uncertain, request clarification about token type instead of guessing.",
     "- Mirror artifact locations in requiredOutputFiles/quality-gate artifactPath placeholders (prefer {{shared_storage_path}}/file.json for intermediate files).",
     "- For network-heavy or multi-artifact pipelines, prefer stageTimeoutMs >= 420000.",
     "- Use step.policyProfileIds to enable reusable backend policies (for example design_deck_assets for frame-map/assets-manifest contracts).",
+    "- For deterministic fetch/diff/validate/publish work, prefer policyProfileIds deterministic_fetch / deterministic_diff / deterministic_validate / deterministic_publish instead of another agent step.",
+    '- When using deterministic_* profiles, make step.prompt a strict JSON config object, not prose.',
     "- Use step.cacheBypassInputKeys when a step must bypass skip-cache on explicit run inputs.",
     "- Use step.cacheBypassOrchestratorPromptPatterns when orchestrator instructions should force a step refresh.",
     "- If required external tooling is unavailable in configured MCP servers, add an explicit prerequisite/manual approval checkpoint instead of pretending extraction already happened.",

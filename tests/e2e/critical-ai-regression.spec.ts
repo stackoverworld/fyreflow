@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { mockDashboardApi } from "./support/mockDashboardApi";
+import type { PipelinePayload } from "../../src/lib/types";
 
 const AI_CHAT_STORAGE_PREFIX = "fyreflow:ai-chat:";
 
@@ -53,6 +54,104 @@ test.describe("Critical AI Regression Flows", () => {
 
     await page.getByRole("button", { name: "Flow settings" }).click();
     await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow");
+
+    await page.reload();
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+    await page.getByRole("button", { name: "Flow settings" }).click();
+    await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow");
+  });
+
+  test("AI builder keeps the rebuilt canvas even if save echoes a stale pipeline", async ({ page }) => {
+    const { state } = await mockDashboardApi(page);
+    const staleSavedPipeline = structuredClone(state.pipelines[0]);
+
+    await page.route("**/api/pipelines/pipeline-default", async (route) => {
+      if (route.request().method().toUpperCase() !== "PUT") {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ pipeline: staleSavedPipeline })
+      });
+    });
+
+    await page.route("**/api/flow-builder/generate", async (route) => {
+      const body = route.request().postDataJSON() as { currentDraft?: PipelinePayload };
+      const currentDraft = body.currentDraft;
+      const seedStep = currentDraft?.steps[0];
+
+      if (!currentDraft || !seedStep) {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Missing current draft" })
+        });
+        return;
+      }
+
+      const fetcherStep = {
+        ...seedStep,
+        id: "rebuild-step-fetcher",
+        name: "GitHub Fetcher",
+        role: "analysis" as const,
+        position: { x: 80, y: 130 },
+        enableDelegation: false,
+        delegationCount: 2
+      };
+      const orchestratorStep = {
+        ...seedStep,
+        id: "rebuild-step-orchestrator",
+        name: "Sync Orchestrator",
+        role: "orchestrator" as const,
+        position: { x: 420, y: 130 },
+        enableDelegation: true,
+        delegationCount: 3
+      };
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          action: "replace_flow",
+          message: "Rebuilt the flow for sync orchestration.",
+          draft: {
+            ...currentDraft,
+            name: "GitHub + GitLab Content Sync",
+            steps: [fetcherStep, orchestratorStep],
+            links: [
+              {
+                sourceStepId: fetcherStep.id,
+                targetStepId: orchestratorStep.id,
+                condition: "always"
+              }
+            ]
+          },
+          source: "fallback",
+          notes: ["mock-rebuild-flow"]
+        })
+      });
+    });
+
+    await page.goto("/");
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
+
+    const canvasNodes = page.locator(".pipeline-node-surface");
+    await expect(canvasNodes.getByText("1. Analysis Bot", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "AI builder" }).click();
+    await page.getByRole("button", { name: "Agent" }).click();
+    await page
+      .getByPlaceholder(/Describe changes to apply to the flow|Ask a question about the current flow/)
+      .fill("Rebuild this flow for GitHub and GitLab sync orchestration.");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect(page.getByText("AI rebuilt the flow from chat.")).toBeVisible();
+    await expect(canvasNodes.getByText("GitHub Fetcher", { exact: true })).toBeVisible();
+    await expect(canvasNodes.getByText("Sync Orchestrator", { exact: true })).toBeVisible();
+    await expect(canvasNodes.getByText("1. Analysis Bot", { exact: true })).toHaveCount(0);
   });
 
   test("AI builder can re-apply an older flow update snapshot", async ({ page }) => {
@@ -80,6 +179,11 @@ test.describe("Critical AI Regression Flows", () => {
 
     await page.getByRole("button", { name: "AI builder" }).click();
     await page.getByRole("button", { name: "Re-apply" }).first().click();
+    await page.getByRole("button", { name: "Flow settings" }).click();
+    await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow v1");
+
+    await page.reload();
+    await expect(runToolbarPrimaryButton(page)).toBeVisible();
     await page.getByRole("button", { name: "Flow settings" }).click();
     await expect(page.getByLabel("Flow name")).toHaveValue("AI Regression Flow v1");
   });

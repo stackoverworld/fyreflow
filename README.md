@@ -98,7 +98,8 @@ which codex && codex --version
   - per-stage timeout
 - Manage MCP + storage in a dedicated tab:
   - create/update/delete MCP server configs
-  - set transport (`http`/`sse`/`stdio`) and connection metadata
+  - set transport (`http`/`stdio`) and connection metadata
+  - require explicit tool allowlists and outbound host allowlists for HTTP MCP servers
   - configure centralized storage root/folders
   - enable MCP servers per step and execute MCP tool calls from agent output
 - Use **AI Mode Builder** in Flow Settings:
@@ -120,14 +121,14 @@ which codex && codex --version
 ## Stack
 
 - Frontend: React + TypeScript + Vite + Tailwind
-- API: Express + TypeScript
-- Persistence: file-backed state under `FYREFLOW_DATA_DIR` (default `data/`), including `local-db.json`, provider secrets key, pairing, scheduler markers, and secure inputs.
+- API: Express + TypeScript on Node 22+
+- Persistence: file-backed state under `FYREFLOW_DATA_DIR` (default `data/`). Treat that directory as sensitive runtime state and do not commit, archive, or publish it.
 
 ## Run locally
 
 ```bash
-bun install
-bun run dev
+npm install
+npm run dev
 ```
 
 - Web UI: `http://localhost:5173`
@@ -136,7 +137,7 @@ bun run dev
 ## Run as desktop app (Electron)
 
 ```bash
-bun run dev:desktop
+npm run dev:desktop
 ```
 
 - Starts API (`8787`) + Vite (`5173`) + Electron together
@@ -146,8 +147,8 @@ bun run dev:desktop
 To launch the built web bundle inside Electron:
 
 ```bash
-bun run build
-bun run start:desktop
+npm run build
+npm run start:desktop
 ```
 
 ## Environment variables
@@ -207,9 +208,9 @@ After that, app UI is local, engine runs remotely on Railway.
 ## Build / checks
 
 ```bash
-bun run lint
-bun run typecheck
-bun run build
+npm run lint
+npm run typecheck
+npm run build
 npm run test:e2e
 ```
 

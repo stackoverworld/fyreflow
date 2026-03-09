@@ -10,9 +10,10 @@ export type AgentRole =
   | "review";
 export type WorkflowOutcome = "neutral" | "pass" | "fail";
 export type LinkCondition = "always" | "on_pass" | "on_fail";
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 export type McpHealth = "unknown" | "healthy" | "degraded" | "down";
 export type StepOutputFormat = "markdown" | "json";
+export type StepSandboxMode = "auto" | "secure" | "full";
 export type QualityGateKind =
   | "regex_must_match"
   | "regex_must_not_match"
@@ -43,6 +44,7 @@ export interface PipelineStep {
   enableIsolatedStorage: boolean;
   enableSharedStorage: boolean;
   enabledMcpServerIds: string[];
+  sandboxMode?: StepSandboxMode;
   outputFormat: StepOutputFormat;
   requiredOutputFields: string[];
   requiredOutputFiles: string[];
@@ -58,6 +60,7 @@ export interface PipelineLink {
   sourceStepId: string;
   targetStepId: string;
   condition: LinkCondition;
+  conditionExpression?: string;
 }
 
 export interface PipelineRuntimeConfig {
@@ -125,6 +128,7 @@ export interface PipelinePayload {
     enableIsolatedStorage: boolean;
     enableSharedStorage: boolean;
     enabledMcpServerIds: string[];
+    sandboxMode?: StepSandboxMode;
     outputFormat: StepOutputFormat;
     requiredOutputFields: string[];
     requiredOutputFiles: string[];
@@ -139,6 +143,7 @@ export interface PipelinePayload {
     sourceStepId: string;
     targetStepId: string;
     condition?: LinkCondition;
+    conditionExpression?: string;
   }>;
   qualityGates: Array<{
     id?: string;

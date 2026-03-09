@@ -1,9 +1,9 @@
 # Architecture
 
 ## Intent
-Set up FyreFlow as a Bun-managed monorepo where web and API evolve through shared typed contracts, Codex can work in small bounded modules, and delivery is reproducible in local and CI runs.
+Set up FyreFlow as a Node 22+ monorepo where web and API evolve through shared typed contracts, Codex can work in small bounded modules, and delivery is reproducible in local and CI runs.
 
-- Last reviewed: 2026-02-25
+- Last reviewed: 2026-03-08
 
 ## Structural Principles
 - Use a workspace layout with apps/web, apps/api, packages/shared, and packages/config under one lockfile and root scripts.
@@ -12,6 +12,11 @@ Set up FyreFlow as a Bun-managed monorepo where web and API evolve through share
 - Keep API bootstrap isolated in a runtime kernel (`server/runtime/kernel.ts`) so local and remote deployment profiles can share one core composition.
 - Keep startup orchestration profile-driven with explicit feature flags (`scheduler`, `recovery`) to avoid environment-specific forks in route/service code.
 - Keep workflow runtime behavior profile-driven: step-level policy fields should control cache bypass, skip validation, and artifact contracts instead of hardcoded scenario branches in runner core.
+- Keep orchestration lean: deterministic fetch/diff/validate/publish work should stay in code or tools, while LLM steps receive compressed summaries plus artifact references instead of full accumulated outputs.
+- Prefer builtin deterministic step profiles for ETL-style work before adding another provider/model roundtrip.
+- Keep routing semantic-capable: pipeline links may branch on explicit JSON result fields (`conditionExpression`) instead of forcing all decisions through generic pass/fail loops.
+- Keep run persistence batched: runtime/log updates should coalesce disk writes instead of rewriting the whole state file on every log line.
+- Keep AI Builder contract-preserving: generated drafts must round-trip deterministic policy profiles and semantic route expressions without requiring manual JSON edits.
 - Structure web code by domain features (agents, runs, settings) with route-level modules and a thin typed API client.
 - Apply progressive disclosure docs: short task-oriented runbooks first, then deeper ADR rationale in docs/decisions.
 - Make verification deterministic with scripted checks and fixed test inputs (time, IDs, seeds).
@@ -19,7 +24,7 @@ Set up FyreFlow as a Bun-managed monorepo where web and API evolve through share
 ## Initial Module Plan
 | Module Path | Responsibility |
 | --- | --- |
-| `package.json` | Define Bun workspaces, root scripts (typecheck/test/build/verify), and pinned engine versions. |
+| `package.json` | Define root scripts (typecheck/test/build/verify) and pinned engine versions. |
 | `tsconfig.base.json` | Central strict TypeScript config shared by all apps/packages. |
 | `apps/web/src/main.tsx` | Web app bootstrap and provider wiring. |
 | `apps/web/src/app/router.tsx` | Route map and feature-level code boundaries. |

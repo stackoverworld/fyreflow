@@ -8,6 +8,7 @@ import {
   routePath,
   simpleOrchestratorLaneMeta
 } from "../../../edgeRendering";
+import { buildOrchestratorLaneByLinkId } from "../../../PipelineCanvas.viewport";
 import { NODE_HEIGHT, NODE_WIDTH } from "../../../useNodeLayout";
 import type { ConnectingState, FlowLink, FlowNode, RenderedLink } from "../../../types";
 
@@ -76,7 +77,27 @@ export function buildConnectingPreviewData(
   if (connectingState.targetNodeId) {
     const targetNode = nodeById.get(connectingState.targetNodeId);
     if (targetNode && targetNode.id !== sourceNode.id) {
-      const previewLane = simpleOrchestratorLaneMeta(sourceNode, targetNode);
+      const previewLinkIdBase = `__preview-link:${sourceNode.id}:${targetNode.id}`;
+      const existingLinkIds = new Set(links.map((link) => link.id));
+      let previewLinkId = previewLinkIdBase;
+      let disambiguator = 1;
+      while (existingLinkIds.has(previewLinkId)) {
+        previewLinkId = `${previewLinkIdBase}:${disambiguator}`;
+        disambiguator += 1;
+      }
+
+      const previewLink: FlowLink = {
+        id: previewLinkId,
+        sourceStepId: sourceNode.id,
+        targetStepId: targetNode.id,
+        condition: "always"
+      };
+      const previewLaneMap = buildOrchestratorLaneByLinkId({
+        links: [...links, previewLink],
+        nodeById
+      });
+      const previewLane =
+        previewLaneMap.get(previewLink.id) ?? simpleOrchestratorLaneMeta(sourceNode, targetNode);
       const previewRoute = buildEdgeRoute(
         sourceNode,
         targetNode,

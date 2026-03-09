@@ -1,7 +1,8 @@
-import { HardDrive, Move, Share2, Trash2, Zap } from "lucide-react";
+import { HardDrive, Move, ShieldAlert, Share2, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/optics/badge";
 import { AnthropicIcon, OpenAIIcon } from "@/components/optics/icons";
 import { cn } from "@/lib/cn";
+import { ONE_MILLION_CONTEXT_TOKENS } from "@/lib/modelCatalog";
 import type { ProviderId } from "@/lib/types";
 import { delegationCardHeight, DELEGATION_SPINE_HEIGHT, NODE_HEIGHT, NODE_WIDTH } from "../../useNodeLayout";
 import { isMultiSelectModifier } from "../../selectionState";
@@ -47,6 +48,7 @@ export function NodesLayer({
         const providerMeta = PROVIDER_META[node.providerId];
         const ProviderIcon = providerMeta?.Icon;
         const isOrchestrator = node.role === "orchestrator";
+        const showFullAccessBadge = node.requiresFullAccess || node.sandboxMode === "full";
         const nodeSelectionTone = selectedNodeSet.has(node.id)
           ? selectedNodeId === node.id
             ? "border-ember-500 ring-ember-500/40"
@@ -259,6 +261,12 @@ export function NodesLayer({
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-ink-400">
             <Badge variant={isOrchestrator ? "running" : "neutral"}>{node.role}</Badge>
+            {showFullAccessBadge ? (
+              <Badge variant="warning">
+                <ShieldAlert className="h-2.5 w-2.5" />
+                full
+              </Badge>
+            ) : null}
             {ProviderIcon && <ProviderIcon className="h-3.5 w-3.5" />}
           </div>
           <div className="mt-2 flex items-center gap-1">
@@ -266,7 +274,7 @@ export function NodesLayer({
             {node.fastMode && (
               <Zap className="h-3 w-3 shrink-0 text-ember-400" />
             )}
-            {node.use1MContext && (
+            {(node.use1MContext || (node.contextWindowTokens ?? 0) >= ONE_MILLION_CONTEXT_TOKENS) && (
               <span className="shrink-0 font-mono text-[0.5rem] font-semibold leading-none text-ember-400" title="1M context">1M</span>
             )}
             {node.enableIsolatedStorage && (
@@ -296,8 +304,7 @@ export function NodesLayer({
                 )}
                 style={{
                   top: NODE_HEIGHT + DELEGATION_SPINE_HEIGHT,
-                  width: NODE_WIDTH,
-                  height: delegationCardHeight(node.delegationCount!)
+                  width: NODE_WIDTH
                 }}
               >
                 <div className="mb-1.5 flex items-center gap-1.5">

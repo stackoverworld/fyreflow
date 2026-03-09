@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import {
+  resolve1MContextEnabled,
   resolveDefaultContextWindow,
   resolveDefaultModel
 } from "../../modelCatalog.js";
@@ -53,6 +54,7 @@ export function defaultStepPosition(index: number): PipelineStep["position"] {
 
 export function createDefaultStep(role: AgentRole, name: string, providerId: ProviderId, index: number): PipelineStep {
   const model = resolveDefaultModel(providerId);
+  const use1MContext = resolve1MContextEnabled(providerId, model, false);
   return {
     id: nanoid(),
     name,
@@ -62,7 +64,7 @@ export function createDefaultStep(role: AgentRole, name: string, providerId: Pro
     model,
     reasoningEffort: "medium",
     fastMode: false,
-    use1MContext: false,
+    use1MContext,
     contextWindowTokens: resolveDefaultContextWindow(providerId, model),
     position: defaultStepPosition(index),
     contextTemplate:
@@ -72,6 +74,7 @@ export function createDefaultStep(role: AgentRole, name: string, providerId: Pro
     enableIsolatedStorage: false,
     enableSharedStorage: false,
     enabledMcpServerIds: [],
+    sandboxMode: "auto",
     outputFormat: "markdown",
     requiredOutputFields: [],
     requiredOutputFiles: [],

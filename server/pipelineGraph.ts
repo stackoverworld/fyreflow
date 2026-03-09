@@ -38,6 +38,10 @@ export function normalizePipelineLinks(
 
   for (const link of rawLinks) {
     const condition = link.condition ?? "always";
+    const conditionExpression =
+      typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+        ? link.conditionExpression.trim()
+        : undefined;
     if (
       !link.sourceStepId ||
       !link.targetStepId ||
@@ -48,7 +52,7 @@ export function normalizePipelineLinks(
       continue;
     }
 
-    const dedupeKey = `${link.sourceStepId}->${link.targetStepId}:${condition}`;
+    const dedupeKey = `${link.sourceStepId}->${link.targetStepId}:${condition}:${conditionExpression ?? ""}`;
     if (seen.has(dedupeKey)) {
       continue;
     }
@@ -58,7 +62,8 @@ export function normalizePipelineLinks(
       id: link.id && link.id.length > 0 ? link.id : nanoid(),
       sourceStepId: link.sourceStepId,
       targetStepId: link.targetStepId,
-      condition
+      condition,
+      ...(conditionExpression ? { conditionExpression } : {})
     });
   }
 

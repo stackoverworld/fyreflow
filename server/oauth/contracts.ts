@@ -29,6 +29,7 @@ export interface ClaudeStatusJson {
 
 export interface ProviderOAuthStatusOptions {
   includeRuntimeProbe?: boolean;
+  baseUrl?: string;
 }
 
 export interface CommandResult {

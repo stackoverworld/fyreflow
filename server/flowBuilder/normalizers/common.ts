@@ -1,5 +1,6 @@
 import type { AgentRole, LinkCondition } from "../../types.js";
 import { normalizeQualityGateKind } from "./qualityGates.js";
+import { normalizeStepSandboxMode } from "../../sandboxMode.js";
 
 export function normalizeRef(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -323,6 +324,10 @@ export function normalizeGeneratedFlow(raw: unknown): unknown {
                 .map((entry) => entry.trim())
                 .slice(0, 16)
             : undefined,
+          sandboxMode:
+            typeof step.sandboxMode === "string"
+              ? normalizeStepSandboxMode(step.sandboxMode)
+              : undefined,
           outputFormat: step.outputFormat === "json" ? "json" : step.outputFormat === "markdown" ? "markdown" : undefined,
           requiredOutputFields: normalizeStringArray(step.requiredOutputFields, 40),
           requiredOutputFiles: normalizeStringArray(step.requiredOutputFiles, 40),

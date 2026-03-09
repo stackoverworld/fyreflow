@@ -1,7 +1,9 @@
 import type { ProviderConfig } from "./types.js";
-import { getCachedCodexAccessToken, getProviderOAuthStatus } from "./oauth.js";
+import { getCachedCodexAccessToken, getProviderOAuthStatus, probeOpenAiApiCredential } from "./oauth.js";
+import type { ProviderOAuthStatus } from "./oauth.js";
 import { createAbortError, isAbortError } from "./abort.js";
-import { canClaudeUseFastMode } from "./providerCapabilities.js";
+import { modelRequiresApiCapability } from "./modelCatalog.js";
+import { canProviderUseFastMode } from "./providerCapabilities.js";
 import { ProviderApiError, executeClaudeWithApi, executeOpenAIWithApi, executeViaCli } from "./providers/clientFactory.js";
 import { buildClaudeTimeoutFallbackInput, shouldTryClaudeTimeoutFallback } from "./providers/retryPolicy.js";
 import type { ClaudeApiOptions, ProviderExecutionInput as ProviderExecutionInputShape } from "./providers/types.js";
@@ -16,6 +18,8 @@ const MAX_PROVIDER_API_BACKOFF_MS = 20_000;
 const MAX_RETRY_AFTER_MS = 60_000;
 const CLAUDE_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
 const CLAUDE_SETUP_TOKEN_MIN_LENGTH = 80;
+const CLAUDE_RUNTIME_CLI_AUTH_FAILURE_PATTERN =
+  /\b(not logged in|authentication[_\s-]?failed|auth[_\s-]?failed|invalid[_\s-]?auth|session expired|not authenticated|login required|please run\s+\/login|reauth(?:entication|enticate)?)\b/i;
 
 function isClaudeSetupToken(value: string): boolean {
   const normalized = value.trim();
@@ -43,6 +47,55 @@ function credentialFromProvider(provider: ProviderConfig): string | undefined {
   return isUsableStoredCredential(provider.apiKey) ? provider.apiKey.trim() : undefined;
 }
 
+function parseCredentialList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(/[,\n]/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function collectCredentialCandidates(provider: ProviderConfig): string[] {
+  const candidates: string[] = [];
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim();
+    if (!normalized || normalized.length === 0 || candidates.includes(normalized)) {
+      return;
+    }
+    candidates.push(normalized);
+  };
+
+  push(credentialFromProvider(provider));
+
+  if (provider.id === "openai" && provider.authMode === "oauth") {
+    push(getCachedCodexAccessToken());
+  }
+
+  const providerPrefix = provider.id === "openai" ? "OPENAI" : "CLAUDE";
+  if (provider.authMode === "api_key") {
+    for (const credential of parseCredentialList(process.env[`FYREFLOW_${providerPrefix}_API_KEYS`])) {
+      push(credential);
+    }
+  } else {
+    const oauthEnvKey = provider.id === "claude"
+      ? "FYREFLOW_CLAUDE_SETUP_TOKENS"
+      : `FYREFLOW_${providerPrefix}_OAUTH_TOKENS`;
+    for (const credential of parseCredentialList(process.env[oauthEnvKey])) {
+      push(credential);
+    }
+  }
+
+  return candidates;
+}
+
+function shouldTryNextCredential(error: unknown): boolean {
+  const statusCode = resolveApiStatusCode(error);
+  if (typeof statusCode === "number") {
+    return RETRYABLE_API_STATUS_CODES.has(statusCode) || statusCode === 401 || statusCode === 403;
+  }
+
+  return isRetryableNetworkError(error);
+}
+
 function hasEncryptedPlaceholderCredential(provider: ProviderConfig): boolean {
   if (provider.authMode === "oauth") {
     return isEncryptedSecret(provider.oauthToken.trim());
@@ -61,6 +114,33 @@ function hasInvalidClaudeOauthCredential(provider: ProviderConfig): boolean {
   }
 
   return !isClaudeSetupToken(token);
+}
+
+function normalizeOAuthStatusForExecution(
+  input: ProviderExecutionInput,
+  status: ProviderOAuthStatus | null
+): ProviderOAuthStatus | null {
+  if (!status) {
+    return null;
+  }
+
+  if (input.provider.id !== "claude" || input.provider.authMode !== "oauth") {
+    return status;
+  }
+
+  const probe = status.runtimeProbe;
+  if (!probe || probe.status !== "fail") {
+    return status;
+  }
+
+  const authFailureDetected = CLAUDE_RUNTIME_CLI_AUTH_FAILURE_PATTERN.test(probe.message);
+
+  return {
+    ...status,
+    loggedIn: authFailureDetected ? false : status.loggedIn,
+    canUseCli: false,
+    message: `Claude CLI runtime preflight failed. ${probe.message}`
+  };
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
@@ -225,10 +305,43 @@ async function executeClaudeApiWithCompatibilityFallback(
 }
 
 export async function executeProviderStep(input: ProviderExecutionInput): Promise<string> {
+  let credentialCandidates = collectCredentialCandidates(input.provider);
+  let credential = credentialCandidates[0];
+  const resolvedModelId = input.step.model || input.provider.defaultModel;
+  const openAiApiOnlyModelRequested =
+    input.provider.id === "openai" &&
+    modelRequiresApiCapability(input.provider.id, resolvedModelId);
+  let oauthStatus: ProviderOAuthStatus | null = null;
+
+  if (input.provider.authMode === "oauth") {
+    try {
+      oauthStatus = normalizeOAuthStatusForExecution(
+        input,
+        await getProviderOAuthStatus(input.provider.id, {
+          includeRuntimeProbe: input.provider.id === "claude" || openAiApiOnlyModelRequested,
+          baseUrl: input.provider.baseUrl
+        })
+      );
+      input.log?.(
+        `OAuth status: canUseApi=${oauthStatus.canUseApi}, canUseCli=${oauthStatus.canUseCli}, message=${oauthStatus.message}`
+      );
+      if (oauthStatus.runtimeProbe) {
+        input.log?.(
+          `OAuth runtime probe: status=${oauthStatus.runtimeProbe.status}, message=${oauthStatus.runtimeProbe.message}`
+        );
+      }
+    } catch {
+      oauthStatus = null;
+      input.log?.("OAuth status probe failed; proceeding with available credentials/fallbacks.");
+    }
+  }
+
   const fastModeUnavailable =
-    input.provider.id === "claude" &&
     input.step.fastMode &&
-    !canClaudeUseFastMode(input.provider);
+    !(
+      canProviderUseFastMode(input.provider, resolvedModelId, oauthStatus) ||
+      (input.provider.id === "openai" && typeof credential === "string" && credential.trim().length > 0)
+    );
   const effectiveInput: ProviderExecutionInput = fastModeUnavailable
     ? {
         ...input,
@@ -241,22 +354,14 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
 
   if (fastModeUnavailable) {
     input.log?.(
-      "Claude fast mode requested but unavailable without active API key auth; continuing in standard mode."
+      `${input.provider.id === "openai" ? "OpenAI" : "Claude"} fast mode requested but unavailable; continuing in standard mode.`
     );
   }
 
   effectiveInput.log?.(
-    `Provider dispatch started: provider=${effectiveInput.provider.id}, authMode=${effectiveInput.provider.authMode}, model=${effectiveInput.step.model || effectiveInput.provider.defaultModel}`
+    `Provider dispatch started: provider=${effectiveInput.provider.id}, authMode=${effectiveInput.provider.authMode}, model=${resolvedModelId}`
   );
-  let credential = credentialFromProvider(effectiveInput.provider);
   const hasExplicitApiKey = effectiveInput.provider.apiKey.trim().length > 0;
-  let oauthStatus:
-    | {
-        canUseApi: boolean;
-        canUseCli: boolean;
-        message: string;
-      }
-    | null = null;
 
   const executeCliWithGuidance = async (reason?: string): Promise<string> => {
     try {
@@ -282,10 +387,16 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
           : "CLI fallback failed.";
       let credentialHint: string;
       if (effectiveInput.provider.authMode === "oauth") {
+        const runtimeProbeFailure =
+          oauthStatus?.runtimeProbe?.status === "fail" ? oauthStatus.runtimeProbe.message : null;
         credentialHint =
           oauthStatus?.canUseCli || oauthStatus?.canUseApi
-            ? "Provider OAuth is ready via CLI (dashboard token may stay empty in CLI-managed mode)."
-            : "No provider OAuth token is stored in dashboard settings and provider CLI OAuth is not ready.";
+            ? runtimeProbeFailure
+              ? `Provider OAuth is configured, but runtime preflight failed (${runtimeProbeFailure}).`
+              : "Provider OAuth is ready via CLI (dashboard token may stay empty in CLI-managed mode)."
+            : runtimeProbeFailure
+              ? `Provider OAuth runtime preflight failed (${runtimeProbeFailure}).`
+              : "No provider OAuth token is stored in dashboard settings and provider CLI OAuth is not ready.";
       } else {
         credentialHint = "No provider API credentials are stored in dashboard settings.";
       }
@@ -294,20 +405,40 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
     }
   };
 
-  if (!credential && effectiveInput.provider.id === "openai") {
-    credential = getCachedCodexAccessToken();
+  if (openAiApiOnlyModelRequested && !credential) {
+    throw new Error(
+      `${resolvedModelId} requires an OpenAI API-capable credential. Codex CLI-only OpenAI sessions cannot run ${resolvedModelId}. Save an OpenAI API key or import a Codex access token, then retry or switch to gpt-5.4.`
+    );
   }
 
-  if (effectiveInput.provider.authMode === "oauth") {
-    try {
-      oauthStatus = await getProviderOAuthStatus(effectiveInput.provider.id);
+  if (
+    openAiApiOnlyModelRequested &&
+    effectiveInput.provider.id === "openai" &&
+    effectiveInput.provider.authMode === "oauth" &&
+    credential
+  ) {
+    const validatedCandidates: string[] = [];
+    let lastProbeMessage = "";
+    for (const candidate of credentialCandidates) {
+      const openAiApiProbe = await probeOpenAiApiCredential(effectiveInput.provider.baseUrl, candidate);
       effectiveInput.log?.(
-        `OAuth status: canUseApi=${oauthStatus.canUseApi}, canUseCli=${oauthStatus.canUseCli}, message=${oauthStatus.message}`
+        `OpenAI API credential probe: status=${openAiApiProbe.status}, message=${openAiApiProbe.message}`
       );
-    } catch {
-      oauthStatus = null;
-      effectiveInput.log?.("OAuth status probe failed; proceeding with available credentials/fallbacks.");
+      if (openAiApiProbe.status === "pass") {
+        validatedCandidates.push(candidate);
+        continue;
+      }
+      lastProbeMessage = openAiApiProbe.message;
     }
+
+    if (validatedCandidates.length === 0) {
+      throw new Error(
+        `${resolvedModelId} requires a valid OpenAI API-capable credential. ${lastProbeMessage} Refresh OpenAI OAuth, save a working API key, or switch to gpt-5.4.`
+      );
+    }
+
+    credentialCandidates = validatedCandidates;
+    credential = credentialCandidates[0];
   }
 
   const preferClaudeCliOAuthPath =
@@ -352,15 +483,34 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
     return await executeCliWithGuidance();
   }
 
-  try {
-    effectiveInput.log?.("Using provider API with available credential.");
-    if (effectiveInput.provider.id === "claude") {
-      return await executeApiWithRetry(effectiveInput, () =>
-        executeClaudeApiWithCompatibilityFallback(effectiveInput, credential)
+  let lastApiError: unknown = null;
+  for (const [index, candidate] of credentialCandidates.entries()) {
+    try {
+      effectiveInput.log?.(
+        index === 0
+          ? "Using provider API with available credential."
+          : `Rotating to provider auth profile ${index + 1}/${credentialCandidates.length}.`
       );
-    }
+      if (effectiveInput.provider.id === "claude") {
+        return await executeApiWithRetry(effectiveInput, () =>
+          executeClaudeApiWithCompatibilityFallback(effectiveInput, candidate)
+        );
+      }
 
-    return await executeApiWithRetry(effectiveInput, () => executeOpenAIWithApi(effectiveInput, credential));
+      return await executeApiWithRetry(effectiveInput, () => executeOpenAIWithApi(effectiveInput, candidate));
+    } catch (error) {
+      lastApiError = error;
+      if (index < credentialCandidates.length - 1 && shouldTryNextCredential(error)) {
+        const message = error instanceof Error ? error.message : "provider API request failed";
+        effectiveInput.log?.(`Provider API credential ${index + 1} failed; trying next credential. ${message}`);
+        continue;
+      }
+      break;
+    }
+  }
+
+  try {
+    throw lastApiError;
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -370,9 +520,12 @@ export async function executeProviderStep(input: ProviderExecutionInput): Promis
       throw error;
     }
 
+    if (openAiApiOnlyModelRequested) {
+      throw error;
+    }
+
     try {
-      effectiveInput.log?.("API path failed; retrying via CLI fallback.");
-      return await executeViaCli(effectiveInput);
+      return await executeCliWithGuidance("API path failed; retrying via CLI fallback.");
     } catch (cliError) {
       const apiMessage = error instanceof Error ? error.message : "Provider API request failed";
       const cliMessage = cliError instanceof Error ? cliError.message : "CLI execution failed";

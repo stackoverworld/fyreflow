@@ -35,7 +35,11 @@ export function buildLinks(spec: Pick<DraftSpec, "links">, stepRecords: DraftSte
     }
 
     const condition = link.condition ?? "always";
-    const dedupeKey = `${sourceId}->${targetId}:${condition}`;
+    const conditionExpression =
+      typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0
+        ? link.conditionExpression.trim()
+        : undefined;
+    const dedupeKey = `${sourceId}->${targetId}:${condition}:${conditionExpression ?? ""}`;
     if (seen.has(dedupeKey)) {
       continue;
     }
@@ -45,7 +49,8 @@ export function buildLinks(spec: Pick<DraftSpec, "links">, stepRecords: DraftSte
       id: nanoid(),
       sourceStepId: sourceId,
       targetStepId: targetId,
-      condition
+      condition,
+      ...(conditionExpression ? { conditionExpression } : {})
     });
   }
 

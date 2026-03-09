@@ -1,6 +1,6 @@
 import { useCallback, type MutableRefObject, type SetStateAction } from "react";
 import type { DashboardState, PipelinePayload, SmartRunPlan } from "@/lib/types";
-import type { AppStateSetState, PipelineSaveOptions, UseAppStateOptions } from "../../types";
+import type { AppStateSetState, PipelineSaveOptions, PipelineSaveResult, UseAppStateOptions } from "../../types";
 import {
   handleAddStepAction,
   handleCreatePipelineDraftAction,
@@ -47,7 +47,7 @@ export interface PipelineHandlersResult {
   selectPipeline: (pipelineId: string) => void;
   handleCreatePipelineDraft: () => void;
   handleDeletePipeline: (pipelineId: string) => Promise<void>;
-  handleSavePipeline: (args?: PipelineSaveOptions) => Promise<boolean>;
+  handleSavePipeline: (args?: PipelineSaveOptions) => Promise<PipelineSaveResult>;
   handleAddStep: () => void;
   handleSpawnOrchestrator: () => void;
 }

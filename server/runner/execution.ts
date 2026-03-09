@@ -1,9 +1,10 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { executeProviderStep } from "../providers.js";
 import { executeMcpToolCall, type McpToolResult } from "../mcp.js";
 import { createAbortError, mergeAbortSignals } from "../abort.js";
-import { replaceInputTokens } from "../runInputs.js";
+import { replaceInputTokens, replaceInputTokensInValue } from "../runInputs.js";
 import type { LocalStore } from "../storage.js";
 import { normalizeStepLabel } from "../stepLabel.js";
 import type {
@@ -22,6 +23,14 @@ import type { ArtifactStateCheck } from "./artifacts.js";
 import { checkArtifactsState } from "./artifacts.js";
 import { formatMcpToolResults, parseMcpCallsFromOutput } from "./mcpOutput.js";
 import {
+  BUILTIN_SHELL_SERVER_ID,
+  buildShellGuidance,
+  executeBuiltinShellCall,
+  isBuiltinShellServer,
+  shouldEnableBuiltinShell
+} from "./bashTool.js";
+import { executeDeterministicStep, resolveDeterministicStepKind } from "./deterministicStep.js";
+import {
   evaluatePipelineQualityGates,
   evaluateStepContracts,
   extractInputRequestSignal,
@@ -32,9 +41,10 @@ import {
 import { isGateResultContractStep } from "./qualityGates/contracts.js";
 import { listManualApprovalGates, waitForManualApprovals } from "./remediation.js";
 import { evaluateArtifactContractsForStepProfiles } from "./policyProfiles.js";
+import { buildRuntimeInputRequestOutputFromFailure } from "./inputRemediation.js";
 
 const DEFAULT_STAGE_TIMEOUT_MS = 420_000;
-const MAX_STAGE_TIMEOUT_MS = 18_000_000; // 5h hard ceiling
+const MAX_STAGE_TIMEOUT_MS = 1_200_000; // 20m hard ceiling
 const IMMUTABLE_SHARED_ARTIFACT_BASENAMES = new Set([
   "ui-kit.json",
   "dev-code.json",
@@ -97,7 +107,7 @@ async function collectScriptArtifactsFromRoot(
       continue;
     }
 
-    let entries: Awaited<ReturnType<typeof fs.readdir>>;
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
@@ -217,7 +227,7 @@ export function rewriteFrameBackgroundReferences(
 async function collectSiblingAssetRefs(htmlArtifactPath: string): Promise<Set<string>> {
   const refs = new Set<string>();
   const assetsDir = path.join(path.dirname(htmlArtifactPath), "assets");
-  let entries: Awaited<ReturnType<typeof fs.readdir>> = [];
+  let entries: Dirent[] = [];
   try {
     entries = await fs.readdir(assetsDir, { withFileTypes: true });
   } catch {
@@ -295,38 +305,19 @@ export function resolveEffectiveStageTimeoutMs(
   const isHighEffort = step.reasoningEffort === "high" || step.reasoningEffort === "xhigh";
   const isArtifactHeavyRole = step.role === "analysis" || step.role === "executor" || step.role === "planner";
   const isReviewLikeRole = step.role === "review" || step.role === "tester";
-  let effective = boundedBase;
+  const isOpus = provider.id === "claude" && model.includes("opus");
+  const recommendedCap =
+    isOpus || step.use1MContext || step.contextWindowTokens >= 500_000
+      ? 900_000
+      : isReviewLikeRole
+        ? 480_000
+        : isArtifactHeavyRole && isHighEffort
+          ? 600_000
+          : isArtifactHeavyRole || isHighEffort
+            ? 420_000
+            : 300_000;
 
-  if (provider.id === "claude") {
-    const isOpus = model.includes("opus");
-    const isVeryHeavyStep =
-      isOpus ||
-      step.use1MContext ||
-      step.contextWindowTokens >= 500_000 ||
-      isHighEffort ||
-      isReviewLikeRole;
-    const isHeavyStep = isArtifactHeavyRole || isReviewLikeRole || isOpus;
-
-    if (model.includes("opus")) {
-      effective = Math.max(effective, isHighEffort ? 3_600_000 : 2_400_000);
-    } else {
-      if (isArtifactHeavyRole && isHighEffort) {
-        effective = Math.max(effective, 1_800_000);
-      } else if (isHeavyStep) {
-        effective = Math.max(effective, 1_200_000);
-      } else {
-        effective = Math.max(effective, 420_000);
-      }
-    }
-
-    if (isVeryHeavyStep) {
-      effective = Math.max(effective, 2_400_000);
-    }
-  } else if (step.use1MContext) {
-    effective = Math.max(effective, 1_200_000);
-  }
-
-  return Math.min(effective, MAX_STAGE_TIMEOUT_MS);
+  return Math.max(10_000, Math.min(boundedBase, recommendedCap, MAX_STAGE_TIMEOUT_MS));
 }
 
 function shouldEnforceRequiredArtifactFreshness(step: PipelineStep): boolean {
@@ -559,11 +550,26 @@ export async function executeStep(
   task: string,
   stageTimeoutMs: number,
   mcpServersById: Map<string, McpServerConfig>,
+  storagePaths: StepStoragePaths,
   runInputs: RunInputs,
   log?: (message: string) => void,
   abortSignal?: AbortSignal
 ): Promise<string> {
   const stepLabel = normalizeStepLabel(step.name, step.id);
+  const deterministicKind = resolveDeterministicStepKind(step);
+  if (deterministicKind) {
+    return executeDeterministicStep({
+      step,
+      kind: deterministicKind,
+      task,
+      stageTimeoutMs,
+      storagePaths,
+      runInputs,
+      log,
+      abortSignal
+    });
+  }
+
   if (!provider) {
     return `Provider ${step.providerId} is not configured. Configure credentials in Provider Settings.`;
   }
@@ -574,8 +580,11 @@ export async function executeStep(
 
   const executableStep: PipelineStep = {
     ...step,
-    prompt: replaceInputTokens(step.prompt, runInputs)
+    prompt: replaceInputTokens(step.prompt, runInputs, { includeSecrets: false })
   };
+  const renderedTask = replaceInputTokens(task, runInputs, { includeSecrets: false });
+
+  const shellEnabled = shouldEnableBuiltinShell(step.sandboxMode);
 
   const allowedServerIds = new Set(
     Array.isArray(step.enabledMcpServerIds)
@@ -584,22 +593,28 @@ export async function executeStep(
           .map((entry) => entry.trim())
       : []
   );
+  if (shellEnabled) {
+    allowedServerIds.add(BUILTIN_SHELL_SERVER_ID);
+  }
 
   const availableServers = [...allowedServerIds]
+    .filter((id) => !isBuiltinShellServer(id))
     .map((id) => mcpServersById.get(id))
     .filter((server): server is McpServerConfig => Boolean(server));
 
+  const hasAnyTools = availableServers.length > 0 || shellEnabled;
   const mcpGuidance =
-    availableServers.length > 0
+    hasAnyTools
       ? [
           "MCP tools are available for this step.",
-          `Allowed MCP server ids: ${availableServers.map((server) => server.id).join(", ")}`,
+          `Allowed MCP server ids: ${[...availableServers.map((server) => server.id), ...(shellEnabled ? [BUILTIN_SHELL_SERVER_ID] : [])].join(", ")}`,
           "When native tool-calling is available, invoke tool mcp_call with {server_id, tool, arguments}.",
           "Fallback only (for non-tool runtimes): return STRICT JSON:",
           '{ "mcp_calls": [ { "server_id": "server-id", "tool": "tool_name", "arguments": { } } ] }',
           "If you can finish without MCP calls, return the final step output directly."
         ].join("\n")
       : "No MCP servers are enabled for this step.";
+  const shellGuidance = shellEnabled ? buildShellGuidance() : "";
 
   const inputRequestGuidance = [
     "If execution is blocked by missing user-provided values, do NOT guess.",
@@ -621,6 +636,9 @@ export async function executeStep(
     "}",
     'The "summary" field must always be written in English.',
     "Secret requests (type=secret) are persisted in secure per-pipeline storage for future runs.",
+    "When credential guidance mentions GitHub token scopes: classic PAT uses repo/public_repo scopes (no Contents: Read entry), while fine-grained PAT uses repository permissions like Contents: Read and Metadata: Read.",
+    "When credential guidance mentions GitLab token scopes: read_repository is for read/fetch, write_repository is required for publish/update.",
+    "Never invent provider permission names; if uncertain, request clarification (for example token type) instead of guessing scope labels.",
     "Use input_requests only when blocked and additional user data is required."
   ].join("\n");
   const gateResultContractGuidance =
@@ -645,12 +663,14 @@ export async function executeStep(
         ].join("\n")
       : "";
 
-  let workingContext = `${context}\n\n${mcpGuidance}\n\n${inputRequestGuidance}${
+  let workingContext = `${context}\n\n${mcpGuidance}${
+    shellGuidance.length > 0 ? `\n\n${shellGuidance}` : ""
+  }\n\n${inputRequestGuidance}${
     gateResultContractGuidance.length > 0 ? `\n\n${gateResultContractGuidance}` : ""
   }`;
   let lastOutput = "";
-  const maxToolRounds = 2;
-  const maxCallsPerRound = 4;
+  const maxToolRounds = shellEnabled ? 5 : 2;
+  const maxCallsPerRound = shellEnabled ? 8 : 4;
   const selectedModel = step.model || provider.defaultModel;
 
   log?.(
@@ -677,7 +697,7 @@ export async function executeStep(
         provider,
         step: executableStep,
         context: workingContext,
-        task,
+        task: renderedTask,
         mcpServerIds: [...allowedServerIds],
         stageTimeoutMs: effectiveStageTimeoutMs,
         outputMode,
@@ -725,9 +745,28 @@ export async function executeStep(
         continue;
       }
 
+      if (isBuiltinShellServer(call.serverId)) {
+        const shellArguments = replaceInputTokensInValue(call.arguments, runInputs);
+        const result = await executeBuiltinShellCall(
+          call.tool,
+          shellArguments,
+          effectiveStageTimeoutMs,
+          abortSignal
+        );
+        log?.(
+          `Shell call ${result.ok ? "finished" : "failed"} in ${Date.now() - mcpStartedAt}ms: tool=${call.tool}`
+        );
+        results.push(result);
+        continue;
+      }
+
+      const resolvedCall = {
+        ...call,
+        arguments: replaceInputTokensInValue(call.arguments, runInputs)
+      };
       const result = await executeMcpToolCall(
         mcpServersById.get(call.serverId),
-        call,
+        resolvedCall,
         effectiveStageTimeoutMs,
         abortSignal
       );
@@ -741,14 +780,15 @@ export async function executeStep(
       context,
       "",
       mcpGuidance,
+      ...(shellGuidance.length > 0 ? ["", shellGuidance] : []),
       "",
       inputRequestGuidance,
       ...(gateResultContractGuidance.length > 0 ? ["", gateResultContractGuidance] : []),
       "",
-      `MCP round ${round + 1} results:`,
+      `Tool round ${round + 1} results:`,
       formatMcpToolResults(results),
       "",
-      "Use these MCP results to continue. If more MCP calls are required, invoke mcp_call again (or return updated mcp_calls JSON on fallback runtimes).",
+      "Use these results to continue. If more tool calls are required, invoke mcp_call again (or return updated mcp_calls JSON on fallback runtimes).",
       "Otherwise return final output for this step."
     ].join("\n");
   }
@@ -786,6 +826,26 @@ export interface StepExecutionOutput {
   outgoingLinks: PipelineLink[];
   routedLinks: PipelineLink[];
   subagentNotes: string[];
+  routingPayload?: Record<string, unknown> | null;
+}
+
+function buildRecoverableFailureContext(
+  output: string,
+  qualityGateResults: StepQualityGateResult[]
+): string {
+  const failedSignals = qualityGateResults
+    .filter((result) => result.status === "fail")
+    .slice(0, 4)
+    .map((result) => {
+      const details = typeof result.details === "string" && result.details.trim().length > 0 ? ` (${result.details})` : "";
+      return `${result.gateName}: ${result.message}${details}`;
+    });
+
+  if (failedSignals.length === 0) {
+    return output;
+  }
+
+  return `${output}\n\n${failedSignals.join("\n")}`;
 }
 
 function buildDeliveryCompletionContractInvariantResults(
@@ -829,9 +889,10 @@ function buildDeliveryCompletionContractInvariantResults(
 export function selectRoutedLinksForOutcome(
   outgoingLinks: PipelineLink[],
   workflowOutcome: WorkflowOutcome,
-  hasBlockingGateFailure: boolean
+  hasBlockingGateFailure: boolean,
+  routingPayload?: Record<string, unknown> | null
 ): PipelineLink[] {
-  const matched = outgoingLinks.filter((link) => routeMatchesCondition(link.condition, workflowOutcome));
+  const matched = outgoingLinks.filter((link) => routeMatchesCondition(link, workflowOutcome, routingPayload));
   if (workflowOutcome !== "fail" || !hasBlockingGateFailure) {
     return matched;
   }
@@ -879,6 +940,7 @@ export async function evaluateStepExecution(input: StepExecutionInput): Promise<
     task,
     stageTimeoutMs,
     mcpServersById,
+    storagePaths,
     runInputs,
     log,
     abortSignal
@@ -946,18 +1008,33 @@ export async function evaluateStepExecution(input: StepExecutionInput): Promise<
     ...manualApprovalResults
   ];
   const hasBlockingGateFailure = qualityGateResults.some((result) => result.status === "fail" && result.blocking);
-  const inputSignal = extractInputRequestSignal(output, contractEvaluation.parsedJson);
+  let outputWithRuntimeRemediation = output;
+  let inputSignal = extractInputRequestSignal(outputWithRuntimeRemediation, contractEvaluation.parsedJson);
+  if (hasBlockingGateFailure && !inputSignal.needsInput) {
+    const remediationOutput = buildRuntimeInputRequestOutputFromFailure({
+      step,
+      errorMessage: buildRecoverableFailureContext(outputWithRuntimeRemediation, qualityGateResults),
+      runInputs
+    });
+    if (remediationOutput) {
+      outputWithRuntimeRemediation = `${outputWithRuntimeRemediation}\n\n\`\`\`json\n${remediationOutput}\n\`\`\``;
+      inputSignal = extractInputRequestSignal(outputWithRuntimeRemediation, contractEvaluation.parsedJson);
+      if (inputSignal.needsInput) {
+        log?.("Inferred recoverable runtime input issue from blocking failures; emitted needs_input payload.");
+      }
+    }
+  }
   const shouldStopForInput = inputSignal.needsInput;
   const workflowOutcome: WorkflowOutcome = hasBlockingGateFailure || shouldStopForInput ? "fail" : inferredOutcome;
   const routedLinks = shouldStopForInput
     ? []
-    : selectRoutedLinksForOutcome(outgoingLinks, workflowOutcome, hasBlockingGateFailure);
+    : selectRoutedLinksForOutcome(outgoingLinks, workflowOutcome, hasBlockingGateFailure, contractEvaluation.parsedJson);
   const subagentNotes = shouldStopForInput
     ? []
     : buildDelegationNotes(step, routedLinks, outgoingLinks.length, stepById);
 
   return {
-    output,
+    output: outputWithRuntimeRemediation,
     qualityGateResults,
     hasBlockingGateFailure,
     shouldStopForInput,
@@ -965,6 +1042,7 @@ export async function evaluateStepExecution(input: StepExecutionInput): Promise<
     workflowOutcome,
     outgoingLinks: shouldStopForInput ? [] : outgoingLinks,
     routedLinks,
-    subagentNotes
+    subagentNotes,
+    routingPayload: contractEvaluation.parsedJson
   };
 }

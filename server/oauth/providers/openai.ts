@@ -12,6 +12,8 @@ import { extractDeviceCode, extractFirstAuthUrl } from "../loginOutputParser.js"
 import { probeOpenAiRuntime } from "../runtimeProbe.js";
 import { nowIso } from "../time.js";
 
+const OPENAI_API_PROBE_TIMEOUT_MS = 8_000;
+
 export function getCachedCodexAccessToken(): string | undefined {
   try {
     if (!fs.existsSync(CODEX_AUTH_PATH)) {
@@ -34,6 +36,112 @@ export function getCachedCodexAccessToken(): string | undefined {
     return trimmed.length > 0 ? trimmed : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function buildOpenAiModelsProbeUrl(baseUrl: string): URL {
+  const normalizedBaseUrl = baseUrl.trim().endsWith("/") ? baseUrl.trim() : `${baseUrl.trim()}/`;
+  return new URL("models?limit=1", normalizedBaseUrl);
+}
+
+function summarizeOpenAiProbeError(statusCode: number, responseText: string): string {
+  const trimmed = responseText.trim();
+  if (trimmed.length === 0) {
+    return `OpenAI API probe failed with status ${statusCode}.`;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: {
+        message?: unknown;
+        code?: unknown;
+      };
+      message?: unknown;
+    };
+    const code =
+      typeof parsed.error?.code === "string" && parsed.error.code.trim().length > 0
+        ? parsed.error.code.trim()
+        : "";
+    const message =
+      typeof parsed.error?.message === "string" && parsed.error.message.trim().length > 0
+        ? parsed.error.message.trim()
+        : typeof parsed.message === "string" && parsed.message.trim().length > 0
+          ? parsed.message.trim()
+          : "";
+
+    if (statusCode === 401 && code === "token_expired") {
+      return "OpenAI API token expired. Refresh OpenAI OAuth or save a fresh API key.";
+    }
+
+    if (message.length > 0) {
+      return code.length > 0
+        ? `OpenAI API probe failed (${code}): ${message}`
+        : `OpenAI API probe failed: ${message}`;
+    }
+  } catch {
+    // Ignore parse errors and fall back to the raw payload summary below.
+  }
+
+  return `OpenAI API probe failed with status ${statusCode}: ${trimmed.replace(/\s+/g, " ").slice(0, 280)}`;
+}
+
+export async function probeOpenAiApiCredential(
+  baseUrl: string,
+  accessToken: string
+): Promise<ProviderOAuthStatus["runtimeProbe"]> {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(`OpenAI API probe timed out after ${OPENAI_API_PROBE_TIMEOUT_MS}ms`);
+  }, OPENAI_API_PROBE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(buildOpenAiModelsProbeUrl(baseUrl), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+    const latencyMs = Date.now() - startedAt;
+    const responseText = await response.text();
+
+    if (response.ok) {
+      return {
+        status: "pass",
+        message: "OpenAI API credential verified.",
+        checkedAt: nowIso(),
+        latencyMs
+      };
+    }
+
+    if (response.status === 429) {
+      return {
+        status: "pass",
+        message: "OpenAI API credential verified, but the probe hit rate limiting.",
+        checkedAt: nowIso(),
+        latencyMs
+      };
+    }
+
+    return {
+      status: "fail",
+      message: summarizeOpenAiProbeError(response.status, responseText),
+      checkedAt: nowIso(),
+      latencyMs
+    };
+  } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    const message = error instanceof Error ? error.message.trim() : "OpenAI API probe failed.";
+    return {
+      status: "fail",
+      message: message.length > 0 ? message : "OpenAI API probe failed.",
+      checkedAt: nowIso(),
+      latencyMs
+    };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -79,7 +187,8 @@ export async function getOpenAiOAuthStatus(
 ): Promise<ProviderOAuthStatus> {
   const cliAvailable = await isCommandAvailable(CODEX_CLI_COMMAND);
   const loggedIn = cliAvailable ? await getCodexLoggedInStatus() : false;
-  const tokenAvailable = Boolean(getCachedCodexAccessToken());
+  const cachedToken = getCachedCodexAccessToken();
+  const tokenAvailable = Boolean(cachedToken);
 
   const status: ProviderOAuthStatus = {
     providerId,
@@ -101,7 +210,18 @@ export async function getOpenAiOAuthStatus(
   };
 
   if (options.includeRuntimeProbe) {
-    status.runtimeProbe = probeOpenAiRuntime(status);
+    if (cachedToken) {
+      status.runtimeProbe = await probeOpenAiApiCredential(options.baseUrl ?? "https://api.openai.com/v1", cachedToken);
+      if (status.runtimeProbe.status === "fail") {
+        status.canUseApi = false;
+        status.tokenAvailable = false;
+        status.message = status.loggedIn
+          ? `Cached Codex access token failed OpenAI API validation. ${status.runtimeProbe.message}`
+          : status.runtimeProbe.message;
+      }
+    } else {
+      status.runtimeProbe = probeOpenAiRuntime(status);
+    }
   }
 
   return status;

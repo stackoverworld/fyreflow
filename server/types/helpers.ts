@@ -37,6 +37,7 @@ export interface McpServerInput {
   env?: string;
   headers?: string;
   toolAllowlist?: string;
+  hostAllowlist?: string;
   health?: McpHealth;
 }
 

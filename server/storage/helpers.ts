@@ -67,6 +67,7 @@ export function createMcpServerRecord(input: McpServerInput, now = nowIso()): Mc
     env: input.env ?? "",
     headers: input.headers ?? "",
     toolAllowlist: input.toolAllowlist ?? "",
+    hostAllowlist: input.hostAllowlist ?? "",
     health: input.health ?? "unknown",
     updatedAt: now
   };
@@ -93,6 +94,7 @@ export function applyMcpServerUpdate(
           : input.headers
         : current.headers,
     toolAllowlist: typeof input.toolAllowlist === "string" ? input.toolAllowlist : current.toolAllowlist,
+    hostAllowlist: typeof input.hostAllowlist === "string" ? input.hostAllowlist : current.hostAllowlist,
     health: input.health ?? current.health,
     updatedAt
   };
@@ -241,7 +243,7 @@ export function normalizeMcpServers(servers: DashboardState["mcpServers"]): Dash
   return servers
     .map((server) => {
       const transport: McpServerConfig["transport"] =
-        server.transport === "stdio" || server.transport === "sse" || server.transport === "http" ? server.transport : "http";
+        server.transport === "stdio" || server.transport === "http" ? server.transport : "http";
       const health: McpServerConfig["health"] =
         server.health === "healthy" || server.health === "degraded" || server.health === "down" || server.health === "unknown"
           ? server.health
@@ -258,6 +260,7 @@ export function normalizeMcpServers(servers: DashboardState["mcpServers"]): Dash
         env: typeof server.env === "string" ? server.env : "",
         headers: typeof server.headers === "string" ? server.headers : "",
         toolAllowlist: typeof server.toolAllowlist === "string" ? server.toolAllowlist : "",
+        hostAllowlist: typeof server.hostAllowlist === "string" ? server.hostAllowlist : "",
         health,
         updatedAt: typeof server.updatedAt === "string" && server.updatedAt.length > 0 ? server.updatedAt : now
       };

@@ -4,6 +4,7 @@ import { generateFlowDraft } from "../flowBuilder.js";
 import { createApp } from "../http/appFactory.js";
 import {
   getProviderOAuthStatus,
+  probeOpenAiApiCredential,
   startProviderOAuthLogin,
   submitProviderOAuthCode,
   syncProviderOAuthToken
@@ -161,6 +162,7 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): ServerR
       queuePipelineRun,
       isRunPreflightError,
       getProviderOAuthStatus,
+      probeOpenAiApiCredential,
       startProviderOAuthLogin,
       submitProviderOAuthCode,
       syncProviderOAuthToken,

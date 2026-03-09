@@ -15,7 +15,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       apiKey: "sk-test",
       oauthToken: "",
       baseUrl: providerId === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1",
-      defaultModel: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      defaultModel: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       updatedAt: new Date().toISOString()
     },
     step: {
@@ -24,7 +24,7 @@ function createInput(providerId: "openai" | "claude"): ProviderExecutionInput {
       role: "review",
       prompt: "Review output",
       providerId,
-      model: providerId === "openai" ? "gpt-5.3-codex" : "claude-sonnet-4-6",
+      model: providerId === "openai" ? "gpt-5.4" : "claude-sonnet-4-6",
       reasoningEffort: "medium",
       fastMode: false,
       use1MContext: false,
@@ -195,8 +195,9 @@ describe("API runner streaming mode", () => {
     expect(capturedHeaders[1]?.Authorization).toBeUndefined();
   });
 
-  it("includes context-1m beta for Claude OAuth setup-token bearer auth when requested", async () => {
+  it("skips Claude context-1m beta for OAuth setup-token bearer auth and logs the reason", async () => {
     const capturedHeaders: Array<Record<string, string>> = [];
+    const logs: string[] = [];
     global.fetch = vi.fn(async (_url, init) => {
       capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
       return new Response(
@@ -217,13 +218,14 @@ describe("API runner streaming mode", () => {
     input.provider.authMode = "oauth";
     input.step.use1MContext = true;
 
-    const output = await executeClaudeWithApi(input, VALID_SETUP_TOKEN);
+    const output = await executeClaudeWithApi({ ...input, log: (line) => logs.push(line) }, VALID_SETUP_TOKEN);
     expect(output).toBe("ok");
     expect(capturedHeaders).toHaveLength(1);
     expect(capturedHeaders[0]?.Authorization).toBe(`Bearer ${VALID_SETUP_TOKEN}`);
     expect(capturedHeaders[0]?.["x-api-key"]).toBeUndefined();
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
     expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
-    expect(capturedHeaders[0]?.["anthropic-beta"]).toContain("context-1m-2025-08-07");
+    expect(capturedHeaders[0]?.["anthropic-beta"]).not.toContain("context-1m-2025-08-07");
+    expect(logs.some((line) => line.includes("Claude 1M context skipped on OAuth/API path"))).toBe(true);
   });
 });

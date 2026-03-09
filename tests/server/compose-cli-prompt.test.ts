@@ -86,4 +86,19 @@ describe("composeCliPrompt", () => {
 
     expect(prompt).toContain("All human-readable summary fields must be in English.");
   });
+
+  it("injects repository publish contract for GitLab/GitHub publish steps", () => {
+    const input = createInput("executor");
+    input.step.name = "GitLab Publisher";
+    input.step.prompt = "Publish updated files to GitLab repository using API commits.";
+    input.task = "Commit generated files and publish them.";
+    input.context =
+      "Use GitLab endpoint /api/v4/projects/:id/repository/commits with actions[] for multi-file publish.";
+
+    const prompt = composeCliPrompt(input);
+
+    expect(prompt).toContain("Repository publish contract:");
+    expect(prompt).toContain("one atomic commit operation");
+    expect(prompt).toContain("Do not report success when any publish call fails");
+  });
 });

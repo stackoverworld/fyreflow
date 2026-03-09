@@ -3,19 +3,19 @@ import type { McpServerTemplate } from "@/lib/mcpTemplates";
 export interface McpDraft {
   name: string;
   enabled: boolean;
-  transport: "stdio" | "http" | "sse";
+  transport: "stdio" | "http";
   command: string;
   args: string;
   url: string;
   env: string;
   headers: string;
   toolAllowlist: string;
+  hostAllowlist: string;
   health: "unknown" | "healthy" | "degraded" | "down";
 }
 
 export const MCP_SERVER_TRANSPORT_OPTIONS = [
   { value: "http", label: "HTTP" },
-  { value: "sse", label: "SSE" },
   { value: "stdio", label: "Stdio" }
 ] as const;
 
@@ -37,6 +37,7 @@ export function createNewServerDraft(): McpDraft {
     env: "",
     headers: "",
     toolAllowlist: "",
+    hostAllowlist: "",
     health: "unknown"
   };
 }

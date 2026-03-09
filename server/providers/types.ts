@@ -26,4 +26,4 @@ export interface ProviderExecutionInput {
   onTextDelta?: (delta: string) => void;
 }
 
-export type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high";
+export type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";

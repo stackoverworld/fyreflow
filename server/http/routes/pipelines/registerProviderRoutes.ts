@@ -1,5 +1,7 @@
 import type { Express, Request, Response } from "express";
+import { getModelEntry } from "../../../modelCatalog.js";
 import type { ProviderOAuthStatus } from "../../../oauth.js";
+import { assertResolvedPublicAddress } from "../../../security/networkTargets.js";
 import { MASK_VALUE } from "../../../secureInputs.js";
 import { isEncryptedSecret } from "../../../secretsCrypto.js";
 import type { PipelineRouteContext } from "./contracts.js";
@@ -69,8 +71,78 @@ function withStoredClaudeSetupTokenStatus(
   };
 }
 
+async function withStoredOpenAiOAuthTokenStatus(
+  deps: PipelineRouteContext,
+  status: ProviderOAuthStatus,
+  options: {
+    includeRuntimeProbe: boolean;
+  }
+): Promise<ProviderOAuthStatus> {
+  const provider = deps.store.getProviders().openai;
+  if (provider.authMode !== "oauth") {
+    return status;
+  }
+
+  const storedToken = provider.oauthToken.trim();
+  const hasStoredToken = storedToken.length > 0;
+  const hasUndecryptableStoredToken = hasStoredToken && isEncryptedSecret(storedToken);
+  if (hasUndecryptableStoredToken) {
+    return {
+      ...status,
+      tokenAvailable: false,
+      canUseApi: false,
+      runtimeProbe: options.includeRuntimeProbe
+        ? {
+            status: "fail",
+            message:
+              "Stored OpenAI OAuth token cannot be decrypted. Keep DASHBOARD_SECRETS_KEY stable and reconnect OpenAI OAuth.",
+            checkedAt: new Date().toISOString()
+          }
+        : status.runtimeProbe,
+      message:
+        "Stored OpenAI OAuth token cannot be decrypted. Keep DASHBOARD_SECRETS_KEY stable and reconnect OpenAI OAuth."
+    };
+  }
+
+  if (!options.includeRuntimeProbe) {
+    if (!hasStoredToken) {
+      return status;
+    }
+
+    return {
+      ...status,
+      tokenAvailable: true,
+      canUseApi: false,
+      message: "OpenAI OAuth token is stored in dashboard. Open Provider Auth to validate it."
+    };
+  }
+
+  if (!hasStoredToken) {
+    return status;
+  }
+
+  const runtimeProbe = await deps.probeOpenAiApiCredential(provider.baseUrl, storedToken);
+  if (runtimeProbe.status === "fail") {
+    return {
+      ...status,
+      tokenAvailable: false,
+      canUseApi: false,
+      runtimeProbe,
+      message: `Stored OpenAI OAuth token failed runtime validation. ${runtimeProbe.message}`
+    };
+  }
+
+  return {
+    ...status,
+    tokenAvailable: true,
+    canUseApi: true,
+    runtimeProbe,
+    message: "Stored OpenAI OAuth token is valid and ready for API use."
+  };
+}
+
 export function registerProviderRoutes(app: Express, deps: PipelineRouteContext): void {
-  app.put("/api/providers/:providerId", (request: Request, response: Response) => {
+  app.put("/api/providers/:providerId", async (request: Request, response: Response) => {
     try {
       const providerId = providerIdSchema.parse(firstParam(request.params.providerId));
       const input = providerUpdateSchema.parse(request.body);
@@ -92,6 +164,21 @@ export function registerProviderRoutes(app: Express, deps: PipelineRouteContext)
         return;
       }
 
+      const nextBaseUrl = typeof input.baseUrl === "string" && input.baseUrl.trim().length > 0
+        ? input.baseUrl.trim()
+        : currentProvider.baseUrl;
+      await assertResolvedPublicAddress(nextBaseUrl, "Provider baseUrl");
+
+      const nextDefaultModel = typeof input.defaultModel === "string" && input.defaultModel.trim().length > 0
+        ? input.defaultModel.trim()
+        : currentProvider.defaultModel;
+      if (!getModelEntry(providerId, nextDefaultModel)) {
+        response.status(400).json({
+          error: `Unknown default model "${nextDefaultModel}" for provider "${providerId}".`
+        });
+        return;
+      }
+
       const provider = deps.store.upsertProvider(providerId, input);
       response.json({ provider: sanitizeProviderConfig(provider) });
     } catch (error) {
@@ -104,11 +191,11 @@ export function registerProviderRoutes(app: Express, deps: PipelineRouteContext)
       const providerId = providerIdSchema.parse(firstParam(request.params.providerId));
       const deepRaw = request.query.deep;
       const deep = (Array.isArray(deepRaw) ? deepRaw[0] : deepRaw) === "1";
-      const status = withStoredClaudeSetupTokenStatus(
-        deps,
-        providerId,
-        await deps.getProviderOAuthStatus(providerId, { includeRuntimeProbe: deep })
-      );
+      const baseUrl = deps.store.getProviders()[providerId].baseUrl;
+      const baseStatus = await deps.getProviderOAuthStatus(providerId, { includeRuntimeProbe: deep, baseUrl });
+      const status = providerId === "openai"
+        ? await withStoredOpenAiOAuthTokenStatus(deps, baseStatus, { includeRuntimeProbe: deep })
+        : withStoredClaudeSetupTokenStatus(deps, providerId, baseStatus);
       response.json({ status });
     } catch (error) {
       sendZodError(error, response);

@@ -10,6 +10,8 @@ tmp
 output
 data
 .DS_Store
+__MACOSX
+*.tsbuildinfo
 .env.selfhost
 npm-debug.log*
 yarn-debug.log*

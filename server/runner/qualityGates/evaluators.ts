@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   PipelineLink,
   PipelineQualityGate,
@@ -17,6 +18,14 @@ import {
   parseJsonOutput,
   resolvePathValue
 } from "./normalizers.js";
+
+const SITE_UPDATED_ARTIFACT_PATTERN = /(?:^|\/)site-updated\.json$/i;
+const SITE_CURRENT_ARTIFACT_TEMPLATE = "{{shared_storage_path}}/site-current.json";
+const LOCAL_IMPORT_SPEC_PATTERN = /^(?:@\/|\.{1,2}\/)/;
+const CODE_FILE_PATTERN = /\.[cm]?[jt]sx?$/i;
+const IMPORT_SPEC_PATTERN = /\b(?:import|export)\s+(?:type\s+)?(?:[^"'`]*?\sfrom\s*)?["'`]([^"'`]+)["'`]/g;
+const DYNAMIC_IMPORT_SPEC_PATTERN = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+const IMPORT_RESOLUTION_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".sass"];
 
 function extractFrameCount(value: unknown): number | null {
   if (Array.isArray(value) && value.length > 0) {
@@ -744,6 +753,260 @@ async function evaluateBackgroundAssetContract(
   };
 }
 
+function normalizeArtifactPath(value: string): string {
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (normalized.length === 0) {
+    return "";
+  }
+  return path.posix.normalize(normalized).replace(/^\.\/+/, "");
+}
+
+function collectImportSpecifiers(content: string): string[] {
+  const specs = new Set<string>();
+  for (const matcher of [IMPORT_SPEC_PATTERN, DYNAMIC_IMPORT_SPEC_PATTERN]) {
+    matcher.lastIndex = 0;
+    let match: RegExpExecArray | null = null;
+    while ((match = matcher.exec(content)) !== null) {
+      const spec = match[1]?.trim() ?? "";
+      if (spec.length > 0) {
+        specs.add(spec);
+      }
+    }
+  }
+  return [...specs];
+}
+
+function resolveLocalImportBasePath(filePath: string, specifier: string): string | null {
+  if (!LOCAL_IMPORT_SPEC_PATTERN.test(specifier)) {
+    return null;
+  }
+
+  if (specifier.startsWith("@/")) {
+    return normalizeArtifactPath(`src/${specifier.slice(2)}`);
+  }
+
+  const sourceDir = path.posix.dirname(filePath);
+  return normalizeArtifactPath(path.posix.join(sourceDir, specifier));
+}
+
+function buildImportCandidates(basePath: string): string[] {
+  const normalizedBase = normalizeArtifactPath(basePath).replace(/\/+$/, "");
+  if (normalizedBase.length === 0) {
+    return [];
+  }
+
+  const candidates = new Set<string>([normalizedBase]);
+  const ext = path.posix.extname(normalizedBase);
+
+  if (ext.length === 0) {
+    for (const extension of IMPORT_RESOLUTION_EXTENSIONS) {
+      candidates.add(`${normalizedBase}${extension}`);
+      candidates.add(`${normalizedBase}/index${extension}`);
+    }
+  }
+
+  return [...candidates];
+}
+
+interface ParsedSiteArtifact {
+  allPaths: Set<string>;
+  contentByPath: Map<string, string>;
+  error?: string;
+}
+
+function parseSiteArtifact(raw: string): ParsedSiteArtifact {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return {
+      allPaths: new Set<string>(),
+      contentByPath: new Map<string, string>(),
+      error: error instanceof Error ? error.message : "invalid JSON"
+    };
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      allPaths: new Set<string>(),
+      contentByPath: new Map<string, string>(),
+      error: "artifact root must be an object"
+    };
+  }
+
+  const root = parsed as Record<string, unknown>;
+  const allPaths = new Set<string>();
+  const contentByPath = new Map<string, string>();
+
+  const repositoryTree = root.repositoryTree;
+  if (Array.isArray(repositoryTree)) {
+    for (const entry of repositoryTree) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const normalizedPath = normalizeArtifactPath(entry);
+      if (normalizedPath.length > 0) {
+        allPaths.add(normalizedPath);
+      }
+    }
+  }
+
+  const files = root.files;
+  if (Array.isArray(files)) {
+    for (const entry of files) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      const rawPath = typeof record.path === "string" ? record.path : "";
+      const normalizedPath = normalizeArtifactPath(rawPath);
+      if (normalizedPath.length === 0) {
+        continue;
+      }
+      allPaths.add(normalizedPath);
+      if (typeof record.content === "string") {
+        contentByPath.set(normalizedPath, record.content);
+      }
+    }
+  } else if (typeof files === "object" && files !== null) {
+    for (const [filePath, value] of Object.entries(files as Record<string, unknown>)) {
+      const normalizedPath = normalizeArtifactPath(filePath);
+      if (normalizedPath.length === 0) {
+        continue;
+      }
+      allPaths.add(normalizedPath);
+      if (typeof value === "string") {
+        contentByPath.set(normalizedPath, value);
+        continue;
+      }
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        const content = (value as Record<string, unknown>).content;
+        if (typeof content === "string") {
+          contentByPath.set(normalizedPath, content);
+        }
+      }
+    }
+  }
+
+  return { allPaths, contentByPath };
+}
+
+function shouldEvaluateSiteImportIntegrity(step: PipelineStep): boolean {
+  return step.requiredOutputFiles.some((template) => SITE_UPDATED_ARTIFACT_PATTERN.test(template.trim()));
+}
+
+async function evaluateSiteImportIntegrityContract(
+  step: PipelineStep,
+  storagePaths: StepStoragePaths,
+  runInputs: RunInputs
+): Promise<StepQualityGateResult | null> {
+  if (!shouldEvaluateSiteImportIntegrity(step)) {
+    return null;
+  }
+
+  const siteUpdatedTemplate = step.requiredOutputFiles.find((template) => SITE_UPDATED_ARTIFACT_PATTERN.test(template.trim()));
+  if (!siteUpdatedTemplate) {
+    return null;
+  }
+
+  const siteUpdatedArtifact = await checkArtifactExists(siteUpdatedTemplate, storagePaths, runInputs);
+  if (!siteUpdatedArtifact.exists || !siteUpdatedArtifact.foundPath) {
+    return null;
+  }
+
+  let updatedRaw = "";
+  try {
+    updatedRaw = await fs.readFile(siteUpdatedArtifact.foundPath, "utf8");
+  } catch (error) {
+    return {
+      gateId: `contract-site-import-integrity-${step.id}`,
+      gateName: "Site bundle import integrity",
+      kind: "step_contract",
+      status: "fail",
+      blocking: true,
+      message: "Failed to read site-updated artifact for import integrity validation.",
+      details: error instanceof Error ? error.message : "unknown read error"
+    };
+  }
+
+  const updatedArtifact = parseSiteArtifact(updatedRaw);
+  if (updatedArtifact.error) {
+    return {
+      gateId: `contract-site-import-integrity-${step.id}`,
+      gateName: "Site bundle import integrity",
+      kind: "step_contract",
+      status: "fail",
+      blocking: true,
+      message: "site-updated.json is invalid and cannot be validated for import integrity.",
+      details: updatedArtifact.error
+    };
+  }
+
+  const availablePaths = new Set<string>(updatedArtifact.allPaths);
+  const siteCurrentArtifact = await checkArtifactExists(SITE_CURRENT_ARTIFACT_TEMPLATE, storagePaths, runInputs);
+  if (siteCurrentArtifact.exists && siteCurrentArtifact.foundPath) {
+    try {
+      const currentRaw = await fs.readFile(siteCurrentArtifact.foundPath, "utf8");
+      const currentArtifact = parseSiteArtifact(currentRaw);
+      for (const entry of currentArtifact.allPaths) {
+        availablePaths.add(entry);
+      }
+    } catch {
+      // Optional baseline artifact; keep validation based on site-updated paths if unreadable.
+    }
+  }
+
+  const unresolvedImports: string[] = [];
+  let scannedFiles = 0;
+  let scannedImports = 0;
+
+  for (const [filePath, content] of updatedArtifact.contentByPath.entries()) {
+    if (!CODE_FILE_PATTERN.test(filePath)) {
+      continue;
+    }
+    scannedFiles += 1;
+    const imports = collectImportSpecifiers(content);
+    for (const specifier of imports) {
+      const basePath = resolveLocalImportBasePath(filePath, specifier);
+      if (!basePath) {
+        continue;
+      }
+      scannedImports += 1;
+      const candidates = buildImportCandidates(basePath);
+      const resolved = candidates.some((candidate) => availablePaths.has(candidate));
+      if (!resolved) {
+        unresolvedImports.push(`${filePath} -> ${specifier} (expected: ${basePath})`);
+      }
+    }
+  }
+
+  if (scannedFiles === 0 || scannedImports === 0) {
+    return null;
+  }
+
+  if (unresolvedImports.length > 0) {
+    return {
+      gateId: `contract-site-import-integrity-${step.id}`,
+      gateName: "Site bundle import integrity",
+      kind: "step_contract",
+      status: "fail",
+      blocking: true,
+      message: "site-updated bundle contains unresolved local imports.",
+      details: unresolvedImports.slice(0, 8).join(" | ")
+    };
+  }
+
+  return {
+    gateId: `contract-site-import-integrity-${step.id}`,
+    gateName: "Site bundle import integrity",
+    kind: "step_contract",
+    status: "pass",
+    blocking: true,
+    message: "Local imports in generated site files resolve against site-updated/site-current inventories.",
+    details: `checked_files=${scannedFiles}, checked_imports=${scannedImports}`
+  };
+}
+
 function normalizeRegexFlags(rawFlags: string): string {
   const allowed = new Set(["g", "i", "m", "s", "u", "y"]);
   const deduped: string[] = [];
@@ -882,6 +1145,10 @@ export async function evaluateStepContracts(
   const overlayRiskContract = await evaluateOverlayRiskContract(step, storagePaths, runInputs);
   if (overlayRiskContract) {
     gateResults.push(overlayRiskContract);
+  }
+  const siteImportIntegrityContract = await evaluateSiteImportIntegrityContract(step, storagePaths, runInputs);
+  if (siteImportIntegrityContract) {
+    gateResults.push(siteImportIntegrityContract);
   }
 
   return { parsedJson, gateResults };
@@ -1132,13 +1399,83 @@ export async function evaluatePipelineQualityGates(
   return results;
 }
 
-export function routeMatchesCondition(condition: PipelineLink["condition"], outcome: WorkflowOutcome): boolean {
-  if (condition === "on_pass") {
-    return outcome === "pass";
+function parseRouteConditionLiteral(rawValue: string): unknown {
+  const trimmed = rawValue.trim();
+  if (trimmed.length === 0) {
+    return "";
   }
 
-  if (condition === "on_fail") {
-    return outcome === "fail";
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && /^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return numeric;
+  }
+
+  return trimmed;
+}
+
+function evaluateRouteConditionExpression(expression: string, payload?: Record<string, unknown> | null): boolean {
+  const trimmed = expression.trim();
+  if (trimmed.length === 0) {
+    return true;
+  }
+
+  if (!payload) {
+    return false;
+  }
+
+  const match = trimmed.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (!match) {
+    const resolved = resolvePathValue(payload, trimmed);
+    return resolved.found && Boolean(resolved.value);
+  }
+
+  const [, rawPath, operator, rawExpected] = match;
+  const resolved = resolvePathValue(payload, rawPath);
+  if (!resolved.found) {
+    return false;
+  }
+
+  const expected = parseRouteConditionLiteral(rawExpected);
+  const actual = resolved.value;
+
+  switch (operator) {
+    case "==":
+      return actual === expected;
+    case "!=":
+      return actual !== expected;
+    case ">":
+      return typeof actual === "number" && typeof expected === "number" && actual > expected;
+    case ">=":
+      return typeof actual === "number" && typeof expected === "number" && actual >= expected;
+    case "<":
+      return typeof actual === "number" && typeof expected === "number" && actual < expected;
+    case "<=":
+      return typeof actual === "number" && typeof expected === "number" && actual <= expected;
+    default:
+      return false;
+  }
+}
+
+export function routeMatchesCondition(
+  link: PipelineLink,
+  outcome: WorkflowOutcome,
+  payload?: Record<string, unknown> | null
+): boolean {
+  const baseMatch =
+    link.condition === "on_pass" ? outcome === "pass" : link.condition === "on_fail" ? outcome === "fail" : true;
+  if (!baseMatch) {
+    return false;
+  }
+
+  if (typeof link.conditionExpression === "string" && link.conditionExpression.trim().length > 0) {
+    return evaluateRouteConditionExpression(link.conditionExpression, payload);
   }
 
   return true;

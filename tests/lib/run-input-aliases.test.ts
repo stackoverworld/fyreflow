@@ -27,4 +27,16 @@ describe("runInputAliases", () => {
       )
     ).toBe("[secure]");
   });
+
+  it("treats repo and repository keys as equivalent aliases", () => {
+    expect(areRunInputKeysEquivalent("github_repo", "github_repository")).toBe(true);
+    expect(
+      getRunInputValue(
+        {
+          github_repository: "Lunarbase-Lab/Prop-AMM-RnD"
+        },
+        "github_repo"
+      )
+    ).toBe("Lunarbase-Lab/Prop-AMM-RnD");
+  });
 });

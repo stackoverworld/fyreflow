@@ -39,6 +39,8 @@ interface CandidateDispatchEdge {
 const POTENTIAL_ROUTE_OBSTACLE_PADDING = 16;
 const POTENTIAL_ROUTE_EDGE_VARIANTS = [0, 1, 2, 3, 4, 5] as const;
 const POTENTIAL_ROUTE_CORNER_RADIUS = Math.max(12, CORNER_RADIUS - 8);
+const POTENTIAL_ROUTE_OVERLAP_PENALTY_PER_PIXEL = 90;
+const POTENTIAL_ROUTE_CROSSING_PENALTY = 1_600;
 
 function candidateKey(orchestratorNodeId: string, targetNodeId: string): string {
   return `${orchestratorNodeId}:${targetNodeId}`;
@@ -78,15 +80,104 @@ function sideOrder(side: AnchorSide): number {
   return 3;
 }
 
-function potentialRouteScore(route: Point[], sourceNode: FlowNode, targetNode: FlowNode, allNodes: FlowNode[]): number {
+function rangeOverlapLength(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  const left = Math.max(Math.min(aStart, aEnd), Math.min(bStart, bEnd));
+  const right = Math.min(Math.max(aStart, aEnd), Math.max(bStart, bEnd));
+  return Math.max(0, right - left);
+}
+
+function segmentSharedLength(aStart: Point, aEnd: Point, bStart: Point, bEnd: Point): number {
+  const aVertical = aStart.x === aEnd.x;
+  const bVertical = bStart.x === bEnd.x;
+  if (aVertical && bVertical) {
+    if (aStart.x !== bStart.x) {
+      return 0;
+    }
+    return rangeOverlapLength(aStart.y, aEnd.y, bStart.y, bEnd.y);
+  }
+
+  const aHorizontal = aStart.y === aEnd.y;
+  const bHorizontal = bStart.y === bEnd.y;
+  if (aHorizontal && bHorizontal) {
+    if (aStart.y !== bStart.y) {
+      return 0;
+    }
+    return rangeOverlapLength(aStart.x, aEnd.x, bStart.x, bEnd.x);
+  }
+
+  return 0;
+}
+
+function segmentCrosses(aStart: Point, aEnd: Point, bStart: Point, bEnd: Point): boolean {
+  const aVertical = aStart.x === aEnd.x;
+  const bVertical = bStart.x === bEnd.x;
+  const aHorizontal = aStart.y === aEnd.y;
+  const bHorizontal = bStart.y === bEnd.y;
+
+  if ((aVertical && bVertical) || (aHorizontal && bHorizontal)) {
+    return false;
+  }
+
+  const horizontalStart = aHorizontal ? aStart : bStart;
+  const horizontalEnd = aHorizontal ? aEnd : bEnd;
+  const verticalStart = aVertical ? aStart : bStart;
+  const verticalEnd = aVertical ? aEnd : bEnd;
+
+  if (horizontalStart.y !== horizontalEnd.y || verticalStart.x !== verticalEnd.x) {
+    return false;
+  }
+
+  const horizontalMinX = Math.min(horizontalStart.x, horizontalEnd.x);
+  const horizontalMaxX = Math.max(horizontalStart.x, horizontalEnd.x);
+  const verticalMinY = Math.min(verticalStart.y, verticalEnd.y);
+  const verticalMaxY = Math.max(verticalStart.y, verticalEnd.y);
+
+  return (
+    verticalStart.x >= horizontalMinX &&
+    verticalStart.x <= horizontalMaxX &&
+    horizontalStart.y >= verticalMinY &&
+    horizontalStart.y <= verticalMaxY
+  );
+}
+
+function routeOverlapAndCrossingPenalty(route: Point[], existingRoutes: Point[][]): number {
+  let overlapLength = 0;
+  let crossings = 0;
+
+  for (const existingRoute of existingRoutes) {
+    for (let leftIndex = 1; leftIndex < route.length; leftIndex += 1) {
+      const leftStart = route[leftIndex - 1];
+      const leftEnd = route[leftIndex];
+      for (let rightIndex = 1; rightIndex < existingRoute.length; rightIndex += 1) {
+        const rightStart = existingRoute[rightIndex - 1];
+        const rightEnd = existingRoute[rightIndex];
+        overlapLength += segmentSharedLength(leftStart, leftEnd, rightStart, rightEnd);
+        if (segmentCrosses(leftStart, leftEnd, rightStart, rightEnd)) {
+          crossings += 1;
+        }
+      }
+    }
+  }
+
+  return overlapLength * POTENTIAL_ROUTE_OVERLAP_PENALTY_PER_PIXEL + crossings * POTENTIAL_ROUTE_CROSSING_PENALTY;
+}
+
+function potentialRouteScore(
+  route: Point[],
+  sourceNode: FlowNode,
+  targetNode: FlowNode,
+  allNodes: FlowNode[],
+  existingRoutes: Point[][]
+): number {
   const obstacles = allNodes
     .filter((node) => node.id !== sourceNode.id && node.id !== targetNode.id)
     .map((node) => expandRect(nodeRect(node), POTENTIAL_ROUTE_OBSTACLE_PADDING));
   const intersections = routeIntersections(route, obstacles);
   const bends = Math.max(0, route.length - 2);
+  const congestionPenalty = routeOverlapAndCrossingPenalty(route, existingRoutes);
 
   // Strongly prefer obstacle-free routes, then fewer bends, then shorter distance.
-  return intersections * 100_000 + bends * 170 + routeLength(route);
+  return intersections * 100_000 + bends * 170 + routeLength(route) + congestionPenalty;
 }
 
 export function buildPotentialOrchestratorDispatchRoutes(
@@ -176,6 +267,7 @@ export function buildPotentialOrchestratorDispatchRoutes(
 
   const sortedCandidates = [...candidates].sort(candidateSortOrder);
   const routes: PotentialDispatchRoute[] = [];
+  const selectedRoutes: Point[][] = [];
 
   sortedCandidates.forEach((candidate, index) => {
     const laneMeta = laneMetaByCandidateKey.get(
@@ -200,7 +292,13 @@ export function buildPotentialOrchestratorDispatchRoutes(
         null
       );
       const normalizedRoute = normalizeRoute(variant.route);
-      const score = potentialRouteScore(normalizedRoute, candidate.orchestratorNode, candidate.targetNode, nodes);
+      const score = potentialRouteScore(
+        normalizedRoute,
+        candidate.orchestratorNode,
+        candidate.targetNode,
+        nodes,
+        selectedRoutes
+      );
       if (score < bestScore) {
         bestScore = score;
         bestRoute = normalizedRoute;
@@ -223,6 +321,7 @@ export function buildPotentialOrchestratorDispatchRoutes(
       path,
       route: bestRoute
     });
+    selectedRoutes.push(bestRoute);
   });
 
   return routes;

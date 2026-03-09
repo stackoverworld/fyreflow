@@ -391,6 +391,150 @@ describe("flow builder draft mapping", () => {
     });
   });
 
+  describe("semantic routing preservation", () => {
+    it("preserves semantic link expressions from the current draft when links are omitted in an AI update", () => {
+      const currentDraft: PipelineInput = {
+        name: "Current",
+        description: "Current draft",
+        runtime: { maxLoops: 2, maxStepExecutions: 18, stageTimeoutMs: 420000 },
+        schedule: {
+          enabled: false,
+          cron: "",
+          timezone: "UTC",
+          task: "",
+          runMode: "smart",
+          inputs: {}
+        },
+        steps: [
+          {
+            id: "step-fetch",
+            name: "Fetch Research",
+            role: "executor",
+            prompt: "fetch",
+            providerId: "claude",
+            model: "claude-sonnet-4-6",
+            reasoningEffort: "medium",
+            fastMode: false,
+            use1MContext: false,
+            contextWindowTokens: 128000,
+            position: { x: 0, y: 0 },
+            contextTemplate: "Task:\n{{task}}",
+            enableDelegation: false,
+            delegationCount: 1,
+            enableIsolatedStorage: false,
+            enableSharedStorage: true,
+            enabledMcpServerIds: [],
+            outputFormat: "json",
+            requiredOutputFields: ["status"],
+            requiredOutputFiles: [],
+            scenarios: [],
+            skipIfArtifacts: [],
+            policyProfileIds: ["deterministic_fetch"],
+            cacheBypassInputKeys: [],
+            cacheBypassOrchestratorPromptPatterns: []
+          },
+          {
+            id: "step-rewrite",
+            name: "Rewrite Content",
+            role: "executor",
+            prompt: "rewrite",
+            providerId: "claude",
+            model: "claude-sonnet-4-6",
+            reasoningEffort: "medium",
+            fastMode: false,
+            use1MContext: false,
+            contextWindowTokens: 128000,
+            position: { x: 300, y: 0 },
+            contextTemplate: "Task:\n{{task}}",
+            enableDelegation: false,
+            delegationCount: 1,
+            enableIsolatedStorage: false,
+            enableSharedStorage: true,
+            enabledMcpServerIds: [],
+            outputFormat: "markdown",
+            requiredOutputFields: [],
+            requiredOutputFiles: [],
+            scenarios: [],
+            skipIfArtifacts: [],
+            policyProfileIds: [],
+            cacheBypassInputKeys: [],
+            cacheBypassOrchestratorPromptPatterns: []
+          }
+        ],
+        links: [
+          {
+            id: "semantic-link",
+            sourceStepId: "step-fetch",
+            targetStepId: "step-rewrite",
+            condition: "always",
+            conditionExpression: "$.has_changes == true"
+          }
+        ],
+        qualityGates: []
+      };
+
+      const spec: GeneratedFlowSpec = {
+        name: "Updated",
+        description: "Updated",
+        steps: [
+          { name: "Fetch Research", role: "executor", prompt: "fetch latest research" },
+          { name: "Rewrite Content", role: "executor", prompt: "rewrite content" }
+        ],
+        qualityGates: []
+      };
+
+      const draft = buildFlowDraftFromExisting(spec, createRequest("Update the current flow."), currentDraft);
+      const semanticLink = draft.links.find(
+        (link) =>
+          link.sourceStepId === "step-fetch" &&
+          link.targetStepId === "step-rewrite" &&
+          link.conditionExpression === "$.has_changes == true"
+      );
+
+      expect(semanticLink).toBeDefined();
+    });
+  });
+
+  describe("sandbox mode inference", () => {
+    it("keeps publish/network steps in secure mode unless full access is explicit", () => {
+      const spec: GeneratedFlowSpec = {
+        name: "Publish pipeline",
+        description: "desc",
+        steps: [
+          {
+            name: "GitLab Publisher",
+            role: "executor",
+            prompt: "Publish artifacts with curl https://gitlab.com/api/v4/projects/{{input.gitlab_project_id}}"
+          }
+        ],
+        links: [],
+        qualityGates: []
+      };
+
+      const draft = buildFlowDraft(spec, createRequest("publish site updates"));
+      expect(draft.steps[0]?.sandboxMode).toBe("secure");
+    });
+
+    it("defaults local-only executor steps to secure mode", () => {
+      const spec: GeneratedFlowSpec = {
+        name: "Local pipeline",
+        description: "desc",
+        steps: [
+          {
+            name: "Markdown Formatter",
+            role: "executor",
+            prompt: "Normalize markdown sections and write {{shared_storage_path}}/source.md"
+          }
+        ],
+        links: [],
+        qualityGates: []
+      };
+
+      const draft = buildFlowDraft(spec, createRequest("format local markdown"));
+      expect(draft.steps[0]?.sandboxMode).toBe("secure");
+    });
+  });
+
   describe("edge cases", () => {
     it("handles spec with zero steps gracefully", () => {
       const spec: GeneratedFlowSpec = {

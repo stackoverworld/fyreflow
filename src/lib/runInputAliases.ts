@@ -8,6 +8,8 @@ const TOKEN_CANONICAL_EQUIVALENTS: Record<string, string> = {
   uris: "links",
   endpoint: "link",
   endpoints: "links",
+  repository: "repo",
+  repositories: "repos",
   directory: "dir",
   directories: "dirs",
   folder: "dir",

@@ -6,6 +6,7 @@ export interface Segment<T extends string = string> {
   value: T;
   label: string;
   icon?: ReactNode;
+  disabled?: boolean;
 }
 
 interface SegmentedControlProps<T extends string = string> {
@@ -71,9 +72,9 @@ export function SegmentedControl<T extends string = string>({
             key={segment.value}
             type="button"
             data-segment
-            disabled={disabled}
+            disabled={disabled || segment.disabled}
             onClick={() => {
-              if (!disabled) {
+              if (!disabled && !segment.disabled) {
                 onValueChange(segment.value);
               }
             }}
@@ -81,7 +82,7 @@ export function SegmentedControl<T extends string = string>({
               "relative z-10 flex flex-1 items-center justify-center rounded-lg font-medium transition-colors duration-150 cursor-pointer",
               sm ? "gap-1.5 px-2.5 py-1 text-[11px]" : "gap-2 px-3 py-2 text-[13px]",
               isActive ? "text-ink-50" : "text-ink-500 hover:text-ink-300",
-              disabled && "cursor-not-allowed"
+              (disabled || segment.disabled) && "cursor-not-allowed opacity-45"
             )}
           >
             {segment.icon}

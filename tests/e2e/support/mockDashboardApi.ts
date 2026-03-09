@@ -41,11 +41,11 @@ function createDefaultStep(
     role: "analysis",
     prompt: "Analyze the request and define constraints before planning.",
     providerId: "openai",
-    model: "gpt-5.3-codex",
+    model: "gpt-5.4",
     reasoningEffort: "medium",
     fastMode: false,
-    use1MContext: false,
-    contextWindowTokens: 272000,
+    use1MContext: true,
+    contextWindowTokens: 1050000,
     position: { x: 80, y: 130 },
     contextTemplate: "Task:\n{{task}}\n\nPrevious output:\n{{previous_output}}",
     enableDelegation: false,
@@ -106,7 +106,7 @@ function createInitialState(
         apiKey: "",
         oauthToken: "",
         baseUrl: "https://api.openai.com/v1",
-        defaultModel: "gpt-5.3-codex",
+        defaultModel: "gpt-5.4",
         updatedAt: isoAt(0)
       },
       claude: {
@@ -368,8 +368,30 @@ export async function mockDashboardApi(
     if (method === "GET" && pathname === "/api/model-catalog") {
       await fulfillJson(route, 200, {
         modelCatalog: {
-          openai: [{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex" }],
-          claude: [{ id: "claude-opus-4-6", label: "Claude Opus 4.6" }]
+          openai: [{
+            id: "gpt-5.4",
+            label: "GPT-5.4",
+            providerId: "openai",
+            source: "manual",
+            contextWindowTokens: 1050000,
+            reasoningEfforts: ["low", "medium", "high", "xhigh"],
+            supportsFastMode: true,
+            supports1MContext: true,
+            runtimeAvailability: "api_and_cli",
+            lifecycle: "current"
+          }],
+          claude: [{
+            id: "claude-opus-4-6",
+            label: "Claude Opus 4.6",
+            providerId: "claude",
+            source: "claude-local",
+            contextWindowTokens: 200000,
+            reasoningEfforts: ["low", "medium", "high"],
+            supportsFastMode: true,
+            supports1MContext: true,
+            runtimeAvailability: "api_and_cli",
+            lifecycle: "current"
+          }]
         }
       });
       return;

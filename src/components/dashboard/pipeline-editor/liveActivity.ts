@@ -349,8 +349,17 @@ function normalizeAttemptMessage(message: string): AttemptEventShape | null {
   }
 
   if (message.startsWith("CLI command running:")) {
-    // Hide provider heartbeat noise from user-facing timeline.
-    return null;
+    const running = parseRunningMetrics(message);
+    if (!running) {
+      return null;
+    }
+
+    const commandLabel = running.commandName ? ` (${running.commandName})` : "";
+    return {
+      kind: "command_progress",
+      title: `Command running${commandLabel}`,
+      detail: `elapsed=${running.elapsedSec}s · idle=${running.idleSec}s · stdout=${running.stdoutChars} · stderr=${running.stderrChars}`
+    };
   }
 
   const modelCommand = parseModelCommandMessage(message);

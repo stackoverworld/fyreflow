@@ -5,6 +5,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 import { createAbortError } from "../../abort.js";
+import { ONE_MILLION_CONTEXT_TOKENS } from "../../modelCatalog.js";
 import type { CommandResult, ProviderExecutionInput } from "../types.js";
 import { CLAUDE_CLI_FALLBACK_MODEL, resolveClaudeCliAttemptTimeoutMs } from "../retryPolicy.js";
 import { composeCliPrompt, mapClaudeEffort } from "../normalizers.js";
@@ -22,14 +23,27 @@ import {
   isEnglishSummaryCandidate,
   sanitizeSummaryCandidate
 } from "./modelSummary.js";
+import {
+  analyzeStepSandboxRequirement,
+  normalizeStepSandboxMode
+} from "../../sandboxMode.js";
+import { isGateResultContractStep } from "../../runner/qualityGates/contracts.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_STREAM_CHUNK_LOGS = (process.env.CLI_STREAM_CHUNK_LOGS ?? "1").trim() !== "0";
 const CLAUDE_CLI_STREAM_JSON = (process.env.CLAUDE_CLI_STREAM_JSON ?? "1").trim() !== "0";
 const CLAUDE_CLI_MARKDOWN_STREAM_JSON = (process.env.CLAUDE_CLI_MARKDOWN_STREAM_JSON ?? "1").trim() !== "0";
+const CLI_PROGRESS_LOG_INTERVAL_MS = (() => {
+  const raw = Number.parseInt(process.env.FYREFLOW_CLI_PROGRESS_LOG_INTERVAL_MS ?? "60000", 10);
+  if (!Number.isFinite(raw)) {
+    return 60_000;
+  }
+  return Math.max(15_000, Math.min(300_000, raw));
+})();
+const VERBOSE_MODEL_ACTIVITY_LOGS = (process.env.FYREFLOW_VERBOSE_MODEL_ACTIVITY_LOGS ?? "0").trim() === "1";
 
 type ClaudeCliOutputFormat = "text" | "json" | "stream-json";
-type CodexCliSandboxMode = "read-only" | "workspace-write";
+type CodexCliSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 const STREAM_JSON_MAX_LINE_CHARS = 8_000_000;
 const MODEL_COMMAND_MAX_CHARS = 360;
 const EMBEDDED_JSON_MAX_CHARS = 1_000_000;
@@ -850,11 +864,25 @@ function runCommand(
   env?: Record<string, string>
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
-    const preview = (value: string, maxChars = 160): string =>
-      value
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(Math.max(0, value.length - maxChars), value.length);
+    const preview = (value: string, maxChars = 160): string => {
+      const normalized = value.replace(/\s+/g, " ").trim();
+      if (normalized.length <= maxChars) {
+        return normalized;
+      }
+      return normalized.slice(normalized.length - maxChars);
+    };
+    const buildNonZeroExitSummary = (code: number | null): string => {
+      const stderrTail = stderr.length > 0 ? redactSensitiveText(preview(stderr, 520)) : "";
+      const stdoutTail = stdout.length > 0 ? redactSensitiveText(preview(stdout, 520)) : "";
+      const normalizedCode = typeof code === "number" ? code : "unknown";
+      if (stderrTail.length > 0) {
+        return `${command} exited with code ${normalizedCode}: stderr_tail=${JSON.stringify(stderrTail)}`;
+      }
+      if (stdoutTail.length > 0) {
+        return `${command} exited with code ${normalizedCode}: stdout_tail=${JSON.stringify(stdoutTail)}`;
+      }
+      return `${command} exited with code ${normalizedCode}: no stdout/stderr captured`;
+    };
     const startedAt = Date.now();
     onLog?.(
       formatCliCommandStartLog({
@@ -883,7 +911,7 @@ function runCommand(
     const emittedModelSummaries = new Set<string>();
 
     const emitStreamJsonModelCommands = (line: string): void => {
-      if (!inspectStreamJson || !onLog) {
+      if (!inspectStreamJson || !onLog || !VERBOSE_MODEL_ACTIVITY_LOGS) {
         return;
       }
 
@@ -995,7 +1023,7 @@ function runCommand(
         .finally(() => {
           progressProbeInFlight = false;
         });
-    }, 15_000);
+    }, CLI_PROGRESS_LOG_INTERVAL_MS);
 
     const abortListener = signal
       ? () => {
@@ -1084,7 +1112,7 @@ function runCommand(
       }
 
       onLog?.(`CLI command exited with code ${code} after ${Date.now() - startedAt}ms`);
-      finish(() => reject(new Error(`${command} exited with code ${code}: ${(stderr || stdout).slice(0, 520)}`)));
+      finish(() => reject(new Error(buildNonZeroExitSummary(code))));
     });
 
     if (stdinInput && stdinInput.length > 0) {
@@ -1104,6 +1132,14 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
     const model = input.step.model || input.provider.defaultModel;
     input.log?.("Model summary: Request accepted; model started processing.");
     input.log?.(`Codex CLI sandbox mode: ${sandboxMode}`);
+    if (input.step.fastMode) {
+      input.log?.('OpenAI fast mode enabled via Codex CLI `service_tier="fast"` override.');
+    }
+    if (input.step.contextWindowTokens >= ONE_MILLION_CONTEXT_TOKENS) {
+      input.log?.(
+        `OpenAI expanded context enabled via Codex CLI model window override (${input.step.contextWindowTokens.toLocaleString()} tokens).`
+      );
+    }
     const seenStatusMessages = new Set<string>();
     const onCodexJsonLine = (line: string): void => {
       const delta = extractCodexJsonTextDelta(line);
@@ -1119,46 +1155,56 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
       input.log?.(`Model summary: ${status}`);
     };
 
-    const buildCodexArgs = (jsonMode: boolean): string[] => [
-      "exec",
-      "--skip-git-repo-check",
-      "--sandbox",
-      sandboxMode,
-      "--color",
-      "never",
-      ...(jsonMode ? ["--json"] : []),
-      "--model",
-      model,
-      "--config",
-      `model_reasoning_effort="${input.step.reasoningEffort}"`,
-      "--output-last-message",
-      outputPath,
-      "-"
-    ];
+    const runWithMode = async (mode: CodexCliSandboxMode): Promise<void> => {
+      try {
+        await runCommand(
+          CODEX_CLI_COMMAND,
+          buildCodexCliArgs(input, {
+            jsonMode: true,
+            sandboxMode: mode,
+            selectedModel: model,
+            outputPath
+          }),
+          prompt,
+          CLI_EXEC_TIMEOUT_MS,
+          input.signal,
+          input.log,
+          onCodexJsonLine
+        );
+      } catch (error) {
+        if (!isUnknownCodexJsonOptionError(error)) {
+          throw error;
+        }
+        input.log?.("Codex CLI does not support --json; retrying without JSON stream mode.");
+        await runCommand(
+          CODEX_CLI_COMMAND,
+          buildCodexCliArgs(input, {
+            jsonMode: false,
+            sandboxMode: mode,
+            selectedModel: model,
+            outputPath
+          }),
+          prompt,
+          CLI_EXEC_TIMEOUT_MS,
+          input.signal,
+          input.log
+        );
+      }
+    };
 
     try {
-      await runCommand(
-        CODEX_CLI_COMMAND,
-        buildCodexArgs(true),
-        prompt,
-        CLI_EXEC_TIMEOUT_MS,
-        input.signal,
-        input.log,
-        onCodexJsonLine
-      );
+      await runWithMode(sandboxMode);
     } catch (error) {
-      if (!isUnknownCodexJsonOptionError(error)) {
+      const canFallbackSandbox =
+        sandboxMode === "danger-full-access" && isUnsupportedCodexSandboxModeError(error);
+      if (!canFallbackSandbox) {
         throw error;
       }
-      input.log?.("Codex CLI does not support --json; retrying without JSON stream mode.");
-      await runCommand(
-        CODEX_CLI_COMMAND,
-        buildCodexArgs(false),
-        prompt,
-        CLI_EXEC_TIMEOUT_MS,
-        input.signal,
-        input.log
+
+      input.log?.(
+        'Codex CLI does not support sandbox mode "danger-full-access"; retrying with "workspace-write".'
       );
+      await runWithMode("workspace-write");
     }
 
     const output = await fs.readFile(outputPath, "utf8");
@@ -1176,6 +1222,44 @@ async function runCodexCli(input: ProviderExecutionInput): Promise<string> {
   return "Codex CLI completed with no final message output.";
 }
 
+export function buildCodexCliArgs(
+  input: ProviderExecutionInput,
+  params: {
+    jsonMode: boolean;
+    sandboxMode: CodexCliSandboxMode;
+    selectedModel: string;
+    outputPath: string;
+  }
+): string[] {
+  const args = [
+    "exec",
+    "--skip-git-repo-check",
+    "--sandbox",
+    params.sandboxMode,
+    "--color",
+    "never",
+    ...(params.jsonMode ? ["--json"] : []),
+    "--model",
+    params.selectedModel,
+    "--config",
+    `model_reasoning_effort="${input.step.reasoningEffort}"`
+  ];
+
+  if (input.step.fastMode) {
+    args.push("--config", 'service_tier="fast"');
+  }
+
+  if (input.step.contextWindowTokens >= ONE_MILLION_CONTEXT_TOKENS) {
+    const modelContextWindow = Math.floor(input.step.contextWindowTokens);
+    const autoCompactTokenLimit = Math.max(200_000, modelContextWindow - 100_000);
+    args.push("--config", `model_context_window=${modelContextWindow}`);
+    args.push("--config", `model_auto_compact_token_limit=${autoCompactTokenLimit}`);
+  }
+
+  args.push("--output-last-message", params.outputPath, "-");
+  return args;
+}
+
 function isUnknownCodexJsonOptionError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -1183,9 +1267,49 @@ function isUnknownCodexJsonOptionError(error: unknown): boolean {
   return /\bunknown\b.+\b(option|argument)\b|unrecognized option|invalid option|\b--json\b/i.test(error.message);
 }
 
+const CODEX_SANDBOX_PARSE_ERROR_PATTERNS: RegExp[] = [
+  /\b(?:unknown|unrecognized|invalid|unexpected)\s+(?:option|argument)\b[\s\S]*--sandbox\b/i,
+  /\b--sandbox\b[\s\S]*\b(?:unknown|unrecognized|invalid|unsupported|unexpected)\b/i,
+  /\binvalid\s+value\b[\s\S]*\bfor\s+(?:option\s+)?['"`]?--sandbox\b/i,
+  /\bargument\b[\s\S]*--sandbox\b[\s\S]*\b(?:invalid|unsupported|unknown|unrecognized|unexpected)\b/i
+];
+
+export function isUnsupportedCodexSandboxModeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (!/--sandbox\b/i.test(error.message)) {
+    return false;
+  }
+
+  return CODEX_SANDBOX_PARSE_ERROR_PATTERNS.some((pattern) => pattern.test(error.message));
+}
+
 export function resolveCodexCliSandboxMode(input: ProviderExecutionInput): CodexCliSandboxMode {
-  // Keep orchestrator in read-only mode; non-orchestrator stages often need to
-  // materialize required artifacts in shared/isolated storage.
+  const sandboxOverride = (process.env.FYREFLOW_CODEX_SANDBOX_MODE ?? "").trim().toLowerCase();
+  if (sandboxOverride === "read-only" || sandboxOverride === "workspace-write" || sandboxOverride === "danger-full-access") {
+    return sandboxOverride;
+  }
+
+  const sandboxMode = normalizeStepSandboxMode(input.step.sandboxMode);
+  const requirement = analyzeStepSandboxRequirement(input.step);
+
+  if (sandboxMode === "full") {
+    return "danger-full-access";
+  }
+
+  if (requirement.requiresFullAccess) {
+    input.log?.(
+      `Codex CLI kept sandboxed execution despite network/publish signals (${requirement.reasons[0] ?? "external access may be required"}). Use sandboxMode="full" or FYREFLOW_CODEX_SANDBOX_MODE=danger-full-access only when the broader access is intentional.`
+    );
+  }
+
+  if (sandboxMode === "secure") {
+    return input.step.role === "orchestrator" ? "read-only" : "workspace-write";
+  }
+
+  // Auto mode defaults to least privilege with orchestration-safe read-only.
   if (input.step.role === "orchestrator") {
     return "read-only";
   }
@@ -1214,11 +1338,7 @@ function shouldDisableClaudeCliTools(input: ProviderExecutionInput): boolean {
 }
 
 function shouldRequireGateResultContract(input: ProviderExecutionInput): boolean {
-  if (input.step.role === "review" || input.step.role === "tester") {
-    return true;
-  }
-
-  return /\bdeliver(y|ed|ing)?\b/i.test(input.step.name);
+  return input.outputMode === "json" && isGateResultContractStep(input.step);
 }
 
 export function shouldDisableClaudeStreamJson(input: ProviderExecutionInput): boolean {

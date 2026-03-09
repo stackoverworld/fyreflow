@@ -12,7 +12,7 @@ function createRequest(overrides: Partial<{
   return {
     prompt: "Build a robust design flow.",
     providerId: "openai" as const,
-    model: "gpt-5.3-codex",
+    model: "gpt-5.4",
     ...overrides
   };
 }

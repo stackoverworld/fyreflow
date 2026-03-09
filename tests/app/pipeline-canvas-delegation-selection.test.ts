@@ -83,4 +83,26 @@ describe("pipeline canvas delegation selection", () => {
     const runningTintOccurrences = html.split("node-running-tint").length - 1;
     expect(runningTintOccurrences).toBe(2);
   });
+
+  it("shows the 1M badge when the node carries a 1.05M context window even if the legacy flag is false", () => {
+    const node: FlowNode = {
+      ...ORCHESTRATOR_NODE,
+      providerId: "openai",
+      model: "gpt-5.4",
+      use1MContext: false,
+      contextWindowTokens: 1_050_000
+    };
+
+    const html = renderToStaticMarkup(
+      createElement(NodesLayer, {
+        ...BASE_PROPS,
+        nodes: [node],
+        nodeById: new Map([[node.id, node]]),
+        selectedNodeId: node.id,
+        selectedNodeIds: [node.id]
+      })
+    );
+
+    expect(html).toContain("title=\"1M context\"");
+  });
 });
