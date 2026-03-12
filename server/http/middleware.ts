@@ -70,12 +70,18 @@ export function createApiAuthMiddleware(apiAuthToken: string, options: ApiAuthMi
   const publicPaths = new Set(["/api/health"]);
 
   return (request: Request, response: Response, next: NextFunction) => {
-    if (!request.path.startsWith("/api/")) {
+    const normalizedPath = request.path.toLowerCase();
+
+    if (!normalizedPath.startsWith("/api/")) {
       next();
       return;
     }
 
-    if (request.method === "OPTIONS" || publicPaths.has(request.path) || request.path.startsWith("/api/pairing/")) {
+    if (
+      request.method === "OPTIONS" ||
+      publicPaths.has(normalizedPath) ||
+      normalizedPath.startsWith("/api/pairing/")
+    ) {
       next();
       return;
     }
