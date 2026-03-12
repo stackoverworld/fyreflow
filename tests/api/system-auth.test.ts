@@ -276,6 +276,37 @@ describe("System and Auth Routes", () => {
     );
     expect(stateQueryNextCalled).toBe(false);
     expect(stateQueryResponse.statusCode).toBe(401);
+
+    const uppercaseUnauthorizedResponse = createMockResponse();
+    let uppercaseUnauthorizedNextCalled = false;
+    middleware(
+      {
+        path: "/API/state",
+        method: "GET",
+        headers: {}
+      } as never,
+      uppercaseUnauthorizedResponse as never,
+      () => {
+        uppercaseUnauthorizedNextCalled = true;
+      }
+    );
+    expect(uppercaseUnauthorizedNextCalled).toBe(false);
+    expect(uppercaseUnauthorizedResponse.statusCode).toBe(401);
+
+    const uppercaseHealthResponse = createMockResponse();
+    let uppercaseHealthNextCalled = false;
+    middleware(
+      {
+        path: "/API/health",
+        method: "GET",
+        headers: {}
+      } as never,
+      uppercaseHealthResponse as never,
+      () => {
+        uppercaseHealthNextCalled = true;
+      }
+    );
+    expect(uppercaseHealthNextCalled).toBe(true);
   });
 
   it("returns sanitized provider and MCP secrets from /api/state", async () => {
