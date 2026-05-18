@@ -1,5 +1,7 @@
 # Refactor Boundary Ledger (Wave-2)
 
+- Last reviewed: 2026-05-18
+
 ## Current boundary status
 
 - This Wave adds documentation-only boundary tracking; no runtime or contract behavior was changed in owned files.
